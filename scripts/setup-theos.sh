@@ -3,7 +3,7 @@
 # Safe to run again: finished steps are skipped.
 set -euo pipefail
 
-THEOS="${THEOS:-$HOME/theos}"
+export THEOS="${THEOS:-$HOME/theos}"
 ARCH="$(uname -m)"
 
 if [[ "$(uname -s)" != "Linux" || ! "$ARCH" =~ ^(x86_64|aarch64)$ ]]; then
