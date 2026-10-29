@@ -1,0 +1,6 @@
+.build/
+out/
+.theos/
+packages/
+*.ipa
+*.7z
