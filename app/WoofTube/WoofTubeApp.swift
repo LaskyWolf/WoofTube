@@ -14,7 +14,7 @@ struct WoofTubeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
+            AppearanceRoot {
                 if session.isSignedIn {
                     RootTabs()
                 } else {
@@ -24,8 +24,6 @@ struct WoofTubeApp: App {
             .environmentObject(session)
             .environmentObject(router)
             .environmentObject(settings)
-            .tint(settings.accentColor)
-            .preferredColorScheme(settings.themeMode.colorScheme)
             .task {
                 await InnerTubeClient.wooftube.updateLocale(YouTubeLocale(
                     gl: Locale.current.region?.identifier ?? "US",
@@ -39,6 +37,27 @@ struct WoofTubeApp: App {
             } message: {
                 Text("Google no longer accepts this sign-in. Your feeds won't be personal until you sign in again.")
             }
+        }
+    }
+}
+
+/// A view, so a new accent or theme applies straight away. The window's tint
+/// colours what UIKit draws for SwiftUI, such as the icons in menus and alerts.
+private struct AppearanceRoot<Content: View>: View {
+    @ViewBuilder let content: Content
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        content
+            .tint(settings.accentColor)
+            .preferredColorScheme(settings.themeMode.colorScheme)
+            .onAppear(perform: applyWindowTint)
+            .onChange(of: settings.accentName) { applyWindowTint() }
+    }
+
+    private func applyWindowTint() {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            scene.windows.forEach { $0.tintColor = UIColor(settings.accentColor) }
         }
     }
 }
@@ -69,6 +88,9 @@ struct RootTabs: View {
         }
         .tabBarMinimizeBehavior(.never)
         .overlay { PlayerOverlay() }
+        .fullScreenCover(item: $router.shortsRoute) { route in
+            ShortsView(route: route, player: router.shortsPlayer)
+        }
         .sheet(item: $router.channelRoute) { route in
             NavigationStack {
                 ChannelView(channelId: route.id)

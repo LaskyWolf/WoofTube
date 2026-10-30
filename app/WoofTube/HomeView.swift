@@ -85,7 +85,7 @@ enum HeaderRoute: Hashable {
     case notifications, settings
 }
 
-/// Woof Music's TabHeaderView: the title, then the bell and the profile on one line.
+/// Woof Music's TabHeaderView: the title, then 36 pt buttons 12 pt apart.
 struct TabHeader: View {
     let title: String
     @EnvironmentObject private var session: Session
@@ -93,14 +93,15 @@ struct TabHeader: View {
     var body: some View {
         HStack(alignment: .center) {
             Text(title)
-                .font(.largeTitle.bold())
+                .font(.largeTitle)
+                .fontWeight(.bold)
             Spacer()
-            HStack(spacing: 2) {
+            HStack(spacing: Layout.rowSpacing) {
                 NavigationLink(value: HeaderRoute.notifications) {
                     Image(systemName: "bell")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                         .overlay(alignment: .topTrailing) { badge }
                         .contentShape(.rect)
                 }
@@ -108,18 +109,15 @@ struct TabHeader: View {
 
                 NavigationLink(value: HeaderRoute.settings) {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 36, height: 36)
                         .contentShape(.rect)
                 }
                 .accessibilityLabel("Settings")
             }
             .buttonStyle(.plain)
         }
-        .padding(.leading, Layout.screenPadding)
-        .padding(.trailing, Layout.chipSpacing)
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.chipSpacing)
     }
 
     @ViewBuilder
@@ -128,10 +126,10 @@ struct TabHeader: View {
             Text(session.unseenNotifications > 9 ? "9+" : "\(session.unseenNotifications)")
                 .font(.caption2.bold().monospacedDigit())
                 .foregroundStyle(.white)
-                .padding(.horizontal, 5)
-                .frame(minWidth: 18, minHeight: 18)
+                .padding(.horizontal, 4)
+                .frame(minWidth: 16, minHeight: 16)
                 .background(.tint, in: .capsule)
-                .offset(x: -2, y: 4)
+                .offset(x: 2, y: -2)
         }
     }
 }
@@ -149,6 +147,45 @@ extension View {
     }
 }
 
+/// Woof Music's FilterChipBar.
+struct FilterChips: View {
+    let titles: [String]
+    let selected: String?
+    let onTap: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Layout.chipSpacing) {
+                ForEach(titles, id: \.self) { title in
+                    Button {
+                        onTap(title)
+                    } label: {
+                        Text(title)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundStyle(selected == title ? Color.white : Color.primary)
+                            .padding(.horizontal, Layout.screenPadding)
+                            .padding(.vertical, Layout.rowPadding)
+                            .frame(minHeight: Layout.controlHeight)
+                            .background {
+                                if selected == title {
+                                    Capsule().fill(.tint)
+                                } else {
+                                    Capsule().fill(Color(.systemGray5))
+                                }
+                            }
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(ZoomPressStyle())
+                }
+            }
+            .padding(.horizontal, Layout.screenPadding)
+            .padding(.vertical, Layout.chipSpacing)
+        }
+        .sensoryFeedback(.selection, trigger: selected)
+    }
+}
+
 struct HomeView: View {
     @EnvironmentObject private var session: Session
     @StateObject private var model = FeedModel()
@@ -159,9 +196,7 @@ struct HomeView: View {
             FeedContent(model: model, retry: { await reload() }) {
                 TabHeader(title: "Home")
                 if !model.chips.isEmpty {
-                    chipBar
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
+                    FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
                 }
             }
             .tabRoot()
@@ -177,43 +212,18 @@ struct HomeView: View {
         await model.load(.browse(YouTubeFeeds.home))
     }
 
-    /// Spacing and colours from Woof Music's FilterChipBar. Tapping the selected chip clears it.
-    private var chipBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Layout.chipSpacing) {
-                ForEach(model.chips) { chip in
-                    let isSelected = selectedChip == chip.title
-                    Button {
-                        selectedChip = isSelected ? nil : chip.title
-                        Task {
-                            if !isSelected, let token = chip.token {
-                                await model.load(.continuation(token), keepChips: true)
-                            } else {
-                                await model.load(.browse(YouTubeFeeds.home), keepChips: true)
-                            }
-                        }
-                    } label: {
-                        Text(chip.title)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(isSelected ? Color.white : Color.primary)
-                            .padding(.horizontal, Layout.screenPadding)
-                            .padding(.vertical, Layout.chipSpacing)
-                            .background {
-                                if isSelected {
-                                    Capsule().fill(.tint)
-                                } else {
-                                    Capsule().fill(Color(.systemGray5))
-                                }
-                            }
-                            .contentShape(.capsule)
-                    }
-                    .buttonStyle(RowPressStyle())
-                }
+    /// Tapping the selected chip clears it.
+    private func tapChip(_ title: String) {
+        let isSelected = selectedChip == title
+        selectedChip = isSelected ? nil : title
+        let token = model.chips.first { $0.title == title }?.token
+        Task {
+            if !isSelected, let token {
+                await model.load(.continuation(token), keepChips: true)
+            } else {
+                await model.load(.browse(YouTubeFeeds.home), keepChips: true)
             }
-            .padding(.horizontal, Layout.screenPadding)
-            .padding(.vertical, Layout.chipSpacing)
         }
-        .sensoryFeedback(.selection, trigger: selectedChip)
     }
 }
 
@@ -236,36 +246,35 @@ struct SubsView: View {
 /// A list that loads itself from one source.
 struct FeedList: View {
     let source: FeedSource
+    var isCompact = false
     @StateObject private var model = FeedModel()
 
     var body: some View {
-        FeedContent(model: model, retry: { await model.load(source) }) { EmptyView() }
+        FeedContent(model: model, retry: { await model.load(source) }, isCompact: isCompact) { EmptyView() }
+            .toolbar(.visible, for: .navigationBar)
             .task(id: source) {
                 if model.items.isEmpty { await model.load(source) }
             }
     }
 }
 
+/// A ScrollView like Woof Music's pages: a List row fires every link inside it at once.
 struct FeedContent<Header: View>: View {
     @ObservedObject var model: FeedModel
     let retry: () async -> Void
+    var isCompact = false
     @ViewBuilder let header: () -> Header
 
     var body: some View {
-        List {
-            header()
-            if model.items.isEmpty {
-                emptyState
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-            }
-            ForEach(model.items) { item in
-                row(item)
-                    .listRowSeparator(.hidden)
-                    .task { await model.loadMore(after: item) }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                header()
+                if model.items.isEmpty {
+                    emptyState
+                }
+                FeedRows(model: model, isCompact: isCompact)
             }
         }
-        .listStyle(.plain)
         .refreshable { await retry() }
     }
 
@@ -280,9 +289,22 @@ struct FeedContent<Header: View>: View {
                 Text(model.errorText ?? "YouTube returned nothing here.")
             } actions: {
                 Button("Try Again") { Task { await retry() } }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
             }
             .padding(.vertical, 48)
+        }
+    }
+}
+
+struct FeedRows: View {
+    @ObservedObject var model: FeedModel
+    var isCompact = false
+    @EnvironmentObject private var router: Router
+
+    var body: some View {
+        ForEach(model.items) { item in
+            row(item)
+                .task { await model.loadMore(after: item) }
         }
     }
 
@@ -290,33 +312,37 @@ struct FeedContent<Header: View>: View {
     private func row(_ item: FeedItem) -> some View {
         switch item {
         case .video(let video, let feedback):
-            VideoButton(video: video, feedback: feedback) { model.remove(item) }
-                .listRowInsets(Layout.rowInsets)
+            VideoButton(video: video, feedback: feedback, isCompact: isCompact) { model.remove(item) }
+                .padding(.horizontal, Layout.screenPadding)
+                .padding(.vertical, isCompact ? Layout.rowPadding : Layout.rowSpacing)
         case .shorts(let title, let videos):
-            ShortsShelf(title: title, videos: videos)
-                .listRowInsets(EdgeInsets())
+            ShortsShelf(title: title ?? "Shorts", videos: videos)
         case .shelf(let title, let videos):
             VideoShelf(title: title, videos: videos)
-                .listRowInsets(EdgeInsets())
         case .post(let post):
             PostRow(post: post)
-                .listRowInsets(Layout.rowInsets)
+                .padding(.horizontal, Layout.screenPadding)
+                .padding(.vertical, Layout.rowSpacing)
         case .playlist(let playlist):
             NavigationLink {
-                FeedList(source: .browse(YouTubeFeeds.playlistBrowseId(playlist.playlistId)))
-                    .navigationTitle(playlist.title)
+                PlaylistPage(title: playlist.title, playlistId: playlist.playlistId)
             } label: {
-                PlaylistRow(playlist: playlist)
+                MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
             }
-            .listRowInsets(Layout.rowInsets)
+            .buttonStyle(RowPressStyle())
+            .padding(.horizontal, Layout.screenPadding)
         case .channel(let channel):
             if let id = channel.channelId {
-                NavigationLink {
-                    ChannelView(channelId: id)
+                Button {
+                    router.openChannel(id)
                 } label: {
                     ChannelRow(channel: channel)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
                 }
-                .listRowInsets(Layout.rowInsets)
+                .buttonStyle(RowPressStyle())
+                .padding(.horizontal, Layout.screenPadding)
+                .padding(.vertical, Layout.rowPadding)
             }
         }
     }
@@ -325,6 +351,7 @@ struct FeedContent<Header: View>: View {
 struct VideoButton: View {
     let video: YouTubeVideo
     var feedback: [FeedbackAction] = []
+    var isCompact = false
     var onRemove: (() -> Void)?
     @EnvironmentObject private var router: Router
 
@@ -332,7 +359,11 @@ struct VideoButton: View {
         Button {
             router.play(video)
         } label: {
-            VideoRow(video: video)
+            if isCompact {
+                CompactVideoRow(video: video)
+            } else {
+                VideoRow(video: video)
+            }
         }
         .buttonStyle(RowPressStyle())
         .videoMenu(video, feedback: feedback, onRemove: onRemove)
@@ -381,6 +412,38 @@ struct VideoRow: View {
     }
 }
 
+/// Woof Music's playlist row, with a 16:9 cover.
+struct CompactVideoRow: View {
+    let video: YouTubeVideo
+
+    var body: some View {
+        HStack(spacing: Layout.rowSpacing) {
+            CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
+                .frame(width: 112, height: 63)
+                .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(video.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if let channel = video.channelTitle {
+                    Text(channel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if let seconds = video.durationSeconds, seconds > 0 {
+                Text(Double(seconds).clockText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(.rect)
+    }
+}
+
 /// The shape of the feed while it loads, so the page doesn't jump when the videos arrive.
 struct LoadingRows: View {
     var body: some View {
@@ -417,31 +480,19 @@ struct Thumbnail: View {
     }
 }
 
-private struct ShelfTitle: View {
-    let title: String?
-
-    var body: some View {
-        if let title {
-            Text(title)
-                .font(.headline)
-                .padding(.horizontal, Layout.screenPadding)
-        }
-    }
-}
-
 private struct ShortsShelf: View {
-    let title: String?
+    let title: String
     let videos: [YouTubeVideo]
     @EnvironmentObject private var router: Router
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            ShelfTitle(title: title)
+        VStack(alignment: .leading, spacing: 0) {
+            SectionTitle(title: title)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
                     ForEach(videos, id: \.videoId) { video in
                         Button {
-                            router.play(video)
+                            router.openShorts(videos, start: video)
                         } label: {
                             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                                 Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: 9 / 16)
@@ -460,7 +511,7 @@ private struct ShortsShelf: View {
                 .padding(.horizontal, Layout.screenPadding)
             }
         }
-        .padding(.vertical, Layout.rowSpacing)
+        .padding(.bottom, Layout.sectionGap)
     }
 }
 
@@ -469,8 +520,10 @@ private struct VideoShelf: View {
     let videos: [YouTubeVideo]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            ShelfTitle(title: title)
+        VStack(alignment: .leading, spacing: 0) {
+            if let title {
+                SectionTitle(title: title)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
                     ForEach(videos, id: \.videoId) { video in
@@ -565,28 +618,6 @@ private struct PostRow: View {
                 }
             }
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
-    }
-}
-
-private struct PlaylistRow: View {
-    let playlist: YouTubePlaylist
-
-    var body: some View {
-        HStack(spacing: Layout.rowSpacing) {
-            AsyncImage(url: playlist.thumbnailURL.flatMap(URL.init(string:))) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Color(.secondarySystemFill)
-            }
-            .frame(width: 96, height: 54)
-            .clipShape(.rect(cornerRadius: Layout.thumbRadius))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(playlist.title).font(.subheadline.weight(.medium)).lineLimit(2)
-                if let count = playlist.videoCountText {
-                    Text(count).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
     }
 }
 

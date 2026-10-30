@@ -11,6 +11,14 @@ enum Layout {
     static let thumbRadius: CGFloat = 4
     static let tileRadius: CGFloat = 12
     static let thumbSmall: CGFloat = 40
+    static let cardRadius: CGFloat = 8
+    static let sheetRadius: CGFloat = 16
+    static let menuRowSpacing: CGFloat = 14
+    static let sectionGap: CGFloat = 16
+    static let artSmall: CGFloat = 60
+    static let artLarge: CGFloat = 160
+    /// Height of the row under each tab title.
+    static let controlHeight: CGFloat = 40
     static let rowInsets = EdgeInsets(top: rowPadding * 2, leading: screenPadding, bottom: rowPadding * 2, trailing: screenPadding)
 }
 

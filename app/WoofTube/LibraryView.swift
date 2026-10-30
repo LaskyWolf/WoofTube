@@ -2,68 +2,136 @@ import SwiftUI
 import SwiftyTube
 
 struct LibraryView: View {
+    @State private var playlists: [YouTubePlaylist] = []
+
     var body: some View {
         NavigationStack {
-            List {
-                TabHeader(title: "Library")
-                Section {
-                    link("History", icon: "clock.arrow.circlepath", source: .browse(YouTubeFeeds.history))
-                    link("Watch Later", icon: "clock", source: .browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.watchLaterPlaylistId)))
-                    link("Liked Videos", icon: "hand.thumbsup", source: .browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.likedVideosPlaylistId)))
-                    NavigationLink {
-                        PlaylistsView()
-                    } label: {
-                        Label("Playlists", systemImage: "list.bullet.rectangle")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    TabHeader(title: "Library")
+                    MenuCard {
+                        NavigationLink {
+                            FeedList(source: .browse(YouTubeFeeds.history), isCompact: true)
+                                .navigationTitle("History")
+                                .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            MenuRowLabel(icon: "clock.arrow.circlepath", title: "History")
+                        }
+                        Divider()
+                        NavigationLink {
+                            PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
+                        } label: {
+                            MenuRowLabel(icon: "clock", title: "Watch Later")
+                        }
+                        Divider()
+                        NavigationLink {
+                            PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
+                        } label: {
+                            MenuRowLabel(icon: "hand.thumbsup", title: "Liked Videos")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, Layout.screenPadding)
+                    .padding(.top, Layout.chipSpacing)
+                    .padding(.bottom, Layout.sectionGap)
+
+                    if !playlists.isEmpty {
+                        SectionTitle(title: "Playlists")
+                        LazyVStack(spacing: 0) {
+                            ForEach(playlists, id: \.playlistId) { playlist in
+                                NavigationLink {
+                                    PlaylistPage(title: playlist.title, playlistId: playlist.playlistId)
+                                } label: {
+                                    MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
+                                }
+                                .buttonStyle(RowPressStyle())
+                                .padding(.horizontal, Layout.screenPadding)
+                            }
+                        }
                     }
                 }
             }
             .tabRoot()
-        }
-    }
-
-    private func link(_ title: String, icon: String, source: FeedSource) -> some View {
-        NavigationLink {
-            FeedList(source: source)
-                .navigationTitle(title)
-                .toolbar(.visible, for: .navigationBar)
-        } label: {
-            Label(title, systemImage: icon)
+            .task {
+                let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
+                playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+            }
         }
     }
 }
 
-struct PlaylistsView: View {
-    @State private var playlists: [YouTubePlaylist] = []
-    @State private var isLoading = true
+/// Woof Music's playlist page: header card over the blurred cover, then compact rows.
+struct PlaylistPage: View {
+    let title: String
+    let playlistId: String
+
+    @EnvironmentObject private var router: Router
+    @EnvironmentObject private var settings: AppSettings
+    @StateObject private var model = FeedModel()
+
+    private var videos: [YouTubeVideo] {
+        model.items.compactMap {
+            if case .video(let video, _) = $0 { return video }
+            return nil
+        }
+    }
+
+    private var meta: String {
+        guard !videos.isEmpty else { return "Playlist" }
+        let total = videos.compactMap(\.durationSeconds).reduce(0, +)
+        let count = "\(videos.count) \(videos.count == 1 ? "video" : "videos")"
+        return total > 0 ? count + " · " + Double(total).clockText : count
+    }
 
     var body: some View {
-        List(playlists, id: \.playlistId) { playlist in
-            NavigationLink {
-                FeedList(source: .browse(YouTubeFeeds.playlistBrowseId(playlist.playlistId)))
-                    .navigationTitle(playlist.title)
-            } label: {
-                VStack(alignment: .leading) {
-                    Text(playlist.title).font(.headline)
-                    if let count = playlist.videoCountText {
-                        Text(count).font(.subheadline).foregroundStyle(.secondary)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                header
+                if videos.isEmpty, !model.isLoading {
+                    ContentUnavailableView {
+                        Label(model.errorText == nil ? "No Videos" : "Couldn't Load", systemImage: "play.rectangle")
+                    } description: {
+                        if let errorText = model.errorText { Text(errorText) }
                     }
                 }
+                FeedRows(model: model, isCompact: true)
             }
         }
-        .overlay {
-            if playlists.isEmpty {
-                if isLoading {
-                    ProgressView()
-                } else {
-                    ContentUnavailableView("No Playlists", systemImage: "list.bullet.rectangle")
-                }
-            }
-        }
-        .navigationTitle("Playlists")
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .refreshable { await load() }
         .task {
-            let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
-            playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
-            isLoading = false
+            if model.items.isEmpty { await load() }
+        }
+    }
+
+    private func load() async {
+        await model.load(.browse(YouTubeFeeds.playlistBrowseId(playlistId)))
+    }
+
+    private var header: some View {
+        DetailHeaderCard(meta: meta, title: title) {
+            CoverImage(url: videos.first?.thumbnailURL)
+                .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+        } secondary: {
+            EmptyView()
+        } buttons: {
+            if !videos.isEmpty {
+                Button { router.playAll(videos, shuffled: true) } label: {
+                    HeaderRoundIcon(systemImage: "shuffle")
+                }
+                .accessibilityLabel("Shuffle")
+                Button { router.playAll(videos) } label: {
+                    HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
+                }
+                .accessibilityLabel("Play All")
+            }
+        }
+        .padding(.vertical, Layout.screenPadding)
+        .frame(maxWidth: .infinity)
+        .background(alignment: .top) {
+            BlurredArtworkBackdrop(url: videos.first?.thumbnailURL)
         }
     }
 }

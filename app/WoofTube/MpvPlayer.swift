@@ -7,7 +7,10 @@ import SwiftUI
 /// mpv calls can block for seconds while a stream opens, so they all run on `queue`.
 /// The UI only ever touches the published values, which change on the main thread.
 final class MpvPlayer: ObservableObject {
-    @Published private(set) var time: Double = 0
+    /// The playback position, apart from the player: only the views that show it redraw as it ticks.
+    let clock = PlayerClock()
+    var time: Double { clock.time }
+    @Published private(set) var speed = 1.0
     @Published private(set) var duration: Double = 0
     @Published private(set) var isPaused = false
     @Published private(set) var isBuffering = false
@@ -22,7 +25,7 @@ final class MpvPlayer: ObservableObject {
     }()
     /// The shape of the surface mpv draws on. It never changes after mpv starts,
     /// so rotating only moves the layer and doesn't restart the video output.
-    static let surfaceAspect: CGFloat = 16 / 9
+    let surfaceAspect: CGFloat
     /// Called on the main thread when a video plays to its end.
     var onEnded: (() -> Void)?
 
@@ -35,8 +38,10 @@ final class MpvPlayer: ObservableObject {
     private var observers: [Any] = []
 
     private static let logLimit = 100
+    private static let ticksPerSecond = 4.0
 
-    init() {
+    init(surfaceAspect: CGFloat = 16 / 9) {
+        self.surfaceAspect = surfaceAspect
         observeAudioSession()
         queue.async { [weak self] in self?.startMpv() }
     }
@@ -73,7 +78,7 @@ final class MpvPlayer: ObservableObject {
     }
 
     func seek(to seconds: Double) {
-        time = seconds
+        clock.time = seconds
         isBuffering = true
         command(["seek", String(seconds), "absolute"])
     }
@@ -84,22 +89,20 @@ final class MpvPlayer: ObservableObject {
 
     func stop() {
         pendingLoad = nil
-        time = 0
+        clock.time = 0
         duration = 0
         isBuffering = false
         command(["stop"])
     }
 
     func setSpeed(_ speed: Double) {
+        self.speed = speed
         setProperty("speed", String(speed))
     }
 
-    func showSubtitles(url: String?) {
-        if let url {
-            command(["sub-add", url, "select"])
-        } else {
-            setProperty("sid", "no")
-        }
+    /// Doubles the speed while the video is held down, without changing the chosen speed.
+    func setBoosted(_ boosted: Bool) {
+        setProperty("speed", String(boosted ? 2 : speed))
     }
 
     /// What mpv is doing right now, for the Diagnostics screen in Settings.
@@ -183,7 +186,7 @@ final class MpvPlayer: ObservableObject {
         }
     }
 
-    private func setProperty(_ name: String, _ value: String) {
+    func setProperty(_ name: String, _ value: String) {
         queue.async { [self] in
             guard let mpv else { return }
             mpv_set_property_string(mpv, name, value)
@@ -272,7 +275,7 @@ final class MpvPlayer: ObservableObject {
 
     private static func runEvents(_ mpv: OpaquePointer, player: MpvPlayer?) {
         weak var player = player
-        var lastSecond = -1
+        var lastTick = -1
         while true {
             guard let event = mpv_wait_event(mpv, 1) else { continue }
             switch event.pointee.event_id {
@@ -299,9 +302,9 @@ final class MpvPlayer: ObservableObject {
                 } else if property.format == MPV_FORMAT_DOUBLE, let value = property.data?.load(as: Double.self) {
                     if name == "duration" {
                         player?.publish { $0.duration = value }
-                    } else if Int(value) != lastSecond {
-                        lastSecond = Int(value)
-                        player?.publish { $0.time = value }
+                    } else if Int(value * ticksPerSecond) != lastTick {
+                        lastTick = Int(value * ticksPerSecond)
+                        player?.publish { $0.clock.time = value }
                     }
                 }
             case MPV_EVENT_END_FILE:
@@ -329,6 +332,10 @@ extension Array where Element == String {
         var pointers = cstrings.map { UnsafePointer($0) } + [nil]
         return pointers.withUnsafeMutableBufferPointer { body($0.baseAddress) }
     }
+}
+
+final class PlayerClock: ObservableObject {
+    @Published fileprivate(set) var time: Double = 0
 }
 
 struct MpvVideoView: UIViewRepresentable {
@@ -360,10 +367,12 @@ final class MpvVideoUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let aspect = MpvPlayer.surfaceAspect
+        let aspect = player.surfaceAspect
         let videoLayer = player.videoLayer
         let longSide = max(UIScreen.main.nativeBounds.width, UIScreen.main.nativeBounds.height)
-        let drawable = CGSize(width: longSide, height: longSide / aspect)
+        let drawable = aspect >= 1
+            ? CGSize(width: longSide, height: longSide / aspect)
+            : CGSize(width: longSide * aspect, height: longSide)
         let frame = AVMakeRect(aspectRatio: drawable, insideRect: bounds)
 
         CATransaction.begin()

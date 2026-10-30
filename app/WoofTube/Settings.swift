@@ -8,8 +8,8 @@ struct AccentPreset: Identifiable, Hashable {
     var id: String { name }
 
     static let all: [AccentPreset] = [
+        AccentPreset(name: "Default Blue", color: Color(red: 0, green: 0.48, blue: 1)),
         AccentPreset(name: "Red", color: Color(red: 0.91, green: 0.22, blue: 0.22)),
-        AccentPreset(name: "Blue", color: Color(red: 0, green: 0.48, blue: 1)),
         AccentPreset(name: "Orange", color: Color(red: 0.95, green: 0.45, blue: 0.13)),
         AccentPreset(name: "Amber", color: Color(red: 0.98, green: 0.70, blue: 0.15)),
         AccentPreset(name: "Green", color: Color(red: 0.18, green: 0.72, blue: 0.32)),
@@ -65,47 +65,104 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section {
-                HStack(spacing: 14) {
-                    Avatar(url: session.account?.thumbnailUrl, size: 48)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(session.account?.name ?? "YouTube").font(.headline).lineLimit(1)
-                        if let handle = session.account?.channelHandle {
-                            Text(handle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                NavigationLink {
+                    ProfileView()
+                } label: {
+                    HStack(spacing: Layout.menuRowSpacing) {
+                        Avatar(url: session.account?.thumbnailUrl, size: 48)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(session.account?.name ?? "YouTube").font(.headline).lineLimit(1)
+                            Text("YouTube").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
-                    Spacer(minLength: 8)
-                    Button("Logout") {
-                        router.close()
-                        Task { await session.signOut() }
-                    }
-                    .buttonStyle(.bordered)
+                    .padding(.vertical, Layout.cardSpacing)
                 }
             }
             Section("Appearance") {
-                NavigationLink {
-                    AppearanceSettingsView()
-                } label: {
-                    Label("Appearance", systemImage: "paintpalette")
-                }
+                settingsRow("Appearance", icon: "paintpalette") { AppearanceSettingsView() }
             }
             Section("Playback") {
-                Picker(selection: $router.maxHeight) {
-                    ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
-                } label: {
-                    Label("Maximum Quality", systemImage: "play.circle")
-                }
+                settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
             }
             Section("Support") {
-                NavigationLink {
+                settingsRow("Diagnostics", icon: "stethoscope") {
                     DiagnosticsView(player: router.player, stream: router.streamSummary)
-                } label: {
-                    Label("Diagnostics", systemImage: "stethoscope")
                 }
             }
         }
+        .listSectionSpacing(.compact)
+        .scrollBounceBehavior(.basedOnSize)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+    }
+
+    private func settingsRow<Destination: View>(_ title: String, icon: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
+        NavigationLink(destination: destination) {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: icon).foregroundStyle(.tint)
+            }
+        }
+    }
+}
+
+/// Woof Music's account page. It only has the sign out for now.
+private struct ProfileView: View {
+    @EnvironmentObject private var session: Session
+    @EnvironmentObject private var router: Router
+    @State private var confirmsSignOut = false
+
+    var body: some View {
+        List {
+            Section {
+                VStack(spacing: 10) {
+                    Avatar(url: session.account?.thumbnailUrl, size: 96)
+                    Text(session.account?.name ?? "YouTube").font(.title2.bold())
+                    if let handle = session.account?.channelHandle {
+                        Text(handle).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.clear)
+            }
+            Section {
+                Button("Sign Out", role: .destructive) { confirmsSignOut = true }
+            }
+        }
+        .listSectionSpacing(.compact)
+        .navigationTitle("Profile")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Sign out of YouTube?", isPresented: $confirmsSignOut, titleVisibility: .visible) {
+            Button("Sign Out", role: .destructive) {
+                router.close()
+                Task { await session.signOut() }
+            }
+        }
+    }
+}
+
+private struct PlayerSettingsView: View {
+    @EnvironmentObject private var router: Router
+
+    var body: some View {
+        List {
+            Section {
+                Picker(selection: $router.maxHeight) {
+                    ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
+                } label: {
+                    Label("Maximum Quality", systemImage: "sparkles.tv")
+                }
+                Toggle(isOn: $router.autoplay) {
+                    Label("Autoplay", systemImage: "play.square.stack")
+                }
+            } footer: {
+                Text("Autoplay starts the first Up Next video when one ends.")
+            }
+        }
+        .navigationTitle("Player")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

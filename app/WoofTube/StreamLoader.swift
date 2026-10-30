@@ -72,10 +72,12 @@ enum StreamLoader {
         do {
             let request = StreamResolveRequest(videoId: videoId, chain: ClientFallbackChain.youtube)
             let result = try await StreamFallback.resolveFirstValid(request, using: tube, providers: providers)
+            // This path carries no captions, so they come from a plain player request.
+            let captionsResponse: PlayerResponse? = try? await tube.playerResponse(videoId: videoId, client: .web, options: PlayerRequestOptions(signatureTimestamp: nil))
             return LoadedStream(
                 url: result.muxedStreamUrl ?? result.streamUrl,
                 summary: "\(result.clientName) · \(result.muxedHeight ?? 0)p combined",
-                captions: [],
+                captions: captionsResponse.map { YouTubeWatchParser.captionTracks(from: $0) } ?? [],
                 trackingURL: nil
             )
         } catch {
