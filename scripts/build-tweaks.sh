@@ -8,7 +8,8 @@ BUILD="$ROOT/.build"
 
 # Tweaks injected into the IPA, as GitHub owner/repo.
 # YTABGoodies is a runtime dependency of YouTube-X.
-TWEAKS=(PoomSmart/YTABGoodies PoomSmart/YouTube-X)
+# YTPlaybackFix recovers playback that sideloaded installs lose after seeking.
+TWEAKS=(PoomSmart/YTABGoodies PoomSmart/YouTube-X Mark02-2012/YTPlaybackFix)
 
 if [[ ! -x "$THEOS/toolchain/linux/iphone/bin/clang" ]]; then
     echo "Theos not found at $THEOS. Run scripts/setup-theos.sh first." >&2
