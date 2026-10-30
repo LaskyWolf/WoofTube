@@ -4,3 +4,8 @@ out/
 packages/
 *.ipa
 *.7z
+
+# Native app
+app/WoofTube.xcodeproj/
+app/WoofTube/Info.plist
+app/build/
