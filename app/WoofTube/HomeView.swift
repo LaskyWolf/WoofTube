@@ -1,63 +1,203 @@
 import SwiftUI
 import SwiftyTube
 
-struct HomeView: View {
-    @EnvironmentObject private var session: Session
-    @State private var videos: [YouTubeVideo] = []
-    @State private var isLoading = true
-    @State private var errorText: String?
+enum FeedSource: Hashable {
+    case browse(String, params: String? = nil)
+    case search(String)
+    case continuation(String)
 
-    var body: some View {
-        NavigationStack {
-            List(videos, id: \.videoId) { video in
-                NavigationLink(value: video) {
-                    VideoRow(video: video)
-                }
-                .listRowSeparator(.hidden)
-            }
-            .listStyle(.plain)
-            .overlay { placeholder }
-            .navigationTitle("Home")
-            .navigationDestination(for: YouTubeVideo.self) { PlayerScreen(video: $0) }
-            .toolbar {
-                Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right") {
-                    Task { await session.signOut() }
-                }
-            }
-            .task { await load() }
-            .refreshable { await load() }
+    func fetch() async throws -> [String: Any] {
+        let tube = InnerTubeClient.wooftube
+        switch self {
+        case .browse(let id, let params):
+            return try await tube.browse(browseId: id, params: params)
+        case .search(let query):
+            return try await tube.search(query: query)
+        case .continuation(let token):
+            return try await tube.browse(continuation: token)
         }
     }
+}
 
-    @ViewBuilder
-    private var placeholder: some View {
-        if videos.isEmpty {
-            if isLoading {
-                ProgressView()
-            } else {
-                ContentUnavailableView {
-                    Label("No Videos", systemImage: "play.rectangle")
-                } description: {
-                    Text(errorText ?? "YouTube returned an empty Home feed. Pull down to try again.")
-                }
-            }
-        }
-    }
+struct FeedChip: Identifiable, Hashable {
+    let title: String
+    let token: String?
+    var id: String { title }
+}
 
-    private func load() async {
+/// Loads a feed and its next pages for every list of videos in the app.
+@MainActor
+final class FeedModel: ObservableObject {
+    @Published private(set) var videos: [YouTubeVideo] = []
+    @Published private(set) var channels: [YouTubeChannel] = []
+    @Published private(set) var chips: [FeedChip] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var errorText: String?
+    private var nextToken: String?
+    private var nextQuery: String?
+
+    func load(_ source: FeedSource, keepChips: Bool = false) async {
         isLoading = true
         defer { isLoading = false }
         do {
-            let json = try await InnerTubeClient.wooftube.browse(browseId: YouTubeFeeds.home)
+            let json = try await source.fetch()
             videos = YouTubeFeedParser.videos(in: json).filter { !$0.isShort }
+            channels = YouTubeFeedParser.channels(in: json)
+            if !keepChips { chips = Self.parseChips(json) }
+            nextToken = YouTubeFeedParser.continuation(in: json)
+            if case .search(let query) = source { nextQuery = query } else { nextQuery = nil }
             errorText = nil
         } catch {
             errorText = error.localizedDescription
         }
     }
+
+    func loadMore(after video: YouTubeVideo) async {
+        guard video.videoId == videos.last?.videoId, !isLoading, let token = nextToken else { return }
+        isLoading = true
+        defer { isLoading = false }
+        nextToken = nil
+        let tube = InnerTubeClient.wooftube
+        guard let json = try? await (nextQuery != nil
+            ? tube.search(query: nextQuery ?? "", continuation: token)
+            : tube.browse(continuation: token)) else { return }
+        let known = Set(videos.map(\.videoId))
+        videos += YouTubeFeedParser.videos(in: json).filter { !$0.isShort && !known.contains($0.videoId) }
+        nextToken = YouTubeFeedParser.continuation(in: json)
+    }
+
+    private static func parseChips(_ json: [String: Any]) -> [FeedChip] {
+        guard let bar = JSON.first("feedFilterChipBarRenderer", in: json) as? [String: Any],
+              let contents = bar["contents"] as? [[String: Any]] else { return [] }
+        return contents.compactMap { item in
+            guard let chip = item["chipCloudChipRenderer"] as? [String: Any],
+                  let title = JSON.text(chip["text"]) else { return nil }
+            return FeedChip(title: title, token: JSON.string("token", in: chip["navigationEndpoint"]))
+        }
+    }
 }
 
-private struct VideoRow: View {
+struct HomeView: View {
+    @StateObject private var model = FeedModel()
+    @State private var selectedChip: String?
+
+    var body: some View {
+        NavigationStack {
+            FeedContent(model: model, retry: { await model.load(.browse(YouTubeFeeds.home)) }) {
+                if !model.chips.isEmpty {
+                    chipBar
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                }
+            }
+            .navigationTitle("Home")
+            .toolbar {
+                NavigationLink {
+                    NotificationsView()
+                } label: {
+                    Label("Notifications", systemImage: "bell")
+                }
+            }
+            .task {
+                if model.videos.isEmpty { await model.load(.browse(YouTubeFeeds.home)) }
+            }
+        }
+    }
+
+    // Spacing from Woof Music's FilterChipBar.
+    private var chipBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.chips) { chip in
+                    let isSelected = selectedChip == chip.title || (selectedChip == nil && chip.id == model.chips.first?.id)
+                    Button {
+                        selectedChip = chip.title
+                        Task {
+                            if let token = chip.token {
+                                await model.load(.continuation(token), keepChips: true)
+                            } else {
+                                await model.load(.browse(YouTubeFeeds.home), keepChips: true)
+                            }
+                        }
+                    } label: {
+                        Text(chip.title)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(isSelected ? Color(.systemBackground) : .primary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(isSelected ? Color.primary : Color(.secondarySystemFill), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+}
+
+/// A list of videos that loads itself from one source.
+struct FeedList: View {
+    let source: FeedSource
+    @StateObject private var model = FeedModel()
+
+    var body: some View {
+        FeedContent(model: model, retry: { await model.load(source) }) { EmptyView() }
+            .task(id: source) {
+                if model.videos.isEmpty { await model.load(source) }
+            }
+    }
+}
+
+struct FeedContent<Header: View>: View {
+    @ObservedObject var model: FeedModel
+    let retry: () async -> Void
+    @ViewBuilder let header: () -> Header
+    @EnvironmentObject private var router: Router
+
+    var body: some View {
+        List {
+            header()
+            ForEach(model.channels, id: \.title) { channel in
+                if let id = channel.channelId {
+                    NavigationLink {
+                        ChannelView(channelId: id)
+                    } label: {
+                        ChannelRow(channel: channel)
+                    }
+                }
+            }
+            ForEach(model.videos, id: \.videoId) { video in
+                Button {
+                    router.play(video)
+                } label: {
+                    VideoRow(video: video)
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowSeparator(.hidden)
+                .task { await model.loadMore(after: video) }
+            }
+        }
+        .listStyle(.plain)
+        .overlay {
+            if model.videos.isEmpty, model.channels.isEmpty {
+                if model.isLoading {
+                    ProgressView()
+                } else {
+                    ContentUnavailableView {
+                        Label("No Videos", systemImage: "play.rectangle")
+                    } description: {
+                        Text(model.errorText ?? "YouTube returned nothing here. Pull down to try again.")
+                    }
+                }
+            }
+        }
+        .refreshable { await retry() }
+    }
+}
+
+struct VideoRow: View {
     let video: YouTubeVideo
 
     private var details: String {
@@ -68,14 +208,7 @@ private struct VideoRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            AsyncImage(url: URL(string: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Color(.secondarySystemFill)
-            }
-            .aspectRatio(16 / 9, contentMode: .fit)
-            .clipShape(.rect(cornerRadius: 12))
-
+            Thumbnail(video: video)
             Text(video.title)
                 .font(.headline)
                 .lineLimit(2)
@@ -84,6 +217,65 @@ private struct VideoRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }
-        .padding(.vertical, 6)
+        .contentShape(.rect)
+    }
+}
+
+struct Thumbnail: View {
+    let video: YouTubeVideo
+
+    var body: some View {
+        Color(.secondarySystemFill)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .overlay {
+                AsyncImage(url: URL(string: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.clear
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if let seconds = video.durationSeconds, seconds > 0 {
+                    Text(Double(seconds).clockText)
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.7), in: .capsule)
+                        .padding(8)
+                }
+            }
+            .clipShape(.rect(cornerRadius: 12))
+    }
+}
+
+struct ChannelRow: View {
+    let channel: YouTubeChannel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Avatar(url: channel.thumbnailURL, size: 48)
+            VStack(alignment: .leading) {
+                Text(channel.title).font(.headline)
+                if let subscribers = channel.subscriberCountText {
+                    Text(subscribers).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+struct Avatar: View {
+    let url: String?
+    let size: CGFloat
+
+    var body: some View {
+        AsyncImage(url: url.flatMap(URL.init(string:))) { image in
+            image.resizable().scaledToFill()
+        } placeholder: {
+            Color(.secondarySystemFill)
+        }
+        .frame(width: size, height: size)
+        .clipShape(.circle)
     }
 }

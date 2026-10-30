@@ -6,6 +6,7 @@ import WebKit
 @MainActor
 final class Session: ObservableObject {
     @Published private(set) var isSignedIn = false
+    @Published var isExpired = false
 
     private let store = SecureStore(service: "com.laskywolf.wooftube.session")
     private let key = "auth"
@@ -15,12 +16,11 @@ final class Session: ObservableObject {
               let auth = try? JSONDecoder().decode(AuthState.self, from: data) else { return }
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
+        await refreshIfStale(auth)
     }
 
     func signIn(_ auth: AuthState) async {
-        if let data = try? JSONEncoder().encode(auth) {
-            try? store.save(data, for: key)
-        }
+        save(auth)
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
     }
@@ -33,6 +33,33 @@ final class Session: ObservableObject {
             ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
             modifiedSince: .distantPast
         )
+        isExpired = false
         isSignedIn = false
+    }
+
+    /// Google rotates its tokens, and a stale session answers as a guest instead of failing.
+    /// A network error says nothing about the session, so it changes nothing here.
+    private func refreshIfStale(_ auth: AuthState) async {
+        let tube = InnerTubeClient.wooftube
+        guard let isValid = try? await tube.verifySession(), !isValid else { return }
+        let reissued = await SessionTokenRefresher.shared.refreshRotatedTokens(baseCookies: auth.cookies)
+        guard !reissued.isEmpty else {
+            isExpired = true
+            return
+        }
+        var refreshed = auth
+        refreshed.cookies = reissued
+        await tube.updateAuth(refreshed)
+        if (try? await tube.verifySession()) == true {
+            save(refreshed)
+        } else {
+            isExpired = true
+        }
+    }
+
+    private func save(_ auth: AuthState) {
+        if let data = try? JSONEncoder().encode(auth) {
+            try? store.save(data, for: key)
+        }
     }
 }

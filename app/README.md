@@ -2,7 +2,7 @@
 
 A SwiftUI YouTube client. It contains no YouTube code and needs no decrypted IPA.
 
-This is a proof with sign-in, the Home feed and a video player.
+See [ROADMAP.md](ROADMAP.md) for what exists and what is missing.
 
 ## Build
 
@@ -19,7 +19,7 @@ open WoofTube.xcodeproj
 
 ## Account risk
 
-Google can challenge or restrict an account used in an unofficial app. Test with a second account.
+Google can challenge or restrict an account used in an unofficial app, and posting comments is more visible than watching. Test with a second account.
 
 ## License
 

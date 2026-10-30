@@ -3,8 +3,8 @@ import Libmpv
 import Metal
 import SwiftUI
 
-/// One mpv instance per player screen. mpv's option order comes from Woof Music's
-/// PlayerController. Events arrive on a background thread and are published on main.
+/// mpv's option order comes from Woof Music's PlayerController.
+/// Events arrive on a background thread and are published on main.
 final class MpvPlayer: ObservableObject {
     @Published private(set) var time: Double = 0
     @Published private(set) var duration: Double = 0
@@ -20,8 +20,10 @@ final class MpvPlayer: ObservableObject {
     }()
 
     private var mpv: OpaquePointer?
-    private var pendingURL: String?
+    private var pendingLoad: (url: String, start: Double)?
     private var hasSurface = false
+    private var surfaceSizeAtStart: CGSize = .zero
+    private var videoEnabled = true
 
     init() {
         guard let mpv = mpv_create() else {
@@ -48,41 +50,50 @@ final class MpvPlayer: ObservableObject {
             mpv_set_property_string(mpv, "tls-ca-file", certificates)
         }
         mpv_set_property_string(mpv, "user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
-        mpv_set_property_string(mpv, "vo", "gpu-next")
-        mpv_set_property_string(mpv, "gpu-api", "vulkan")
-        mpv_set_property_string(mpv, "gpu-context", "moltenvk")
-        var window = unsafeBitCast(videoLayer, to: Int64.self)
-        mpv_set_property(mpv, "wid", MPV_FORMAT_INT64, &window)
-        mpv_set_property_string(mpv, "vid", "auto")
-
         mpv_observe_property(mpv, 0, "time-pos", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 1, "duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 2, "pause", MPV_FORMAT_FLAG)
         self.mpv = mpv
+        startVideoOutput()
 
-        let layer = videoLayer
         Thread { [weak self] in
             Self.runEvents(mpv, player: self)
-            mpv_terminate_destroy(mpv)
-            // mpv draws into the layer until it is destroyed.
-            withExtendedLifetime(layer) {}
         }.start()
     }
 
     /// Starts once the video view has a real size, because mpv sizes its surface from the layer.
-    func load(url: String) {
-        pendingURL = url
+    func load(url: String, start: Double = 0) {
+        errorText = nil
+        pendingLoad = (url, start)
         startIfReady()
     }
 
     func surfaceDidResize() {
         hasSurface = true
         startIfReady()
+        if videoEnabled, surfaceSizeAtStart != videoLayer.drawableSize {
+            startVideoOutput()
+        }
+    }
+
+    /// Off while nothing shows the video, such as in the background or the mini player.
+    func setVideoEnabled(_ enabled: Bool) {
+        guard enabled != videoEnabled else { return }
+        videoEnabled = enabled
+        if enabled {
+            startVideoOutput()
+        } else if let mpv {
+            mpv_set_property_string(mpv, "vid", "no")
+        }
     }
 
     func togglePause() {
+        setPaused(!isPaused)
+    }
+
+    func setPaused(_ paused: Bool) {
         guard let mpv else { return }
-        mpv_set_property_string(mpv, "pause", isPaused ? "no" : "yes")
+        mpv_set_property_string(mpv, "pause", paused ? "yes" : "no")
     }
 
     func seek(to seconds: Double) {
@@ -90,16 +101,53 @@ final class MpvPlayer: ObservableObject {
     }
 
     func stop() {
-        command(["quit"])
-        mpv = nil
+        pendingLoad = nil
+        command(["stop"])
+        DispatchQueue.main.async {
+            self.time = 0
+            self.duration = 0
+        }
+    }
+
+    func setSpeed(_ speed: Double) {
+        guard let mpv else { return }
+        mpv_set_property_string(mpv, "speed", String(speed))
+    }
+
+    func setLooping(_ looping: Bool) {
+        guard let mpv else { return }
+        mpv_set_property_string(mpv, "loop-file", looping ? "inf" : "no")
+    }
+
+    func showSubtitles(url: String?) {
+        guard let url else {
+            if let mpv { mpv_set_property_string(mpv, "sid", "no") }
+            return
+        }
+        command(["sub-add", url, "select"])
+    }
+
+    private func startVideoOutput() {
+        guard let mpv else { return }
+        surfaceSizeAtStart = videoLayer.drawableSize
+        mpv_set_property_string(mpv, "vo", "null")
+        mpv_set_property_string(mpv, "vo", "gpu-next")
+        mpv_set_property_string(mpv, "gpu-api", "vulkan")
+        mpv_set_property_string(mpv, "gpu-context", "moltenvk")
+        var window = unsafeBitCast(videoLayer, to: Int64.self)
+        mpv_set_property(mpv, "wid", MPV_FORMAT_INT64, &window)
+        mpv_set_property_string(mpv, "vid", "auto")
     }
 
     private func startIfReady() {
-        guard hasSurface, let url = pendingURL else { return }
-        pendingURL = nil
+        guard hasSurface || !videoEnabled, let load = pendingLoad else { return }
+        pendingLoad = nil
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
-        command(["loadfile", url, "replace"])
+        command(load.start > 0
+            ? ["loadfile", load.url, "replace", "-1", "start=\(load.start)"]
+            : ["loadfile", load.url, "replace"])
+        setPaused(false)
     }
 
     private func command(_ arguments: [String]) {
@@ -167,6 +215,7 @@ final class MpvVideoUIView: UIView {
     init(player: MpvPlayer) {
         self.player = player
         super.init(frame: .zero)
+        backgroundColor = .black
         layer.addSublayer(player.videoLayer)
     }
 
@@ -178,6 +227,9 @@ final class MpvVideoUIView: UIView {
         super.layoutSubviews()
         guard bounds.width > 0, bounds.height > 0 else { return }
         let scale = traitCollection.displayScale
+        if player.videoLayer.superlayer !== layer {
+            layer.addSublayer(player.videoLayer)
+        }
         player.videoLayer.frame = bounds
         player.videoLayer.contentsScale = scale
         player.videoLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
