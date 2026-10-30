@@ -193,10 +193,11 @@ struct CommentsSheet: View {
             List {
                 ForEach(model.comments) { comment in
                     CommentRow(comment: comment, model: model) { reply(to: $0) }
+                        .listRowInsets(Layout.rowInsets)
                         .task { await model.loadMore(after: comment) }
                     ForEach(comment.replies) { child in
                         CommentRow(comment: child, model: model) { reply(to: $0) }
-                            .padding(.leading, 44)
+                            .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.screenPadding + 44, bottom: Layout.rowPadding, trailing: Layout.screenPadding))
                     }
                 }
             }
@@ -204,7 +205,7 @@ struct CommentsSheet: View {
             .overlay {
                 if model.comments.isEmpty {
                     if model.isLoading {
-                        ProgressView()
+                        ProgressView().controlSize(.large)
                     } else {
                         ContentUnavailableView("No Comments", systemImage: "bubble.left")
                     }
@@ -280,9 +281,9 @@ private struct CommentRow: View {
     let onReply: (Comment) -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Layout.rowSpacing) {
             Avatar(url: comment.avatar, size: 32)
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Layout.rowPadding) {
                 Text([comment.author, comment.time].compactMap { $0 }.joined(separator: " · "))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -305,6 +306,8 @@ private struct CommentRow: View {
                 .font(.footnote.weight(.medium))
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
+                .frame(minHeight: 32)
+                .sensoryFeedback(.impact(weight: .light), trigger: comment.isLiked)
             }
         }
         .listRowSeparator(.hidden)

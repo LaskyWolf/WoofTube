@@ -7,6 +7,7 @@ extension InnerTubeClient {
 
 @main
 struct WoofTubeApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var session = Session()
     @StateObject private var router = Router()
 
@@ -46,6 +47,7 @@ struct RootTabs: View {
     @EnvironmentObject private var router: Router
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.home
+    @Namespace private var playerNamespace
 
     var body: some View {
         TabView(selection: $tab) {
@@ -69,8 +71,11 @@ struct RootTabs: View {
             }
         }
         .modifier(MiniPlayerAccessory(isEnabled: router.current != nil))
+        .environment(\.playerNamespace, playerNamespace)
         .fullScreenCover(isPresented: $router.isExpanded) {
+            // The zoom transition also gives the system's swipe down to close.
             WatchView()
+                .navigationTransition(.zoom(sourceID: router.zoomSourceID, in: playerNamespace))
         }
         .onChange(of: tab) { _, newTab in
             if newTab == .shorts { router.close() }
@@ -99,18 +104,34 @@ private struct MiniPlayerAccessory: ViewModifier {
 }
 
 private struct MiniPlayer: View {
+    private static let zoomID = "miniPlayer"
+
     @EnvironmentObject private var router: Router
+    @Environment(\.playerNamespace) private var playerNamespace
 
     var body: some View {
         if let video = router.current {
-            HStack(spacing: 12) {
+            HStack(spacing: Layout.chipSpacing) {
                 Button {
+                    router.zoomSourceID = Self.zoomID
                     router.isExpanded = true
                 } label: {
-                    Text(video.title)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: Layout.rowSpacing) {
+                        AsyncImage(url: URL(string: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            Color(.secondarySystemFill)
+                        }
+                        .frame(width: 48, height: 28)
+                        .clipShape(.rect(cornerRadius: Layout.thumbRadius))
+                        .zoomSource(id: Self.zoomID, in: playerNamespace)
+
+                        Text(video.title)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
 
@@ -119,8 +140,11 @@ private struct MiniPlayer: View {
                 Button("Close", systemImage: "xmark") { router.close() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, Layout.screenPadding)
+            .padding(.trailing, Layout.chipSpacing)
         }
     }
 }
@@ -134,5 +158,7 @@ private struct MiniPlayPause: View {
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.plain)
+        .frame(width: 44, height: 44)
+        .contentShape(.rect)
     }
 }

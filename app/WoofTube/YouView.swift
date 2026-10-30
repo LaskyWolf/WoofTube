@@ -97,11 +97,40 @@ struct SettingsView: View {
             Picker("Maximum Quality", selection: $router.maxHeight) {
                 ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
             }
+            NavigationLink("Diagnostics") {
+                DiagnosticsView(player: router.player, stream: router.streamSummary)
+            }
             Button("Sign Out", role: .destructive) {
                 router.close()
                 Task { await session.signOut() }
             }
         }
         .navigationTitle("Settings")
+    }
+}
+
+/// Shows what the player is doing, because a phone has no console to read.
+struct DiagnosticsView: View {
+    @ObservedObject var player: MpvPlayer
+    let stream: String?
+    @State private var state = ""
+
+    private var report: String {
+        ([stream ?? "No stream", state] + player.recentLog).joined(separator: "\n")
+    }
+
+    var body: some View {
+        ScrollView {
+            Text(report)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Layout.screenPadding)
+        }
+        .navigationTitle("Diagnostics")
+        .toolbar {
+            ShareLink(item: report)
+        }
+        .task { state = await player.diagnostics() }
     }
 }

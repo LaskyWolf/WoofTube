@@ -11,7 +11,7 @@ final class ShortsModel: ObservableObject {
     @Published private(set) var isLoading = true
     @Published private(set) var details: WatchDetails?
     @Published private(set) var errorText: String?
-    let player = MpvPlayer()
+    let player = MpvPlayer(surfaceAspect: 9 / 16)
     private var nextToken: String?
 
     init() {
@@ -70,6 +70,7 @@ final class ShortsModel: ObservableObject {
 struct ShortsView: View {
     let isActive: Bool
 
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = ShortsModel()
     @State private var currentId: String?
     @State private var showsComments = false
@@ -93,12 +94,14 @@ struct ShortsView: View {
         .overlay {
             if model.shorts.isEmpty {
                 if model.isLoading {
-                    ProgressView()
+                    ProgressView().tint(.white)
                 } else {
                     ContentUnavailableView("No Shorts", systemImage: "play.square.stack")
                 }
             }
         }
+        .toolbarColorScheme(.dark, for: .tabBar)
+        .onChange(of: scenePhase) { model.player.setVideoEnabled(scenePhase != .background) }
         .sheet(isPresented: $showsComments) {
             if let token = model.details?.commentsToken {
                 CommentsSheet(token: token)

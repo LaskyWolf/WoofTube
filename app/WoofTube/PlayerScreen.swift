@@ -11,15 +11,22 @@ struct WatchView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                PlayerSurface(player: router.player, isFullscreen: isFullscreen)
-                if !isFullscreen {
-                    ScrollView {
-                        WatchDetailsView(showsComments: $showsComments)
+            // The same PlayerSurface stays in place in both layouts, so the video never reloads.
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    PlayerSurface(player: router.player, isFullscreen: isFullscreen)
+                        .frame(width: geometry.size.width, height: isFullscreen ? geometry.size.height : geometry.size.width * 9 / 16)
+                    if !isFullscreen {
+                        ScrollView {
+                            WatchDetailsView(showsComments: $showsComments)
+                        }
                     }
                 }
             }
-            .background(isFullscreen ? Color.black : Color(.systemBackground))
+            .background(alignment: .top) {
+                Color.black.ignoresSafeArea()
+                    .frame(maxHeight: isFullscreen ? .infinity : 0)
+            }
             .toolbar(.hidden, for: .navigationBar)
             .statusBarHidden(isFullscreen)
             .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
@@ -28,6 +35,12 @@ struct WatchView: View {
                     CommentsSheet(token: token)
                 }
             }
+        }
+        .preferredColorScheme(.dark)
+        .environment(\.playerNamespace, nil)
+        .interactiveDismissDisabled(isFullscreen)
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            Orientation.unlockIfHeldUpright()
         }
     }
 }
@@ -42,44 +55,75 @@ private struct PlayerSurface: View {
     @State private var isScrubbing = false
     @State private var hideTask: Task<Void, Never>?
 
+    private var isLoading: Bool {
+        router.loadError == nil && (router.streamSummary == nil || player.isBuffering)
+    }
+
     var body: some View {
-        MpvVideoView(player: player)
-            .aspectRatio(isFullscreen ? nil : 16 / 9, contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: isFullscreen ? .infinity : nil)
-            .background(.black)
-            .ignoresSafeArea(isFullscreen ? .all : [])
-            .contentShape(.rect)
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.2)) { showsControls.toggle() }
-                scheduleHide()
-            }
-            .overlay {
-                if showsControls { controls.transition(.opacity) }
-                if router.streamSummary == nil, router.loadError == nil {
-                    ProgressView().tint(.white)
+        ZStack {
+            MpvVideoView(player: player)
+                .background(.black)
+                .ignoresSafeArea(edges: isFullscreen ? .all : .top)
+
+            // The tap target sits under the buttons, so a tap on a button can't also toggle the controls.
+            Color.clear
+                .contentShape(.rect)
+                .onTapGesture {
+                    withAnimation(.easeOut(duration: 0.15)) { showsControls.toggle() }
+                    scheduleHide()
                 }
+
+            if isLoading {
+                ProgressView().tint(.white).controlSize(.large)
             }
-            .onAppear(perform: scheduleHide)
+            if showsControls {
+                controls.transition(.opacity)
+            }
+        }
+        .onAppear(perform: scheduleHide)
+        .onChange(of: player.isPaused) { scheduleHide() }
     }
 
     private var controls: some View {
-        VStack {
-            HStack(spacing: 8) {
-                glassButton("Close", icon: "chevron.down") { router.isExpanded = false }
+        VStack(spacing: 0) {
+            HStack(spacing: Layout.chipSpacing) {
+                glassButton("Close", icon: "chevron.down") {
+                    router.isExpanded = false
+                }
                 Spacer()
-                RoutePicker().frame(width: 44, height: 44).glassEffect(.regular, in: .circle)
+                RoutePicker()
+                    .frame(width: 44, height: 44)
+                    .glassEffect(.regular.interactive(), in: .circle)
                 optionsMenu
             }
-            Spacer()
-            glassButton(player.isPaused ? "Play" : "Pause", icon: player.isPaused ? "play.fill" : "pause.fill") {
-                player.togglePause()
+            Spacer(minLength: 0)
+            if !isLoading {
+                HStack(spacing: 24) {
+                    glassButton("Back 10 Seconds", icon: "gobackward.10") { player.skip(by: -10) }
+                    glassButton(player.isPaused ? "Play" : "Pause", icon: player.isPaused ? "play.fill" : "pause.fill") {
+                        player.togglePause()
+                    }
+                    .controlSize(.extraLarge)
+                    glassButton("Forward 10 Seconds", icon: "goforward.10") { player.skip(by: 10) }
+                }
             }
-            .controlSize(.extraLarge)
-            Spacer()
-            HStack(spacing: 8) {
-                Text(player.time.clockText)
+            Spacer(minLength: 0)
+            scrubber
+        }
+        .padding(Layout.chipSpacing)
+        .tint(.white)
+        .foregroundStyle(.white)
+    }
+
+    private var scrubber: some View {
+        HStack(spacing: Layout.chipSpacing) {
+            HStack(spacing: Layout.chipSpacing) {
+                Text((isScrubbing ? scrubPosition : player.time).clockText)
                 Slider(
-                    value: isScrubbing ? $scrubPosition : .constant(player.time),
+                    value: Binding(
+                        get: { isScrubbing ? scrubPosition : player.time },
+                        set: { scrubPosition = $0 }
+                    ),
                     in: 0...max(player.duration, 1),
                     onEditingChanged: { editing in
                         if editing {
@@ -93,15 +137,16 @@ private struct PlayerSurface: View {
                     }
                 )
                 Text(player.duration.clockText)
-                glassButton(isFullscreen ? "Exit Full Screen" : "Full Screen", icon: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
-                    rotate()
-                }
             }
             .font(.caption.monospacedDigit())
-            .foregroundStyle(.white)
+            .padding(.horizontal, Layout.screenPadding)
+            .frame(minHeight: 44)
+            .glassEffect(.regular, in: .capsule)
+
+            glassButton(isFullscreen ? "Exit Full Screen" : "Full Screen", icon: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
+                Orientation.setFullscreen(!isFullscreen)
+            }
         }
-        .padding(8)
-        .tint(.white)
     }
 
     private var optionsMenu: some View {
@@ -123,10 +168,14 @@ private struct PlayerSurface: View {
                     }
                 }
             }
+            if let summary = router.streamSummary {
+                Section(summary) {}
+            }
         } label: {
             Label("Options", systemImage: "ellipsis")
                 .labelStyle(.iconOnly)
                 .frame(width: 44, height: 44)
+                .contentShape(.circle)
                 .glassEffect(.regular.interactive(), in: .circle)
         }
     }
@@ -139,20 +188,17 @@ private struct PlayerSurface: View {
         .labelStyle(.iconOnly)
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+        .controlSize(.large)
     }
 
     private func scheduleHide() {
         hideTask?.cancel()
+        guard !player.isPaused else { return }
         hideTask = Task {
             try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled, !player.isPaused else { return }
-            withAnimation(.easeInOut(duration: 0.2)) { showsControls = false }
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { showsControls = false }
         }
-    }
-
-    private func rotate() {
-        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: isFullscreen ? .portrait : .landscapeRight))
     }
 }
 
@@ -174,47 +220,41 @@ private struct WatchDetailsView: View {
     @State private var actionError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Layout.sectionSpacing * 1.5) {
             if let video = router.current {
-                Text(video.title).font(.title3.bold())
+                Text(video.title)
+                    .font(.title3.bold())
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let failure = router.loadError ?? router.player.errorText {
-                Text(failure)
+                Label(failure, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
             }
             if let details = router.details {
-                if let metadata = details.metadata, !metadata.isEmpty {
-                    Text(metadata).font(.subheadline).foregroundStyle(.secondary)
-                }
                 channelRow(details)
                 actions(details)
-                if let description = details.description {
-                    DisclosureGroup("Description", isExpanded: $showsDescription) {
-                        Text(description).font(.subheadline).textSelection(.enabled)
-                    }
-                }
+                descriptionCard(details)
                 if details.commentsToken != nil {
-                    Button("Comments", systemImage: "bubble.left") { showsComments = true }
-                        .buttonStyle(.glass)
+                    commentsCard
                 }
-                if let summary = router.streamSummary {
-                    Text(summary).font(.footnote).foregroundStyle(.secondary)
-                }
-                ForEach(details.related, id: \.videoId) { video in
-                    Button {
-                        router.play(video)
-                    } label: {
-                        VideoRow(video: video)
+                if !details.related.isEmpty {
+                    Text("Up Next").font(.headline)
+                    ForEach(details.related, id: \.videoId) { video in
+                        Button {
+                            router.play(video)
+                        } label: {
+                            VideoRow(video: video)
+                        }
+                        .buttonStyle(RowPressStyle())
                     }
-                    .buttonStyle(.plain)
                 }
             } else {
-                ProgressView().frame(maxWidth: .infinity)
+                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 32)
             }
         }
-        .padding(16)
+        .padding(Layout.screenPadding)
         .alert("That Didn't Work", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -224,19 +264,25 @@ private struct WatchDetailsView: View {
 
     @ViewBuilder
     private func channelRow(_ details: WatchDetails) -> some View {
-        HStack(spacing: 12) {
-            if let id = details.channelId {
+        if let id = details.channelId {
+            HStack(spacing: Layout.rowSpacing) {
                 NavigationLink {
                     ChannelView(channelId: id)
                 } label: {
-                    Avatar(url: details.channelAvatar, size: 40)
-                    VStack(alignment: .leading) {
-                        Text(details.channelTitle ?? "").font(.subheadline.weight(.semibold))
-                        Text(details.subscribers ?? "").font(.footnote).foregroundStyle(.secondary)
+                    HStack(spacing: Layout.rowSpacing) {
+                        Avatar(url: details.channelAvatar, size: Layout.thumbSmall)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(details.channelTitle ?? "")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(details.subscribers ?? "")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .buttonStyle(.plain)
-                Spacer()
+                Spacer(minLength: 0)
                 SubscribeButton(channelId: id, isSubscribed: details.isSubscribed) { value in
                     router.setDetails { $0.isSubscribed = value }
                 }
@@ -248,7 +294,7 @@ private struct WatchDetailsView: View {
         let isLiked = details.likeStatus == "LIKE"
         let isDisliked = details.likeStatus == "DISLIKE"
         return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: Layout.chipSpacing) {
                 Button((isLiked ? details.likeCountLiked : details.likeCount) ?? "Like", systemImage: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup") {
                     setLike(isLiked ? "INDIFFERENT" : "LIKE")
                 }
@@ -262,7 +308,50 @@ private struct WatchDetailsView: View {
                 }
             }
             .buttonStyle(.glass)
+            .controlSize(.large)
+            .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
         }
+        .scrollClipDisabled()
+    }
+
+    private func descriptionCard(_ details: WatchDetails) -> some View {
+        Button {
+            withAnimation(.snappy) { showsDescription.toggle() }
+        } label: {
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                if let metadata = details.metadata, !metadata.isEmpty {
+                    Text(metadata).font(.subheadline.weight(.semibold))
+                }
+                if let description = details.description, !description.isEmpty {
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(showsDescription ? nil : 2)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Layout.rowSpacing)
+            .background(Color(.secondarySystemFill), in: .rect(cornerRadius: Layout.tileRadius))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var commentsCard: some View {
+        Button {
+            showsComments = true
+        } label: {
+            HStack {
+                Text("Comments").font(.subheadline.weight(.semibold))
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(Layout.rowSpacing)
+            .background(Color(.secondarySystemFill), in: .rect(cornerRadius: Layout.tileRadius))
+        }
+        .buttonStyle(.plain)
     }
 
     private func setLike(_ status: String) {
@@ -316,6 +405,7 @@ struct SubscribeButton: View {
             }
         }
         .modifier(SubscribeStyle(isSubscribed: isSubscribed))
+        .sensoryFeedback(.selection, trigger: isSubscribed)
     }
 }
 
@@ -343,15 +433,15 @@ struct ChannelView: View {
     var body: some View {
         List {
             if let channel = page?.channel {
-                HStack(spacing: 12) {
+                HStack(spacing: Layout.rowSpacing) {
                     Avatar(url: channel.thumbnailURL, size: 56)
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(channel.title).font(.headline)
                         if let subscribers = channel.subscriberCountText {
                             Text(subscribers).font(.subheadline).foregroundStyle(.secondary)
                         }
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                     SubscribeButton(channelId: channelId, isSubscribed: isSubscribed) { isSubscribed = $0 }
                 }
                 .listRowSeparator(.hidden)
@@ -362,13 +452,14 @@ struct ChannelView: View {
                 } label: {
                     VideoRow(video: video)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RowPressStyle())
+                .listRowInsets(Layout.rowInsets)
                 .listRowSeparator(.hidden)
             }
         }
         .listStyle(.plain)
         .overlay {
-            if isLoading, page == nil { ProgressView() }
+            if isLoading, page == nil { LoadingRows() }
         }
         .navigationTitle(page?.channel?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)

@@ -7,7 +7,13 @@ import SwiftyTube
 @MainActor
 final class Router: ObservableObject {
     @Published private(set) var current: YouTubeVideo?
-    @Published var isExpanded = false
+    @Published var isExpanded = false {
+        didSet {
+            guard isExpanded != oldValue else { return }
+            Orientation.videoPageChanged(isOpen: isExpanded)
+        }
+    }
+    @Published var zoomSourceID = ""
     @Published private(set) var details: WatchDetails?
     @Published private(set) var streamSummary: String?
     @Published private(set) var loadError: String?
@@ -17,7 +23,7 @@ final class Router: ObservableObject {
         didSet { UserDefaults.standard.set(maxHeight, forKey: Self.maxHeightKey) }
     }
 
-    let player = MpvPlayer()
+    let player = MpvPlayer(surfaceAspect: 16 / 9)
     static let qualities = [2160, 1440, 1080, 720, 480, 360]
     private static let maxHeightKey = "maxHeight"
     private var loadTask: Task<Void, Never>?
@@ -31,6 +37,7 @@ final class Router: ObservableObject {
 
     func play(_ video: YouTubeVideo) {
         current = video
+        if !isExpanded { zoomSourceID = video.videoId }
         isExpanded = true
         details = nil
         selectedCaption = nil

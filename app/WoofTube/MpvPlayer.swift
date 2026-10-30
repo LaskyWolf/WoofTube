@@ -4,44 +4,141 @@ import Metal
 import SwiftUI
 
 /// mpv's option order comes from Woof Music's PlayerController.
-/// Events arrive on a background thread and are published on main.
+/// mpv calls can block for seconds while a stream opens, so they all run on `queue`.
+/// The UI only ever touches the published values, which change on the main thread.
 final class MpvPlayer: ObservableObject {
     @Published private(set) var time: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var isPaused = false
+    @Published private(set) var isBuffering = false
     @Published private(set) var errorText: String?
+    @Published private(set) var recentLog: [String] = []
 
     let videoLayer: CAMetalLayer = {
         let layer = CAMetalLayer()
         layer.device = MTLCreateSystemDefaultDevice()
         layer.framebufferOnly = true
-        layer.contentsGravity = .resizeAspect
         return layer
     }()
+    /// The shape of the surface mpv draws on. It never changes after mpv starts,
+    /// so rotating only moves the layer and doesn't restart the video output.
+    let surfaceAspect: CGFloat
 
+    private let queue = DispatchQueue(label: "com.laskywolf.wooftube.mpv")
     private var mpv: OpaquePointer?
     private var pendingLoad: (url: String, start: Double)?
     private var hasSurface = false
-    private var surfaceSizeAtStart: CGSize = .zero
     private var videoEnabled = true
+    private var wasPlayingBeforeInterruption = false
+    private var observers: [Any] = []
 
-    init() {
+    private static let logLimit = 100
+
+    init(surfaceAspect: CGFloat) {
+        self.surfaceAspect = surfaceAspect
+        observeAudioSession()
+        queue.async { [weak self] in self?.startMpv() }
+    }
+
+    /// Starts once the video view has a size, because mpv sizes its surface from the layer.
+    func load(url: String, start: Double = 0) {
+        errorText = nil
+        isBuffering = true
+        pendingLoad = (url, start)
+        startIfReady()
+    }
+
+    func surfaceIsReady() {
+        guard !hasSurface else { return }
+        hasSurface = true
+        queue.async { [weak self] in self?.startVideoOutput() }
+        startIfReady()
+    }
+
+    /// Off while nothing shows the video, such as in the background or the mini player.
+    func setVideoEnabled(_ enabled: Bool) {
+        guard enabled != videoEnabled else { return }
+        videoEnabled = enabled
+        setProperty("vid", enabled ? "auto" : "no")
+    }
+
+    func togglePause() {
+        setPaused(!isPaused)
+    }
+
+    func setPaused(_ paused: Bool) {
+        isPaused = paused
+        setProperty("pause", paused ? "yes" : "no")
+    }
+
+    func seek(to seconds: Double) {
+        time = seconds
+        isBuffering = true
+        command(["seek", String(seconds), "absolute"])
+    }
+
+    func skip(by seconds: Double) {
+        seek(to: min(max(time + seconds, 0), duration))
+    }
+
+    func stop() {
+        pendingLoad = nil
+        time = 0
+        duration = 0
+        isBuffering = false
+        command(["stop"])
+    }
+
+    func setSpeed(_ speed: Double) {
+        setProperty("speed", String(speed))
+    }
+
+    func setLooping(_ looping: Bool) {
+        setProperty("loop-file", looping ? "inf" : "no")
+    }
+
+    func showSubtitles(url: String?) {
+        if let url {
+            command(["sub-add", url, "select"])
+        } else {
+            setProperty("sid", "no")
+        }
+    }
+
+    /// What mpv is doing right now, for the Diagnostics screen in Settings.
+    func diagnostics() async -> String {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let lines = ["aid", "ao", "audio-codec-name", "audio-params/format", "mute", "volume", "hwdec-current", "video-params/h", "demuxer-cache-duration", "paused-for-cache"].map { name -> String in
+                    guard let mpv, let value = mpv_get_property_string(mpv, name) else { return "\(name): none" }
+                    defer { mpv_free(value) }
+                    return "\(name): \(String(cString: value))"
+                }
+                continuation.resume(returning: lines.joined(separator: "\n"))
+            }
+        }
+    }
+
+    private func startMpv() {
         guard let mpv = mpv_create() else {
-            errorText = "mpv could not start"
+            publish { $0.errorText = "mpv could not start" }
             return
         }
         setenv("MVK_CONFIG_LOG_LEVEL", "1", 1)
+        mpv_request_log_messages(mpv, "warn")
         mpv_set_option_string(mpv, "vo", "null")
         mpv_set_option_string(mpv, "vid", "no")
         mpv_set_option_string(mpv, "force-window", "no")
         mpv_set_option_string(mpv, "hwdec", "videotoolbox")
+        mpv_set_option_string(mpv, "audio-exclusive", "yes")
         mpv_set_option_string(mpv, "cache", "yes")
         mpv_set_option_string(mpv, "cache-secs", "120")
         mpv_set_option_string(mpv, "demuxer-max-bytes", "200M")
 
         let status = mpv_initialize(mpv)
         guard status >= 0 else {
-            errorText = "mpv could not start: \(String(cString: mpv_error_string(status)))"
+            let message = String(cString: mpv_error_string(status))
+            publish { $0.errorText = "mpv could not start: \(message)" }
             mpv_destroy(mpv)
             return
         }
@@ -53,107 +150,128 @@ final class MpvPlayer: ObservableObject {
         mpv_observe_property(mpv, 0, "time-pos", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 1, "duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 2, "pause", MPV_FORMAT_FLAG)
+        mpv_observe_property(mpv, 3, "paused-for-cache", MPV_FORMAT_FLAG)
         self.mpv = mpv
-        startVideoOutput()
 
         Thread { [weak self] in
             Self.runEvents(mpv, player: self)
         }.start()
     }
 
-    /// Starts once the video view has a real size, because mpv sizes its surface from the layer.
-    func load(url: String, start: Double = 0) {
-        errorText = nil
-        pendingLoad = (url, start)
-        startIfReady()
-    }
-
-    func surfaceDidResize() {
-        hasSurface = true
-        startIfReady()
-        if videoEnabled, surfaceSizeAtStart != videoLayer.drawableSize {
-            startVideoOutput()
-        }
-    }
-
-    /// Off while nothing shows the video, such as in the background or the mini player.
-    func setVideoEnabled(_ enabled: Bool) {
-        guard enabled != videoEnabled else { return }
-        videoEnabled = enabled
-        if enabled {
-            startVideoOutput()
-        } else if let mpv {
-            mpv_set_property_string(mpv, "vid", "no")
-        }
-    }
-
-    func togglePause() {
-        setPaused(!isPaused)
-    }
-
-    func setPaused(_ paused: Bool) {
-        guard let mpv else { return }
-        mpv_set_property_string(mpv, "pause", paused ? "yes" : "no")
-    }
-
-    func seek(to seconds: Double) {
-        command(["seek", String(seconds), "absolute"])
-    }
-
-    func stop() {
-        pendingLoad = nil
-        command(["stop"])
-        DispatchQueue.main.async {
-            self.time = 0
-            self.duration = 0
-        }
-    }
-
-    func setSpeed(_ speed: Double) {
-        guard let mpv else { return }
-        mpv_set_property_string(mpv, "speed", String(speed))
-    }
-
-    func setLooping(_ looping: Bool) {
-        guard let mpv else { return }
-        mpv_set_property_string(mpv, "loop-file", looping ? "inf" : "no")
-    }
-
-    func showSubtitles(url: String?) {
-        guard let url else {
-            if let mpv { mpv_set_property_string(mpv, "sid", "no") }
-            return
-        }
-        command(["sub-add", url, "select"])
-    }
-
     private func startVideoOutput() {
         guard let mpv else { return }
-        surfaceSizeAtStart = videoLayer.drawableSize
         mpv_set_property_string(mpv, "vo", "null")
         mpv_set_property_string(mpv, "vo", "gpu-next")
         mpv_set_property_string(mpv, "gpu-api", "vulkan")
         mpv_set_property_string(mpv, "gpu-context", "moltenvk")
         var window = unsafeBitCast(videoLayer, to: Int64.self)
         mpv_set_property(mpv, "wid", MPV_FORMAT_INT64, &window)
-        mpv_set_property_string(mpv, "vid", "auto")
+        if videoEnabled {
+            mpv_set_property_string(mpv, "vid", "auto")
+        }
     }
 
     private func startIfReady() {
-        guard hasSurface || !videoEnabled, let load = pendingLoad else { return }
+        guard hasSurface, let load = pendingLoad else { return }
         pendingLoad = nil
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        command(load.start > 0
-            ? ["loadfile", load.url, "replace", "-1", "start=\(load.start)"]
-            : ["loadfile", load.url, "replace"])
-        setPaused(false)
+        isPaused = false
+        queue.async { [self] in
+            activateAudioSession()
+            guard let mpv else { return }
+            mpv_set_property_string(mpv, "pause", "no")
+            let arguments = load.start > 0
+                ? ["loadfile", load.url, "replace", "-1", "start=\(load.start)"]
+                : ["loadfile", load.url, "replace"]
+            _ = arguments.withUnsafeCArg { mpv_command(mpv, $0) }
+        }
+    }
+
+    private func setProperty(_ name: String, _ value: String) {
+        queue.async { [self] in
+            guard let mpv else { return }
+            mpv_set_property_string(mpv, name, value)
+        }
     }
 
     private func command(_ arguments: [String]) {
-        guard let mpv else { return }
-        _ = arguments.withUnsafeCArg { mpv_command(mpv, $0) }
+        queue.async { [self] in
+            guard let mpv else { return }
+            _ = arguments.withUnsafeCArg { mpv_command(mpv, $0) }
+        }
     }
+
+    private func publish(_ change: @escaping (MpvPlayer) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            if let self { change(self) }
+        }
+    }
+
+    // MARK: - Audio session
+
+    private func activateAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default, policy: .longFormAudio)
+        try? session.setActive(true)
+    }
+
+    /// A call, Siri or another app takes the audio away. Without this, mpv keeps
+    /// playing into a dead audio output and the video runs on in silence.
+    private func observeAudioSession() {
+        let center = NotificationCenter.default
+        observers = [
+            center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+                self?.handleInterruption(note)
+            },
+            center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.restoreAudio()
+            },
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+                self?.handleRouteChange(note)
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.queue.async { self?.activateAudioSession() }
+            }
+        ]
+    }
+
+    private func handleInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        switch type {
+        case .began:
+            wasPlayingBeforeInterruption = !isPaused && duration > 0
+            if wasPlayingBeforeInterruption { setPaused(true) }
+        case .ended:
+            restoreAudio()
+            if wasPlayingBeforeInterruption { setPaused(false) }
+            wasPlayingBeforeInterruption = false
+        @unknown default:
+            break
+        }
+    }
+
+    /// Unplugging headphones pauses, like every Apple player. Other route changes rebuild the output.
+    private func handleRouteChange(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: raw),
+              duration > 0 else { return }
+        switch reason {
+        case .oldDeviceUnavailable:
+            setPaused(true)
+            restoreAudio()
+        case .newDeviceAvailable:
+            restoreAudio()
+        default:
+            break
+        }
+    }
+
+    private func restoreAudio() {
+        queue.async { [self] in activateAudioSession() }
+        command(["ao-reload"])
+    }
+
+    // MARK: - Events
 
     private static func runEvents(_ mpv: OpaquePointer, player: MpvPlayer?) {
         weak var player = player
@@ -163,26 +281,40 @@ final class MpvPlayer: ObservableObject {
             switch event.pointee.event_id {
             case MPV_EVENT_SHUTDOWN:
                 return
+            case MPV_EVENT_LOG_MESSAGE:
+                guard let message = event.pointee.data?.load(as: mpv_event_log_message.self),
+                      let text = message.text, let prefix = message.prefix else { continue }
+                let line = "[\(String(cString: prefix))] \(String(cString: text))".trimmingCharacters(in: .whitespacesAndNewlines)
+                player?.publish { $0.recentLog = Array(($0.recentLog + [line]).suffix(logLimit)) }
+            case MPV_EVENT_PLAYBACK_RESTART:
+                player?.publish { $0.isBuffering = false }
             case MPV_EVENT_PROPERTY_CHANGE:
                 guard let property = event.pointee.data?.load(as: mpv_event_property.self),
                       let namePointer = property.name else { continue }
                 let name = String(cString: namePointer)
-                if name == "pause", property.format == MPV_FORMAT_FLAG {
-                    let paused = property.data?.load(as: Int32.self) != 0
-                    DispatchQueue.main.async { player?.isPaused = paused }
+                if property.format == MPV_FORMAT_FLAG {
+                    let isOn = property.data?.load(as: Int32.self) != 0
+                    if name == "pause" {
+                        player?.publish { $0.isPaused = isOn }
+                    } else {
+                        player?.publish { $0.isBuffering = isOn }
+                    }
                 } else if property.format == MPV_FORMAT_DOUBLE, let value = property.data?.load(as: Double.self) {
                     if name == "duration" {
-                        DispatchQueue.main.async { player?.duration = value }
+                        player?.publish { $0.duration = value }
                     } else if Int(value) != lastSecond {
                         lastSecond = Int(value)
-                        DispatchQueue.main.async { player?.time = value }
+                        player?.publish { $0.time = value }
                     }
                 }
             case MPV_EVENT_END_FILE:
                 guard let end = event.pointee.data?.load(as: mpv_event_end_file.self),
                       end.reason == MPV_END_FILE_REASON_ERROR else { continue }
                 let message = String(cString: mpv_error_string(end.error))
-                DispatchQueue.main.async { player?.errorText = "Playback failed: \(message)" }
+                player?.publish {
+                    $0.errorText = "Playback failed: \(message)"
+                    $0.isBuffering = false
+                }
             default:
                 break
             }
@@ -216,23 +348,37 @@ final class MpvVideoUIView: UIView {
         self.player = player
         super.init(frame: .zero)
         backgroundColor = .black
-        layer.addSublayer(player.videoLayer)
+        isUserInteractionEnabled = false
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not used")
     }
 
+    /// The drawable keeps the screen's full resolution, and `contentsScale` keeps
+    /// bounds × scale equal to it, so MoltenVK never sees a size change.
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let scale = traitCollection.displayScale
-        if player.videoLayer.superlayer !== layer {
-            layer.addSublayer(player.videoLayer)
+        let aspect = player.surfaceAspect
+        let videoLayer = player.videoLayer
+        let longSide = max(UIScreen.main.nativeBounds.width, UIScreen.main.nativeBounds.height)
+        let drawable = aspect >= 1
+            ? CGSize(width: longSide, height: longSide / aspect)
+            : CGSize(width: longSide * aspect, height: longSide)
+        let frame = AVMakeRect(aspectRatio: drawable, insideRect: bounds)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if videoLayer.superlayer !== layer {
+            layer.addSublayer(videoLayer)
         }
-        player.videoLayer.frame = bounds
-        player.videoLayer.contentsScale = scale
-        player.videoLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
-        player.surfaceDidResize()
+        videoLayer.frame = frame
+        videoLayer.contentsScale = drawable.width / frame.width
+        if videoLayer.drawableSize != drawable {
+            videoLayer.drawableSize = drawable
+        }
+        CATransaction.commit()
+        player.surfaceIsReady()
     }
 }

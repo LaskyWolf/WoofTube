@@ -104,10 +104,9 @@ struct HomeView: View {
         }
     }
 
-    // Spacing from Woof Music's FilterChipBar.
     private var chipBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: Layout.chipSpacing) {
                 ForEach(model.chips) { chip in
                     let isSelected = selectedChip == chip.title || (selectedChip == nil && chip.id == model.chips.first?.id)
                     Button {
@@ -123,16 +122,18 @@ struct HomeView: View {
                         Text(chip.title)
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(isSelected ? Color(.systemBackground) : .primary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, Layout.screenPadding)
+                            .padding(.vertical, Layout.chipSpacing)
                             .background(isSelected ? Color.primary : Color(.secondarySystemFill), in: .capsule)
+                            .contentShape(.capsule)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowPressStyle())
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Layout.screenPadding)
+            .padding(.vertical, Layout.chipSpacing)
         }
+        .sensoryFeedback(.selection, trigger: selectedChip)
     }
 }
 
@@ -173,8 +174,8 @@ struct FeedContent<Header: View>: View {
                 } label: {
                     VideoRow(video: video)
                 }
-                .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .buttonStyle(RowPressStyle())
+                .listRowInsets(Layout.rowInsets)
                 .listRowSeparator(.hidden)
                 .task { await model.loadMore(after: video) }
             }
@@ -183,12 +184,15 @@ struct FeedContent<Header: View>: View {
         .overlay {
             if model.videos.isEmpty, model.channels.isEmpty {
                 if model.isLoading {
-                    ProgressView()
+                    LoadingRows()
                 } else {
                     ContentUnavailableView {
-                        Label("No Videos", systemImage: "play.rectangle")
+                        Label(model.errorText == nil ? "No Videos" : "Couldn't Load", systemImage: "play.rectangle")
                     } description: {
-                        Text(model.errorText ?? "YouTube returned nothing here. Pull down to try again.")
+                        Text(model.errorText ?? "YouTube returned nothing here.")
+                    } actions: {
+                        Button("Try Again") { Task { await retry() } }
+                            .buttonStyle(.glass)
                     }
                 }
             }
@@ -207,31 +211,61 @@ struct VideoRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             Thumbnail(video: video)
-            Text(video.title)
-                .font(.headline)
-                .lineLimit(2)
-            Text(details)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+            HStack(alignment: .top, spacing: Layout.rowSpacing) {
+                if let avatar = video.channelAvatarURL {
+                    Avatar(url: avatar, size: 36)
+                }
+                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                    Text(video.title)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text(details)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
         .contentShape(.rect)
     }
 }
 
+/// The shape of the feed while it loads, so the page doesn't jump when the videos arrive.
+struct LoadingRows: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing * 2) {
+            ForEach(0..<4, id: \.self) { index in
+                VideoRow(video: YouTubeVideo(videoId: "loading\(index)", title: "Loading a video title that fills the line", channelTitle: "Channel name", viewCountText: "views"))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Layout.screenPadding)
+        .redacted(reason: .placeholder)
+        .allowsHitTesting(false)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipped()
+        .background(Color(.systemBackground))
+    }
+}
+
 struct Thumbnail: View {
     let video: YouTubeVideo
+    @Environment(\.playerNamespace) private var playerNamespace
+    @Environment(\.redactionReasons) private var redactionReasons
 
     var body: some View {
         Color(.secondarySystemFill)
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay {
-                AsyncImage(url: URL(string: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color.clear
+                if redactionReasons.isEmpty {
+                    AsyncImage(url: URL(string: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color.clear
+                    }
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -242,10 +276,11 @@ struct Thumbnail: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(.black.opacity(0.7), in: .capsule)
-                        .padding(8)
+                        .padding(Layout.chipSpacing)
                 }
             }
-            .clipShape(.rect(cornerRadius: 12))
+            .clipShape(.rect(cornerRadius: Layout.tileRadius))
+            .zoomSource(id: video.videoId, in: playerNamespace)
     }
 }
 
@@ -253,7 +288,7 @@ struct ChannelRow: View {
     let channel: YouTubeChannel
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Layout.rowSpacing) {
             Avatar(url: channel.thumbnailURL, size: 48)
             VStack(alignment: .leading) {
                 Text(channel.title).font(.headline)
@@ -274,6 +309,10 @@ struct Avatar: View {
             image.resizable().scaledToFill()
         } placeholder: {
             Color(.secondarySystemFill)
+                .overlay {
+                    Image(systemName: "person.fill")
+                        .foregroundStyle(.secondary)
+                }
         }
         .frame(width: size, height: size)
         .clipShape(.circle)
