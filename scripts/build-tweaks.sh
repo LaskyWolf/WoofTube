@@ -35,11 +35,10 @@ done
 
 rm -rf "$BUILD/dylibs"
 mkdir -p "$BUILD/dylibs"
-for repo in "${TWEAKS[@]}"; do
-    name="${repo#*/}"
-    echo "==> Building $name"
-    command make -C "$BUILD/src/$name" FINALPACKAGE=1 --no-print-directory >/dev/null
-    cp "$BUILD/src/$name"/.theos/obj/*.dylib "$BUILD/dylibs/"
+for dir in "${TWEAKS[@]/#*\//$BUILD/src/}" "$ROOT/tweak"; do
+    echo "==> Building $(basename "$dir")"
+    command make -C "$dir" FINALPACKAGE=1 --no-print-directory >/dev/null
+    cp "$dir"/.theos/obj/*.dylib "$BUILD/dylibs/"
 done
 
 echo "==> Built: $(cd "$BUILD/dylibs" && echo *.dylib)"

@@ -10,7 +10,13 @@ Included tweaks:
 | [YTABGoodies](https://github.com/PoomSmart/YTABGoodies) by PoomSmart | Required by YouTube-X | MIT |
 | [YTPlaybackFix](https://github.com/Mark02-2012/YTPlaybackFix) by Mark02 | Recovers playback that stops after seeking on sideloaded installs | MIT |
 
-Both are downloaded and compiled from source at build time, using the latest commit.
+These are downloaded and compiled from source at build time, using the latest commit.
+
+The WoofTube tweak in [tweak/](tweak/) adds the clutter removal. Its settings are in **YouTube Settings → WoofTube**:
+
+| Setting | Default |
+|---|---|
+| Hide Cast Button | On |
 
 ## Requirements
 
