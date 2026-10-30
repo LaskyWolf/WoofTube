@@ -22,7 +22,9 @@ final class MpvPlayer: ObservableObject {
     }()
     /// The shape of the surface mpv draws on. It never changes after mpv starts,
     /// so rotating only moves the layer and doesn't restart the video output.
-    let surfaceAspect: CGFloat
+    static let surfaceAspect: CGFloat = 16 / 9
+    /// Called on the main thread when a video plays to its end.
+    var onEnded: (() -> Void)?
 
     private let queue = DispatchQueue(label: "com.laskywolf.wooftube.mpv")
     private var mpv: OpaquePointer?
@@ -34,8 +36,7 @@ final class MpvPlayer: ObservableObject {
 
     private static let logLimit = 100
 
-    init(surfaceAspect: CGFloat) {
-        self.surfaceAspect = surfaceAspect
+    init() {
         observeAudioSession()
         queue.async { [weak self] in self?.startMpv() }
     }
@@ -91,10 +92,6 @@ final class MpvPlayer: ObservableObject {
 
     func setSpeed(_ speed: Double) {
         setProperty("speed", String(speed))
-    }
-
-    func setLooping(_ looping: Bool) {
-        setProperty("loop-file", looping ? "inf" : "no")
     }
 
     func showSubtitles(url: String?) {
@@ -308,8 +305,11 @@ final class MpvPlayer: ObservableObject {
                     }
                 }
             case MPV_EVENT_END_FILE:
-                guard let end = event.pointee.data?.load(as: mpv_event_end_file.self),
-                      end.reason == MPV_END_FILE_REASON_ERROR else { continue }
+                guard let end = event.pointee.data?.load(as: mpv_event_end_file.self) else { continue }
+                if end.reason == MPV_END_FILE_REASON_EOF {
+                    player?.publish { $0.onEnded?() }
+                }
+                guard end.reason == MPV_END_FILE_REASON_ERROR else { continue }
                 let message = String(cString: mpv_error_string(end.error))
                 player?.publish {
                     $0.errorText = "Playback failed: \(message)"
@@ -360,12 +360,10 @@ final class MpvVideoUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds.width > 0, bounds.height > 0 else { return }
-        let aspect = player.surfaceAspect
+        let aspect = MpvPlayer.surfaceAspect
         let videoLayer = player.videoLayer
         let longSide = max(UIScreen.main.nativeBounds.width, UIScreen.main.nativeBounds.height)
-        let drawable = aspect >= 1
-            ? CGSize(width: longSide, height: longSide / aspect)
-            : CGSize(width: longSide * aspect, height: longSide)
+        let drawable = CGSize(width: longSide, height: longSide / aspect)
         let frame = AVMakeRect(aspectRatio: drawable, insideRect: bounds)
 
         CATransaction.begin()

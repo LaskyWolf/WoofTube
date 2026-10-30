@@ -2,54 +2,225 @@ import AVKit
 import SwiftUI
 import SwiftyTube
 
-struct WatchView: View {
+/// One video surface above the tabs. It moves between the video page and the floating
+/// miniplayer by scaling, so the video keeps drawing without a resize or a reload.
+struct PlayerOverlay: View {
     @EnvironmentObject private var router: Router
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var dragOffset = CGSize.zero
+    @State private var isMiniLeading = false
+    @State private var isMiniTop = false
+    @State private var showsMiniControls = false
     @State private var showsComments = false
 
-    private var isFullscreen: Bool { verticalSizeClass == .compact }
+    private static let miniSize = CGSize(width: 192, height: 108)
+    private static let miniMargin: CGFloat = 12
+    /// Keeps the miniplayer above the tab bar, which sits outside this view's safe area.
+    private static let tabBarHeight: CGFloat = 64
+    private static let collapseDistance: CGFloat = 120
+    private static let exitFullscreenDistance: CGFloat = 60
+
+    private var isFullscreen: Bool { router.isExpanded && verticalSizeClass == .compact }
 
     var body: some View {
-        NavigationStack {
-            // The same PlayerSurface stays in place in both layouts, so the video never reloads.
-            GeometryReader { geometry in
-                VStack(spacing: 0) {
-                    PlayerSurface(player: router.player, isFullscreen: isFullscreen)
-                        .frame(width: geometry.size.width, height: isFullscreen ? geometry.size.height : geometry.size.width * 9 / 16)
-                    if !isFullscreen {
-                        ScrollView {
-                            WatchDetailsView(showsComments: $showsComments)
-                        }
-                    }
-                }
-            }
-            .background(alignment: .top) {
-                Color.black.ignoresSafeArea()
-                    .frame(maxHeight: isFullscreen ? .infinity : 0)
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .statusBarHidden(isFullscreen)
-            .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
-            .sheet(isPresented: $showsComments) {
-                if let token = router.details?.commentsToken {
-                    CommentsSheet(token: token)
-                }
+        GeometryReader { geometry in
+            if router.current != nil {
+                content(geometry)
             }
         }
-        .preferredColorScheme(.dark)
-        .environment(\.playerNamespace, nil)
-        .interactiveDismissDisabled(isFullscreen)
+        .ignoresSafeArea(.keyboard)
+        .statusBarHidden(isFullscreen)
+        .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
+        .sheet(isPresented: $showsComments) {
+            if let token = router.details?.commentsToken {
+                CommentsSheet(token: token)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            Orientation.unlockIfHeldUpright()
+            if router.isExpanded { Orientation.unlockIfHeldUpright() }
+        }
+    }
+
+    private func content(_ geometry: GeometryProxy) -> some View {
+        let insets = geometry.safeAreaInsets
+        let screen = CGSize(
+            width: geometry.size.width + insets.leading + insets.trailing,
+            height: geometry.size.height + insets.top + insets.bottom
+        )
+        let videoSize = isFullscreen ? screen : CGSize(width: screen.width, height: screen.width * 9 / 16)
+        let expanded = isFullscreen ? CGPoint.zero : CGPoint(x: 0, y: insets.top)
+        let mini = CGPoint(
+            x: isMiniLeading ? Self.miniMargin : screen.width - Self.miniSize.width - Self.miniMargin,
+            y: isMiniTop ? insets.top + Self.miniMargin : screen.height - Self.miniSize.height - insets.bottom - Self.tabBarHeight - Self.miniMargin
+        )
+        // 0 is the full video page, 1 is the miniplayer.
+        let progress = router.isExpanded ? min(max(dragOffset.height, 0) / (screen.height * 0.6), 1) : 1
+        let origin = router.isExpanded
+            ? CGPoint(x: expanded.x + (mini.x - expanded.x) * progress, y: expanded.y + (mini.y - expanded.y) * progress)
+            : CGPoint(x: mini.x + dragOffset.width, y: mini.y + dragOffset.height)
+        let width = videoSize.width + (Self.miniSize.width - videoSize.width) * progress
+        let scale = width / videoSize.width
+        let radius = progress * Layout.tileRadius / scale
+
+        return ZStack(alignment: .topLeading) {
+            page(topInset: insets.top, bottomInset: insets.bottom, videoHeight: videoSize.height, progress: progress)
+
+            MpvVideoView(player: router.player)
+                .frame(width: videoSize.width, height: videoSize.height)
+                .background(.black)
+                .clipShape(.rect(cornerRadius: radius))
+                .background {
+                    RoundedRectangle(cornerRadius: radius)
+                        .fill(.black)
+                        .shadow(color: .black.opacity(0.4 * progress), radius: 12 / scale, y: 4 / scale)
+                }
+                .scaleEffect(scale, anchor: .topLeading)
+                .offset(x: origin.x, y: origin.y)
+                .allowsHitTesting(false)
+
+            if router.isExpanded {
+                PlayerControls(
+                    player: router.player,
+                    isFullscreen: isFullscreen,
+                    onDragChanged: { value in
+                        if !isFullscreen { dragOffset = value.translation }
+                    },
+                    onDragEnded: { value in finishPageDrag(value, screenHeight: screen.height) }
+                )
+                .frame(width: videoSize.width, height: videoSize.height)
+                .opacity(1 - progress * 4)
+                .offset(x: expanded.x, y: expanded.y)
+            } else {
+                MiniControls(
+                    player: router.player,
+                    isVisible: $showsMiniControls,
+                    onDragChanged: { value in dragOffset = value.translation },
+                    onDragEnded: { value in finishMiniDrag(value, origin: mini, screen: screen) }
+                )
+                .frame(width: Self.miniSize.width, height: Self.miniSize.height)
+                .clipShape(.rect(cornerRadius: Layout.tileRadius))
+                .offset(x: origin.x, y: origin.y)
+            }
+        }
+        .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+        .animation(.snappy, value: router.isExpanded)
+        .ignoresSafeArea()
+    }
+
+    private func page(topInset: CGFloat, bottomInset: CGFloat, videoHeight: CGFloat, progress: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            (isFullscreen ? Color.black : Color(.systemBackground))
+            if !isFullscreen {
+                ScrollView {
+                    WatchDetailsView(showsComments: $showsComments)
+                }
+                .contentMargins(.bottom, bottomInset, for: .scrollContent)
+                .padding(.top, topInset + videoHeight)
+            }
+        }
+        .opacity(router.isExpanded ? 1 - progress : 0)
+        .allowsHitTesting(router.isExpanded)
+    }
+
+    private func finishPageDrag(_ value: DragGesture.Value, screenHeight: CGFloat) {
+        if isFullscreen {
+            if value.translation.height > Self.exitFullscreenDistance {
+                Orientation.setFullscreen(false)
+            }
+            return
+        }
+        if max(value.translation.height, value.predictedEndTranslation.height) > Self.collapseDistance {
+            showsMiniControls = false
+            router.isExpanded = false
+        }
+        withAnimation(.snappy) { dragOffset = .zero }
+    }
+
+    /// Snaps to the corner the flick is heading for.
+    private func finishMiniDrag(_ value: DragGesture.Value, origin: CGPoint, screen: CGSize) {
+        let endX = origin.x + value.predictedEndTranslation.width + Self.miniSize.width / 2
+        let endY = origin.y + value.predictedEndTranslation.height + Self.miniSize.height / 2
+        withAnimation(.snappy) {
+            isMiniLeading = endX < screen.width / 2
+            isMiniTop = endY < screen.height / 2
+            dragOffset = .zero
         }
     }
 }
 
-private struct PlayerSurface: View {
+private struct MiniControls: View {
+    @ObservedObject var player: MpvPlayer
+    @Binding var isVisible: Bool
+    let onDragChanged: (DragGesture.Value) -> Void
+    let onDragEnded: (DragGesture.Value) -> Void
+    @EnvironmentObject private var router: Router
+
+    var body: some View {
+        ZStack {
+            Color.clear
+                .contentShape(.rect)
+                .onTapGesture {
+                    if isVisible {
+                        router.isExpanded = true
+                    } else {
+                        withAnimation(.easeOut(duration: 0.15)) { isVisible = true }
+                    }
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 8, coordinateSpace: .global)
+                        .onChanged(onDragChanged)
+                        .onEnded(onDragEnded)
+                )
+
+            if isVisible {
+                Color.black.opacity(0.35).allowsHitTesting(false)
+                VStack {
+                    HStack {
+                        iconButton("Expand", icon: "arrow.up.left.and.arrow.down.right") { router.isExpanded = true }
+                        Spacer()
+                        iconButton("Close", icon: "xmark") { router.close() }
+                    }
+                    Spacer()
+                }
+                iconButton(player.isPaused ? "Play" : "Pause", icon: player.isPaused ? "play.fill" : "pause.fill") {
+                    player.togglePause()
+                }
+                .font(.title2)
+            }
+
+            VStack {
+                Spacer()
+                ProgressView(value: min(player.time, max(player.duration, 1)), total: max(player.duration, 1))
+                    .progressViewStyle(.linear)
+                    .allowsHitTesting(false)
+            }
+        }
+        .foregroundStyle(.white)
+        .task(id: isVisible) {
+            guard isVisible else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { isVisible = false }
+        }
+    }
+
+    private func iconButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(title, systemImage: icon, action: action)
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .contentShape(.rect)
+    }
+}
+
+private struct PlayerControls: View {
     @ObservedObject var player: MpvPlayer
     let isFullscreen: Bool
+    let onDragChanged: (DragGesture.Value) -> Void
+    let onDragEnded: (DragGesture.Value) -> Void
 
     @EnvironmentObject private var router: Router
+    @EnvironmentObject private var settings: AppSettings
     @State private var showsControls = true
     @State private var scrubPosition: Double = 0
     @State private var isScrubbing = false
@@ -61,10 +232,6 @@ private struct PlayerSurface: View {
 
     var body: some View {
         ZStack {
-            MpvVideoView(player: player)
-                .background(.black)
-                .ignoresSafeArea(edges: isFullscreen ? .all : .top)
-
             // The tap target sits under the buttons, so a tap on a button can't also toggle the controls.
             Color.clear
                 .contentShape(.rect)
@@ -72,6 +239,11 @@ private struct PlayerSurface: View {
                     withAnimation(.easeOut(duration: 0.15)) { showsControls.toggle() }
                     scheduleHide()
                 }
+                .gesture(
+                    DragGesture(minimumDistance: 12, coordinateSpace: .global)
+                        .onChanged(onDragChanged)
+                        .onEnded(onDragEnded)
+                )
 
             if isLoading {
                 ProgressView().tint(.white).controlSize(.large)
@@ -80,6 +252,7 @@ private struct PlayerSurface: View {
                 controls.transition(.opacity)
             }
         }
+        .environment(\.colorScheme, .dark)
         .onAppear(perform: scheduleHide)
         .onChange(of: player.isPaused) { scheduleHide() }
     }
@@ -103,7 +276,6 @@ private struct PlayerSurface: View {
                     glassButton(player.isPaused ? "Play" : "Pause", icon: player.isPaused ? "play.fill" : "pause.fill") {
                         player.togglePause()
                     }
-                    .controlSize(.extraLarge)
                     glassButton("Forward 10 Seconds", icon: "goforward.10") { player.skip(by: 10) }
                 }
             }
@@ -136,6 +308,7 @@ private struct PlayerSurface: View {
                         isScrubbing = editing
                     }
                 )
+                .tint(settings.accentColor)
                 Text(player.duration.clockText)
             }
             .font(.caption.monospacedDigit())
@@ -217,7 +390,6 @@ private struct WatchDetailsView: View {
     @Binding var showsComments: Bool
     @EnvironmentObject private var router: Router
     @State private var showsDescription = false
-    @State private var actionError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing * 1.5) {
@@ -239,15 +411,16 @@ private struct WatchDetailsView: View {
                 if details.commentsToken != nil {
                     commentsCard
                 }
+                if !router.queue.isEmpty {
+                    Text("Queue").font(.headline)
+                    ForEach(router.queue, id: \.videoId) { video in
+                        VideoButton(video: video)
+                    }
+                }
                 if !details.related.isEmpty {
                     Text("Up Next").font(.headline)
                     ForEach(details.related, id: \.videoId) { video in
-                        Button {
-                            router.play(video)
-                        } label: {
-                            VideoRow(video: video)
-                        }
-                        .buttonStyle(RowPressStyle())
+                        VideoButton(video: video)
                     }
                 }
             } else {
@@ -255,19 +428,14 @@ private struct WatchDetailsView: View {
             }
         }
         .padding(Layout.screenPadding)
-        .alert("That Didn't Work", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(actionError ?? "")
-        }
     }
 
     @ViewBuilder
     private func channelRow(_ details: WatchDetails) -> some View {
         if let id = details.channelId {
             HStack(spacing: Layout.rowSpacing) {
-                NavigationLink {
-                    ChannelView(channelId: id)
+                Button {
+                    router.openChannel(id)
                 } label: {
                     HStack(spacing: Layout.rowSpacing) {
                         Avatar(url: details.channelAvatar, size: Layout.thumbSmall)
@@ -280,6 +448,7 @@ private struct WatchDetailsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 Spacer(minLength: 0)
@@ -303,8 +472,12 @@ private struct WatchDetailsView: View {
                 }
                 .labelStyle(.iconOnly)
                 if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
-                    ShareLink(item: url)
-                    Button("Watch Later", systemImage: "clock") { saveToWatchLater(id) }
+                    ShareLink(item: url) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    Button("Watch Later", systemImage: "clock") {
+                        router.run { try await PlaylistActions.add(id, to: YouTubeFeeds.watchLaterPlaylistId) }
+                    }
                 }
             }
             .buttonStyle(.glass)
@@ -367,20 +540,7 @@ private struct WatchDetailsView: View {
                 }
             } catch {
                 router.setDetails { $0.likeStatus = previous }
-                actionError = error.localizedDescription
-            }
-        }
-    }
-
-    private func saveToWatchLater(_ id: String) {
-        Task {
-            do {
-                _ = try await InnerTubeClient.wooftube.editPlaylist(
-                    playlistId: YouTubeFeeds.watchLaterPlaylistId,
-                    actions: [["action": "ACTION_ADD_VIDEO", "addedVideoId": id]]
-                )
-            } catch {
-                actionError = error.localizedDescription
+                router.actionMessage = error.localizedDescription
             }
         }
     }
@@ -424,7 +584,6 @@ private struct SubscribeStyle: ViewModifier {
 struct ChannelView: View {
     let channelId: String
 
-    @EnvironmentObject private var router: Router
     @State private var page: YouTubeChannelPage?
     @State private var videos: [YouTubeVideo] = []
     @State private var isSubscribed = false
@@ -447,14 +606,9 @@ struct ChannelView: View {
                 .listRowSeparator(.hidden)
             }
             ForEach(videos, id: \.videoId) { video in
-                Button {
-                    router.play(video)
-                } label: {
-                    VideoRow(video: video)
-                }
-                .buttonStyle(RowPressStyle())
-                .listRowInsets(Layout.rowInsets)
-                .listRowSeparator(.hidden)
+                VideoButton(video: video)
+                    .listRowInsets(Layout.rowInsets)
+                    .listRowSeparator(.hidden)
             }
         }
         .listStyle(.plain)

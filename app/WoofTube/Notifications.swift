@@ -1,0 +1,211 @@
+import SwiftUI
+import SwiftyTube
+
+private struct NotificationItem: Identifiable {
+    let id: String
+    let name: String?
+    let message: String
+    let videoTitle: String
+    let time: String?
+    let avatar: String?
+    let thumbnail: String?
+    let videoId: String?
+    let clickRequest: String?
+    var isRead: Bool
+
+    init(renderer: [String: Any]) {
+        let full = JSON.text(renderer["shortMessage"]) ?? ""
+        // "Name uploaded: Title" becomes the name on its own line, as in YouTube's app.
+        if let range = full.range(of: " uploaded: ") {
+            name = String(full[..<range.lowerBound])
+            videoTitle = String(full[range.upperBound...])
+            message = "Uploaded: " + videoTitle
+        } else {
+            name = nil
+            videoTitle = full
+            message = full
+        }
+        id = renderer["notificationId"] as? String ?? UUID().uuidString
+        time = JSON.text(renderer["sentTimeText"])
+        avatar = JSON.lastThumbnail(renderer["thumbnail"])
+        thumbnail = JSON.lastThumbnail(renderer["videoThumbnail"])
+        videoId = JSON.string("videoId", in: renderer["navigationEndpoint"])
+        clickRequest = JSON.string("serializedInteractionsRequest", in: renderer["recordClickEndpoint"])
+        isRead = renderer["read"] as? Bool ?? false
+    }
+}
+
+private struct NotificationSection: Identifiable {
+    let title: String
+    var items: [NotificationItem]
+    var id: String { title }
+}
+
+struct NotificationsView: View {
+    @EnvironmentObject private var session: Session
+    @EnvironmentObject private var router: Router
+    @State private var sections: [NotificationSection] = []
+    @State private var isLoading = true
+    @State private var errorText: String?
+
+    var body: some View {
+        List {
+            ForEach($sections) { $section in
+                Section {
+                    ForEach($section.items) { $item in
+                        NotificationRow(item: item) {
+                            item.isRead = true
+                            open(item)
+                        }
+                        .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.chipSpacing, bottom: Layout.rowPadding, trailing: 0))
+                        .listRowSeparator(.hidden)
+                    }
+                } header: {
+                    Text(section.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .overlay {
+            if sections.isEmpty {
+                if isLoading {
+                    ProgressView()
+                } else {
+                    ContentUnavailableView {
+                        Label("No Notifications", systemImage: "bell")
+                    } description: {
+                        if let errorText { Text(errorText) }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Notifications")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar(.visible, for: .navigationBar)
+        .task {
+            session.unseenNotifications = 0
+            await load()
+        }
+        .refreshable { await load() }
+    }
+
+    private func open(_ item: NotificationItem) {
+        if let request = item.clickRequest {
+            Task {
+                _ = try? await YouTubeAPI.post("notification/record_interactions", body: ["serializedRecordNotificationInteractionsRequests": [request]])
+            }
+        }
+        if let id = item.videoId {
+            router.play(YouTubeVideo(videoId: id, title: item.videoTitle, thumbnailURL: item.thumbnail))
+        }
+    }
+
+    private func load() async {
+        defer { isLoading = false }
+        do {
+            let json = try await YouTubeAPI.post(
+                "notification/get_notification_menu",
+                body: ["notificationsMenuRequestType": "NOTIFICATIONS_MENU_REQUEST_TYPE_INBOX"]
+            )
+            sections = Self.sections(in: json)
+            errorText = nil
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    /// Keeps YouTube's own section titles. Items it leaves untitled are grouped by age.
+    private static func sections(in json: [String: Any]) -> [NotificationSection] {
+        var result: [NotificationSection] = []
+        func add(_ item: NotificationItem, to title: String) {
+            if let index = result.firstIndex(where: { $0.title == title }) {
+                result[index].items.append(item)
+            } else {
+                result.append(NotificationSection(title: title, items: [item]))
+            }
+        }
+        for section in nodes("multiPageMenuNotificationSectionRenderer", in: json) {
+            let title = JSON.text(section["title"])
+            for renderer in nodes("notificationRenderer", in: section["items"]) {
+                let item = NotificationItem(renderer: renderer)
+                add(item, to: title ?? ageTitle(item.time))
+            }
+        }
+        return result
+    }
+
+    private static func ageTitle(_ time: String?) -> String {
+        let time = time ?? ""
+        if ["second", "minute", "hour"].contains(where: { time.contains($0) }) { return "Today" }
+        if time.contains("day") { return "This Week" }
+        return "Older"
+    }
+
+    private static func nodes(_ key: String, in object: Any?) -> [[String: Any]] {
+        if let dict = object as? [String: Any] {
+            if let node = dict[key] as? [String: Any] { return [node] }
+            return dict.values.flatMap { nodes(key, in: $0) }
+        }
+        if let array = object as? [Any] {
+            return array.flatMap { nodes(key, in: $0) }
+        }
+        return []
+    }
+}
+
+private struct NotificationRow: View {
+    let item: NotificationItem
+    let onOpen: () -> Void
+    @EnvironmentObject private var router: Router
+    @State private var showsPlaylists = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            Button(action: onOpen) {
+                HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                    Circle()
+                        .fill(item.isRead ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.tint))
+                        .frame(width: 6, height: 6)
+                        .padding(.top, 21)
+                    Avatar(url: item.avatar, size: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let name = item.name {
+                            Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        }
+                        Text(item.message)
+                            .font(.subheadline)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if let time = item.time {
+                            Text(time).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let thumbnail = item.thumbnail, let id = item.videoId {
+                        Thumbnail(url: thumbnail, videoId: id).frame(width: 112)
+                    }
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            if let id = item.videoId {
+                Menu {
+                    VideoMenuItems(video: YouTubeVideo(videoId: id, title: item.videoTitle), router: router, showsPlaylists: $showsPlaylists)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .rotationEffect(.degrees(90))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 44)
+                        .contentShape(.rect)
+                }
+                .accessibilityLabel("More")
+                .sheet(isPresented: $showsPlaylists) {
+                    PlaylistPickerSheet(video: YouTubeVideo(videoId: id, title: item.videoTitle))
+                }
+            }
+        }
+    }
+}

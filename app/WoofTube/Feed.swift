@@ -1,0 +1,173 @@
+import Foundation
+import SwiftyTube
+
+/// A menu entry YouTube attaches to a video, such as "Not interested". Its label comes from YouTube.
+struct FeedbackAction: Hashable {
+    let title: String
+    let token: String
+}
+
+struct CommunityPost {
+    let id: String
+    let author: String
+    let authorAvatar: String?
+    let channelId: String?
+    let text: String
+    let time: String?
+    let likes: String?
+    let comments: String?
+    let images: [String]
+    let video: YouTubeVideo?
+    let pollChoices: [String]
+}
+
+enum FeedItem: Identifiable {
+    case video(YouTubeVideo, feedback: [FeedbackAction])
+    case shorts(title: String?, [YouTubeVideo])
+    case shelf(title: String?, [YouTubeVideo])
+    case post(CommunityPost)
+    case playlist(YouTubePlaylist)
+    case channel(YouTubeChannel)
+
+    var id: String {
+        switch self {
+        case .video(let video, _): return video.videoId
+        case .shorts(_, let videos): return "shorts-" + (videos.first?.videoId ?? "")
+        case .shelf(_, let videos): return "shelf-" + (videos.first?.videoId ?? "")
+        case .post(let post): return post.id
+        case .playlist(let playlist): return playlist.playlistId
+        case .channel(let channel): return channel.channelId ?? channel.title
+        }
+    }
+}
+
+/// Reads a page in display order and keeps each kind of content.
+/// SwiftyTube's parser only returns a flat list of videos.
+enum FeedParser {
+    private(set) static var seenContentTypes: Set<String> = []
+
+    private static let shelfKeys = ["reelShelfRenderer", "richShelfRenderer", "shelfRenderer", "gridShelfViewModel"]
+    private static let postKeys = ["backstagePostThreadRenderer", "backstagePostRenderer"]
+    private static let skippedKeys: Set<String> = [
+        "responseContext", "header", "topbar", "sidebar", "microformat", "metadata", "frameworkUpdates",
+        "continuationItemRenderer", "feedFilterChipBarRenderer", "engagementPanels", "menu"
+    ]
+    private static let videoKeys: Set<String> = [
+        "videoRenderer", "gridVideoRenderer", "compactVideoRenderer", "videoWithContextRenderer",
+        "playlistVideoRenderer", "reelItemRenderer", "lockupViewModel", "shortsLockupViewModel"
+    ]
+
+    static func items(in json: [String: Any]) -> [FeedItem] {
+        var found: [FeedItem] = []
+        collect(json, into: &found)
+
+        var seen = Set<String>()
+        var merged: [FeedItem] = []
+        for item in found where seen.insert(item.id).inserted {
+            // Single Shorts in a row read better as one shelf.
+            if case .shorts(nil, let next) = item, case .shorts(nil, let previous)? = merged.last {
+                merged[merged.count - 1] = .shorts(title: nil, previous + next)
+            } else {
+                merged.append(item)
+            }
+        }
+        return merged
+    }
+
+    private static func collect(_ node: Any, into items: inout [FeedItem]) {
+        if let array = node as? [Any] {
+            array.forEach { collect($0, into: &items) }
+            return
+        }
+        guard let dict = node as? [String: Any] else { return }
+
+        for key in ["richItemRenderer", "richSectionRenderer"] {
+            if let content = (dict[key] as? [String: Any])?["content"] as? [String: Any] {
+                seenContentTypes.formUnion(content.keys)
+            }
+        }
+        if let key = shelfKeys.first(where: { dict[$0] != nil }) {
+            appendShelf(dict[key], into: &items)
+        } else if postKeys.contains(where: { dict[$0] != nil }) {
+            if let post = post(in: dict) { items.append(.post(post)) }
+        } else if dict.keys.contains(where: videoKeys.contains) {
+            appendVideoOrPlaylist(dict, into: &items)
+        } else if dict["channelRenderer"] != nil {
+            items += YouTubeFeedParser.channels(in: dict).map { .channel($0) }
+        } else {
+            for (key, value) in dict where !skippedKeys.contains(key) {
+                collect(value, into: &items)
+            }
+        }
+    }
+
+    private static func appendShelf(_ shelf: Any?, into items: inout [FeedItem]) {
+        guard let shelf = shelf as? [String: Any] else { return }
+        var inner: [FeedItem] = []
+        for (key, value) in shelf where !skippedKeys.contains(key) {
+            collect(value, into: &inner)
+        }
+        let title = JSON.text(shelf["title"]) ?? JSON.text(shelf["header"])
+        let videos = YouTubeFeedParser.videos(in: shelf)
+        items += inner.filter {
+            if case .post = $0 { return true }
+            return false
+        }
+        guard !videos.isEmpty else { return }
+        if videos.allSatisfy(\.isShort) {
+            items.append(.shorts(title: title, videos))
+        } else {
+            items.append(.shelf(title: title, videos))
+        }
+    }
+
+    private static func appendVideoOrPlaylist(_ dict: [String: Any], into items: inout [FeedItem]) {
+        if let video = YouTubeFeedParser.videos(in: dict).first {
+            if video.isShort {
+                items.append(.shorts(title: nil, [video]))
+            } else {
+                items.append(.video(video, feedback: feedbackActions(in: dict)))
+            }
+        } else if let playlist = YouTubeFeedParser.playlists(in: dict).first {
+            items.append(.playlist(playlist))
+        }
+    }
+
+    private static func feedbackActions(in node: Any?) -> [FeedbackAction] {
+        if let array = node as? [Any] {
+            return array.flatMap { feedbackActions(in: $0) }
+        }
+        guard let dict = node as? [String: Any] else { return [] }
+        for key in ["menuServiceItemRenderer", "listItemViewModel"] {
+            if let item = dict[key] as? [String: Any] {
+                guard let title = JSON.text(item["text"]) ?? JSON.text(item["title"]),
+                      let token = JSON.string("feedbackToken", in: item) else { return [] }
+                return [FeedbackAction(title: title, token: token)]
+            }
+        }
+        return dict.values.flatMap { feedbackActions(in: $0) }
+    }
+
+    private static func post(in dict: [String: Any]) -> CommunityPost? {
+        guard let post = JSON.first("backstagePostRenderer", in: dict) as? [String: Any],
+              let id = post["postId"] as? String else { return nil }
+        let attachment = post["backstageAttachment"]
+        let multiImages = JSON.first("postMultiImageRenderer", in: attachment) as? [String: Any]
+        let imageNodes = multiImages?["images"] as? [Any] ?? [attachment].compactMap { $0 }
+        let poll = JSON.first("pollRenderer", in: attachment) as? [String: Any]
+        let choices = poll?["choices"] as? [[String: Any]] ?? []
+        return CommunityPost(
+            id: id,
+            author: JSON.text(post["authorText"]) ?? "",
+            authorAvatar: JSON.lastThumbnail(post["authorThumbnail"]),
+            channelId: JSON.string("browseId", in: post["authorEndpoint"]),
+            text: JSON.text(post["contentText"]) ?? "",
+            time: JSON.text(post["publishedTimeText"]),
+            likes: JSON.text(post["voteCount"]),
+            comments: JSON.text(JSON.first("text", in: JSON.first("replyButton", in: post["actionButtons"]))),
+            images: imageNodes.compactMap { JSON.lastThumbnail(JSON.first("backstageImageRenderer", in: $0)) },
+            video: (attachment as? [String: Any]).flatMap { YouTubeFeedParser.videos(in: $0).first },
+            pollChoices: choices.compactMap { JSON.text($0["text"]) }
+        )
+    }
+}

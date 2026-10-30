@@ -10,6 +10,7 @@ struct WoofTubeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var session = Session()
     @StateObject private var router = Router()
+    @StateObject private var settings = AppSettings()
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +23,9 @@ struct WoofTubeApp: App {
             }
             .environmentObject(session)
             .environmentObject(router)
+            .environmentObject(settings)
+            .tint(settings.accentColor)
+            .preferredColorScheme(settings.themeMode.colorScheme)
             .task {
                 await InnerTubeClient.wooftube.updateLocale(YouTubeLocale(
                     gl: Locale.current.region?.identifier ?? "US",
@@ -40,125 +44,45 @@ struct WoofTubeApp: App {
 }
 
 enum AppTab: Hashable {
-    case home, subscriptions, shorts, you, search
+    case home, library, subs, search
 }
 
 struct RootTabs: View {
     @EnvironmentObject private var router: Router
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.home
-    @Namespace private var playerNamespace
 
     var body: some View {
         TabView(selection: $tab) {
             Tab("Home", systemImage: "house", value: AppTab.home) {
                 HomeView()
             }
-            Tab("Subscriptions", systemImage: "rectangle.stack.badge.play", value: AppTab.subscriptions) {
-                NavigationStack {
-                    FeedList(source: .browse(YouTubeFeeds.subscriptions))
-                        .navigationTitle("Subscriptions")
-                }
+            Tab("Library", systemImage: "play.square.stack", value: AppTab.library) {
+                LibraryView()
             }
-            Tab("Shorts", systemImage: "play.square.stack", value: AppTab.shorts) {
-                ShortsView(isActive: tab == .shorts)
-            }
-            Tab("You", systemImage: "person.crop.circle", value: AppTab.you) {
-                YouView()
+            Tab("Subs", systemImage: "rectangle.stack.badge.play", value: AppTab.subs) {
+                SubsView()
             }
             Tab(value: AppTab.search, role: .search) {
                 SearchScreen()
             }
         }
-        .modifier(MiniPlayerAccessory(isEnabled: router.current != nil))
-        .environment(\.playerNamespace, playerNamespace)
-        .fullScreenCover(isPresented: $router.isExpanded) {
-            // The zoom transition also gives the system's swipe down to close.
-            WatchView()
-                .navigationTransition(.zoom(sourceID: router.zoomSourceID, in: playerNamespace))
-        }
-        .onChange(of: tab) { _, newTab in
-            if newTab == .shorts { router.close() }
-        }
-        .onChange(of: router.isExpanded) { updateVideoOutput() }
-        .onChange(of: scenePhase) { updateVideoOutput() }
-    }
-
-    /// Nothing can see the video here, and Metal may not draw in the background.
-    private func updateVideoOutput() {
-        router.player.setVideoEnabled(router.isExpanded && scenePhase != .background)
-    }
-}
-
-/// `isEnabled` is new in iOS 26.1. On 26.0 the accessory bar always shows, with nothing inside it.
-private struct MiniPlayerAccessory: ViewModifier {
-    let isEnabled: Bool
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.1, *) {
-            content.tabViewBottomAccessory(isEnabled: isEnabled) { MiniPlayer() }
-        } else {
-            content.tabViewBottomAccessory { MiniPlayer() }
-        }
-    }
-}
-
-private struct MiniPlayer: View {
-    private static let zoomID = "miniPlayer"
-
-    @EnvironmentObject private var router: Router
-    @Environment(\.playerNamespace) private var playerNamespace
-
-    var body: some View {
-        if let video = router.current {
-            HStack(spacing: Layout.chipSpacing) {
-                Button {
-                    router.zoomSourceID = Self.zoomID
-                    router.isExpanded = true
-                } label: {
-                    HStack(spacing: Layout.rowSpacing) {
-                        AsyncImage(url: URL(string: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            Color(.secondarySystemFill)
-                        }
-                        .frame(width: 48, height: 28)
-                        .clipShape(.rect(cornerRadius: Layout.thumbRadius))
-                        .zoomSource(id: Self.zoomID, in: playerNamespace)
-
-                        Text(video.title)
-                            .font(.subheadline.weight(.medium))
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+        .tabBarMinimizeBehavior(.never)
+        .overlay { PlayerOverlay() }
+        .sheet(item: $router.channelRoute) { route in
+            NavigationStack {
+                ChannelView(channelId: route.id)
+                    .toolbar {
+                        Button("Close", systemImage: "xmark") { router.channelRoute = nil }
                     }
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-
-                MiniPlayPause(player: router.player)
-
-                Button("Close", systemImage: "xmark") { router.close() }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
             }
-            .padding(.leading, Layout.screenPadding)
-            .padding(.trailing, Layout.chipSpacing)
         }
-    }
-}
-
-private struct MiniPlayPause: View {
-    @ObservedObject var player: MpvPlayer
-
-    var body: some View {
-        Button(player.isPaused ? "Play" : "Pause", systemImage: player.isPaused ? "play.fill" : "pause.fill") {
-            player.togglePause()
+        .alert("That Didn't Work", isPresented: Binding(get: { router.actionMessage != nil }, set: { if !$0 { router.actionMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(router.actionMessage ?? "")
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.plain)
-        .frame(width: 44, height: 44)
-        .contentShape(.rect)
+        // Metal may not draw in the background. Otherwise the video is always on screen.
+        .onChange(of: scenePhase) { router.player.setVideoEnabled(scenePhase != .background) }
     }
 }

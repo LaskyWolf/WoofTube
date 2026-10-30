@@ -32,7 +32,8 @@ enum JSON {
 
     static func lastThumbnail(_ object: Any?) -> String? {
         let thumbnails = first("thumbnails", in: object) as? [[String: Any]]
-        return thumbnails?.last?["url"] as? String
+        guard let url = thumbnails?.last?["url"] as? String else { return nil }
+        return url.hasPrefix("//") ? "https:" + url : url
     }
 }
 
@@ -114,7 +115,8 @@ struct WatchDetails {
         let owner = JSON.first("videoOwnerRenderer", in: secondary)
         let subscribeButton = JSON.first("subscribeButtonRenderer", in: secondary) as? [String: Any]
         let likeButton = JSON.first("segmentedLikeDislikeButtonViewModel", in: json)
-        let toggle = JSON.first("toggleButtonViewModel", in: likeButton)
+        // The like and dislike buttons have the same shape, so this names the like side.
+        let toggle = JSON.first("toggleButtonViewModel", in: JSON.first("likeButtonViewModel", in: likeButton))
 
         description = JSON.text(JSON.first("attributedDescription", in: secondary))
         metadata = [JSON.text(JSON.first("viewCount", in: primary)), JSON.text(JSON.first("dateText", in: primary))]

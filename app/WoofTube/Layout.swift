@@ -71,26 +71,3 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         Orientation.mask
     }
 }
-
-private struct PlayerNamespaceKey: EnvironmentKey {
-    static let defaultValue: Namespace.ID? = nil
-}
-
-extension EnvironmentValues {
-    /// Lets a tapped thumbnail zoom into the video page.
-    var playerNamespace: Namespace.ID? {
-        get { self[PlayerNamespaceKey.self] }
-        set { self[PlayerNamespaceKey.self] = newValue }
-    }
-}
-
-extension View {
-    @ViewBuilder
-    func zoomSource(id: String, in namespace: Namespace.ID?) -> some View {
-        if let namespace {
-            matchedTransitionSource(id: id, in: namespace)
-        } else {
-            self
-        }
-    }
-}

@@ -7,6 +7,8 @@ import WebKit
 final class Session: ObservableObject {
     @Published private(set) var isSignedIn = false
     @Published var isExpired = false
+    @Published private(set) var account: AccountInfo?
+    @Published var unseenNotifications = 0
 
     private let store = SecureStore(service: "com.laskywolf.wooftube.session")
     private let key = "auth"
@@ -17,12 +19,24 @@ final class Session: ObservableObject {
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
         await refreshIfStale(auth)
+        await loadAccount()
     }
 
     func signIn(_ auth: AuthState) async {
         save(auth)
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
+        await loadAccount()
+    }
+
+    func refreshUnseenNotifications() async {
+        guard let json = try? await YouTubeAPI.post("notification/get_unseen_count", body: [:]) else { return }
+        let count = JSON.first("unseenCount", in: json)
+        unseenNotifications = count as? Int ?? Int(count as? String ?? "") ?? 0
+    }
+
+    private func loadAccount() async {
+        account = try? await InnerTubeClient.wooftube.accountInfo()
     }
 
     /// Also clears the web view's cookies, so the next sign-in can pick another account.
@@ -35,6 +49,8 @@ final class Session: ObservableObject {
         )
         isExpired = false
         isSignedIn = false
+        account = nil
+        unseenNotifications = 0
     }
 
     /// Google rotates its tokens, and a stale session answers as a guest instead of failing.

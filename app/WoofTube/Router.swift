@@ -2,6 +2,10 @@ import MediaPlayer
 import SwiftUI
 import SwiftyTube
 
+struct ChannelRoute: Identifiable {
+    let id: String
+}
+
 /// The video being watched. It lives above the tabs, so playback continues
 /// while the user browses with the mini player.
 @MainActor
@@ -13,7 +17,9 @@ final class Router: ObservableObject {
             Orientation.videoPageChanged(isOpen: isExpanded)
         }
     }
-    @Published var zoomSourceID = ""
+    @Published private(set) var queue: [YouTubeVideo] = []
+    @Published var channelRoute: ChannelRoute?
+    @Published var actionMessage: String?
     @Published private(set) var details: WatchDetails?
     @Published private(set) var streamSummary: String?
     @Published private(set) var loadError: String?
@@ -23,7 +29,7 @@ final class Router: ObservableObject {
         didSet { UserDefaults.standard.set(maxHeight, forKey: Self.maxHeightKey) }
     }
 
-    let player = MpvPlayer(surfaceAspect: 16 / 9)
+    let player = MpvPlayer()
     static let qualities = [2160, 1440, 1080, 720, 480, 360]
     private static let maxHeightKey = "maxHeight"
     private var loadTask: Task<Void, Never>?
@@ -33,12 +39,13 @@ final class Router: ObservableObject {
         let saved = UserDefaults.standard.integer(forKey: Self.maxHeightKey)
         maxHeight = saved > 0 ? saved : 1080
         setUpRemoteCommands()
+        player.onEnded = { [weak self] in self?.playNextInQueue() }
     }
 
-    func play(_ video: YouTubeVideo) {
+    func play(_ video: YouTubeVideo, expand: Bool = true) {
         current = video
-        if !isExpanded { zoomSourceID = video.videoId }
-        isExpanded = true
+        channelRoute = nil
+        if expand { isExpanded = true }
         details = nil
         selectedCaption = nil
         player.setVideoEnabled(true)
@@ -52,9 +59,42 @@ final class Router: ObservableObject {
         startStream(videoId: current.videoId, start: player.time)
     }
 
+    func playNext(_ video: YouTubeVideo) {
+        if current == nil {
+            play(video, expand: false)
+        } else {
+            queue.insert(video, at: 0)
+        }
+    }
+
+    func addToQueue(_ video: YouTubeVideo) {
+        if current == nil {
+            play(video, expand: false)
+        } else {
+            queue.append(video)
+        }
+    }
+
+    func openChannel(_ channelId: String) {
+        channelRoute = ChannelRoute(id: channelId)
+    }
+
+    /// Runs a menu action. The haptic confirms it, and a failure shows as an alert.
+    func run(_ action: @escaping () async throws -> Void) {
+        Task {
+            do {
+                try await action()
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                actionMessage = error.localizedDescription
+            }
+        }
+    }
+
     func close() {
         loadTask?.cancel()
         current = nil
+        queue = []
         isExpanded = false
         player.stop()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -69,6 +109,11 @@ final class Router: ObservableObject {
         guard var value = details else { return }
         update(&value)
         details = value
+    }
+
+    private func playNextInQueue() {
+        guard !queue.isEmpty else { return }
+        play(queue.removeFirst(), expand: false)
     }
 
     private func startStream(videoId: String, start: Double) {
