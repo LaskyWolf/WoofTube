@@ -6,7 +6,8 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = WoofTube
 
-$(TWEAK_NAME)_FILES = Tweak.x Settings.x WTSettingsViewController.m
+$(TWEAK_NAME)_FILES = Tweak.x TabBar.x Icons.x Player.x Pages.x Sideload.x Settings.x WTSettingsViewController.m WTSearchResultsController.m
+$(TWEAK_NAME)_FRAMEWORKS = UIKit Security
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc
 
 include $(THEOS_MAKE_PATH)/tweak.mk

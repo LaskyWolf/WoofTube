@@ -5,6 +5,30 @@
 static NSArray<NSDictionary *> *WTSections(void) {
     return @[
         @{
+            @"header": @"Tab Bar",
+            @"footer": @"Replaces YouTube's tab bar with the iOS one and moves search next to it. Restart YouTube to apply.",
+            @"rows": @[
+                @{@"title": @"Native Tab Bar", @"key": WTNativeTabBarKey},
+            ],
+        },
+        @{
+            @"header": @"Tabs",
+            @"footer": @"Needs Native Tab Bar. Changes apply when you switch tabs. Home and You always stay, because Settings opens from You.",
+            @"rows": @[
+                @{@"title": @"Hide Shorts", @"key": [WTHideTabKeyPrefix stringByAppendingString:@"FEshorts"]},
+                @{@"title": @"Hide Subscriptions", @"key": [WTHideTabKeyPrefix stringByAppendingString:@"FEsubscriptions"]},
+            ],
+        },
+        @{
+            @"header": @"Appearance",
+            @"footer": @"Apple Icons replaces YouTube's icons with SF Symbols. Glass Controls puts iOS glass behind player buttons. Woof Music Pages adds black backgrounds, the system font and large titles. Restart YouTube to apply.",
+            @"rows": @[
+                @{@"title": @"Apple Icons", @"key": WTAppleIconsKey},
+                @{@"title": @"Glass Controls", @"key": WTPlayerGlassKey},
+                @{@"title": @"Woof Music Pages", @"key": WTPagesKey},
+            ],
+        },
+        @{
             @"header": @"Top Bar",
             @"footer": @"Changes apply the next time the top bar redraws, for example after you switch tabs.",
             @"rows": @[

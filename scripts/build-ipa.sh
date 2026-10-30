@@ -41,7 +41,8 @@ fi
 echo "==> Injecting tweaks"
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
-# -u remove device restrictions, -w remove watch app, -e remove app extensions, -f files to inject
-"$BUILD/venv/bin/cyan" -i "$IPA" -o "$OUT" -uwef "$BUILD"/dylibs/*.dylib
+# -u remove device restrictions, -w remove watch app, -e remove app extensions,
+# -l merge Info.plist overrides, -f files to inject
+"$BUILD/venv/bin/cyan" -i "$IPA" -o "$OUT" -uwe -l "$ROOT/Info-overrides.plist" -f "$BUILD"/dylibs/*.dylib
 
 echo "==> Done: $OUT"

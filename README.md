@@ -16,7 +16,14 @@ The WoofTube tweak in [tweak/](tweak/) adds the clutter removal. Its settings ar
 
 | Setting | Default |
 |---|---|
+| Native Tab Bar | On |
+| Hide Shorts or Subscriptions tab | Off |
+| Apple Icons | On |
+| Glass Controls | On |
+| Woof Music Pages | On |
 | Hide Cast Button | On |
+
+The build also sets `UIDesignRequiresCompatibility` to `false` in YouTube's Info.plist (see [Info-overrides.plist](Info-overrides.plist)), so the app uses the iOS 26 design for system controls.
 
 ## Requirements
 
