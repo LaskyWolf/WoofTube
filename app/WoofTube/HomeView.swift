@@ -3,7 +3,7 @@ import SwiftyTube
 
 enum FeedSource: Hashable {
     case browse(String, params: String? = nil)
-    case search(String)
+    case search(String, params: String? = nil)
     case continuation(String)
 
     func fetch() async throws -> [String: Any] {
@@ -11,8 +11,8 @@ enum FeedSource: Hashable {
         switch self {
         case .browse(let id, let params):
             return try await tube.browse(browseId: id, params: params)
-        case .search(let query):
-            return try await tube.search(query: query)
+        case .search(let query, let params):
+            return try await tube.search(query: query, params: params)
         case .continuation(let token):
             return try await tube.browse(continuation: token)
         }
@@ -56,7 +56,7 @@ final class FeedModel: ObservableObject {
             items = FeedParser.items(in: json)
             if !keepChips { chips = Self.parseChips(json) }
             nextToken = YouTubeFeedParser.continuation(in: json)
-            if case .search(let query) = source { nextQuery = query } else { nextQuery = nil }
+            if case .search(let query, _) = source { nextQuery = query } else { nextQuery = nil }
             errorText = nil
         } catch {
             errorText = error.localizedDescription
@@ -79,6 +79,16 @@ final class FeedModel: ObservableObject {
 
     func remove(_ item: FeedItem) {
         items.removeAll { $0.id == item.id }
+    }
+
+    /// Every page of a playlist.
+    static func allVideos(ofPlaylist playlistId: String) async -> [YouTubeVideo] {
+        let model = FeedModel()
+        await model.load(.browse(YouTubeFeeds.playlistBrowseId(playlistId)))
+        while model.hasMore, let last = model.items.last {
+            await model.loadMore(after: last)
+        }
+        return model.videos
     }
 
     /// The chip YouTube marks as selected is "All", which is simply the page itself.
@@ -469,6 +479,7 @@ struct VideoRow: View {
                             VoteLine(videoId: video.videoId)
                         }
                         Spacer(minLength: 0)
+                        DownloadedBadge(videoId: video.videoId)
                     }
                     .contentShape(.rect)
                 }
@@ -648,6 +659,7 @@ struct CompactVideoRow: View {
                 }
             }
             Spacer(minLength: 0)
+            DownloadedBadge(videoId: video.videoId)
         }
         .contentShape(.rect)
     }

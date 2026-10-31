@@ -5,8 +5,6 @@ import SwiftUI
 /// Apple's floating window, showing the frames mpv already puts on the player's layer.
 /// The window asks here for the playback state, and its buttons act on the same player.
 final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate {
-    /// iOS allows it once the layer is on screen and has a frame.
-    @Published private(set) var isPossible = false
     @Published private(set) var isActive = false
     var onFailure: ((String) -> Void)?
     var onRestore: (() -> Void)?
@@ -19,7 +17,6 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
     private var controller: AVPictureInPictureController?
     private var timebase: CMTimebase?
     private var didRestore = false
-    private var possibleObservation: NSKeyValueObservation?
     private var subscriptions: Set<AnyCancellable> = []
 
     /// The window's clock runs on its own, so it's only corrected when it drifts this many seconds.
@@ -39,19 +36,7 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
         controller.delegate = self
         controller.requiresLinearPlayback = false
         self.controller = controller
-        possibleObservation = controller.observe(\.isPictureInPicturePossible, options: [.initial, .new]) { [weak self] controller, _ in
-            let isPossible = controller.isPictureInPicturePossible
-            DispatchQueue.main.async { self?.isPossible = isPossible }
-        }
         observePlayer()
-    }
-
-    func toggle() {
-        if isActive {
-            stop()
-        } else {
-            controller?.startPictureInPicture()
-        }
     }
 
     func stop() {

@@ -20,8 +20,8 @@ struct PlayerOverlay: View {
     /// Follows the video's corners, so the glass stays the same width around them.
     private static let cardRadius = Layout.tileRadius + miniInset
     private static let miniMargin: CGFloat = 12
-    /// Keeps the miniplayer above the tab bar, which sits outside this view's safe area.
-    private static let tabBarHeight: CGFloat = 64
+    /// Keeps the miniplayer just above the tab bar, which sits outside this view's safe area.
+    private static let tabBarClearance: CGFloat = 58
     private static let handleSize = CGSize(width: 44, height: 72)
 
     /// The Short in the card. The card stays under its page, because the page zooms out of it and back in.
@@ -53,7 +53,7 @@ struct PlayerOverlay: View {
         )
         let mini = CGPoint(
             x: isMiniLeading ? Self.miniMargin : screen.width - miniCardWidth - Self.miniMargin,
-            y: isMiniTop ? insets.top + Self.miniMargin : screen.height - miniCardHeight - insets.bottom - Self.tabBarHeight - Self.miniMargin
+            y: isMiniTop ? insets.top + Self.miniMargin : screen.height - miniCardHeight - insets.bottom - Self.tabBarClearance
         )
         let hiddenX = isMiniLeading ? -miniCardWidth - Self.miniMargin : screen.width + Self.miniMargin
 
@@ -154,6 +154,8 @@ struct WatchPage: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showsComments = false
     @State private var pullDistance: CGFloat = 0
+    /// Pinching out crops the video to fill the whole screen in full screen.
+    @State private var fillsScreen = false
 
     private var isFullscreen: Bool { verticalSizeClass == .compact }
 
@@ -167,7 +169,6 @@ struct WatchPage: View {
                 }
             }
         }
-        .ignoresSafeArea(edges: isFullscreen ? .all : [])
         .background(alignment: .top) {
             if isFullscreen {
                 Color.black.ignoresSafeArea()
@@ -198,17 +199,36 @@ struct WatchPage: View {
     }
 
     private var video: some View {
-        ZStack {
-            MpvVideoView(player: router.player, isActive: router.isWatchPageOnScreen)
-                .overlay { VideoPoster(player: router.player, video: router.current) }
-                .background(.black)
-                .allowsHitTesting(false)
-            CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen)
+        VideoArea(isFullscreen: isFullscreen) {
+            ZStack {
+                MpvVideoView(player: router.player, isActive: router.isWatchPageOnScreen, fills: isFullscreen && fillsScreen)
+                    .overlay { VideoPoster(player: router.player, video: router.current) }
+                    .background(.black)
+                    .allowsHitTesting(false)
+                    .ignoresSafeArea(edges: isFullscreen ? .all : [])
+                CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: isFullscreen ? .infinity : nil)
-        .aspectRatio(isFullscreen ? nil : 16 / 9, contentMode: .fit)
+        .simultaneousGesture(MagnifyGesture().onEnded { value in
+            if isFullscreen { fillsScreen = value.magnification > 1 }
+        })
+    }
+}
+
+/// All the space in full screen, otherwise the page's width at 16:9.
+/// One view for both, so the video and its controls survive the rotation.
+private struct VideoArea: SwiftUI.Layout {
+    let isFullscreen: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 0
+        return CGSize(width: width, height: isFullscreen ? proposal.height ?? 0 : width * 9 / 16)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }
 
@@ -510,34 +530,24 @@ private struct MiniGlyphLabelStyle: LabelStyle {
     }
 }
 
-/// The straight part of the card's bottom edge, between its two corners.
-private struct CardBottomEdge: Shape {
-    let radius: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
-        return path
-    }
-}
-
-/// Playback progress in a straight line on the card's border. Its own view, so only the line redraws as the time ticks.
+/// Playback progress in a straight line across the card's whole bottom, cut by its corners.
+/// Its own view, so only the line redraws as the time ticks.
 private struct CardEdgeProgress: View {
     @ObservedObject var clock: PlayerClock
     let duration: Double
     let radius: CGFloat
-    private static let lineWidth: CGFloat = 3
+    private static let lineHeight: CGFloat = 3
 
     var body: some View {
-        // Half the line's width in from the edge, so its outer side lies exactly on the border.
-        let edge = CardBottomEdge(radius: radius)
-        ZStack {
-            edge.stroke(Color.primary.opacity(0.12), style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
-            edge.trim(from: 0, to: min(clock.time / max(duration, 1), 1))
-                .stroke(.tint, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.primary.opacity(0.12))
+                Rectangle().fill(.tint).frame(width: geometry.size.width * min(clock.time / max(duration, 1), 1))
+            }
+            .frame(height: Self.lineHeight)
+            .frame(maxHeight: .infinity, alignment: .bottom)
         }
-        .padding(Self.lineWidth / 2)
+        .clipShape(.rect(cornerRadius: radius, style: .circular))
         .allowsHitTesting(false)
     }
 }
@@ -740,6 +750,8 @@ private struct SeekHint {
 private struct PlayerControls: View {
     private static let skipSeconds = 10.0
     private static let exitFullscreenDistance: CGFloat = 60
+    /// mpv often waits a moment for data with no visible effect, so the spinner waits longer.
+    private static let spinnerDelay = Duration.milliseconds(600)
 
     @ObservedObject var player: MpvPlayer
     @ObservedObject var sleepTimer: SleepTimer
@@ -750,6 +762,7 @@ private struct PlayerControls: View {
     @State private var showsSleepTimer = false
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
+    @State private var showsSpinner = false
 
     private var isLoading: Bool {
         router.loadError == nil && (router.streamSummary == nil || player.isBuffering)
@@ -772,8 +785,9 @@ private struct PlayerControls: View {
                 },
                 isDragEnabled: isFullscreen
             )
+            .ignoresSafeArea(edges: isFullscreen ? .all : [])
 
-            if isLoading {
+            if showsSpinner {
                 ProgressView().tint(.white).controlSize(.large).allowsHitTesting(false)
             }
             if showsControls {
@@ -803,6 +817,14 @@ private struct PlayerControls: View {
         }
         .onAppear(perform: scheduleHide)
         .onChange(of: player.isPaused) { scheduleHide() }
+        .task(id: isLoading) {
+            guard isLoading else {
+                showsSpinner = false
+                return
+            }
+            try? await Task.sleep(for: Self.spinnerDelay)
+            if !Task.isCancelled { showsSpinner = true }
+        }
     }
 
     private var controls: some View {
@@ -813,7 +835,6 @@ private struct PlayerControls: View {
                     Button("Close", systemImage: "chevron.down") { router.isExpanded = false }
                 }
                 Spacer()
-                PictureInPictureButton(model: router.pictureInPicture)
                 if sleepTimer.isActive {
                     Button("Sleep Timer", systemImage: "moon.zzz.fill") { showsSleepTimer = true }
                 }
@@ -824,7 +845,7 @@ private struct PlayerControls: View {
                 optionsMenu
             }
             Spacer(minLength: 0)
-            if !isLoading {
+            if !showsSpinner {
                 HStack(spacing: 24) {
                     Button("Back 10 Seconds", systemImage: "gobackward.10") { skip(-Self.skipSeconds) }
                         .labelStyle(PlayerGlyphLabelStyle(size: 24))
@@ -859,6 +880,7 @@ private struct PlayerControls: View {
                 .init(color: .black.opacity(0.35), location: 1)
             ], startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false)
+            .ignoresSafeArea(edges: isFullscreen ? .all : [])
         }
     }
 
@@ -997,16 +1019,6 @@ private struct PlayerControls: View {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { showsControls = false }
-        }
-    }
-}
-
-private struct PictureInPictureButton: View {
-    @ObservedObject var model: PictureInPicture
-
-    var body: some View {
-        if model.isPossible || model.isActive {
-            Button("Picture in Picture", systemImage: model.isActive ? "pip.exit" : "pip.enter", action: model.toggle)
         }
     }
 }
@@ -1163,82 +1175,77 @@ private struct WatchDetailsView: View {
     private func actions(_ details: WatchDetails) -> some View {
         let isLiked = details.likeStatus == "LIKE"
         let isDisliked = details.likeStatus == "DISLIKE"
-        return ScrollView(.horizontal, showsIndicators: false) {
-            // Spacing 0 keeps the shapes apart instead of letting nearby glass merge.
-            GlassEffectContainer(spacing: 0) {
-                HStack(spacing: 10) {
-                    HStack(spacing: 0) {
-                        Button {
-                            setLike(isLiked ? "INDIFFERENT" : "LIKE")
-                        } label: {
-                            likeLabel(
-                                icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup",
-                                text: (isLiked ? details.likeCountLiked : details.likeCount) ?? "Like",
-                                isActive: isLiked
-                            )
-                        }
-                        .accessibilityLabel("Like")
-                        Divider().frame(height: 18)
-                        Button {
-                            setLike(isDisliked ? "INDIFFERENT" : "DISLIKE")
-                        } label: {
-                            likeLabel(
-                                icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
-                                text: details.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText },
-                                isActive: isDisliked
-                            )
-                        }
-                        .accessibilityLabel("Dislike")
+        // Spacing 0 keeps the shapes apart instead of letting nearby glass merge.
+        return GlassEffectContainer(spacing: 0) {
+            HStack(spacing: 10) {
+                HStack(spacing: 0) {
+                    Button {
+                        setLike(isLiked ? "INDIFFERENT" : "LIKE")
+                    } label: {
+                        likeLabel(
+                            icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup",
+                            text: (isLiked ? details.likeCountLiked : details.likeCount) ?? "Like",
+                            isActive: isLiked
+                        )
                     }
-                    .glassEffect(.regular, in: .capsule)
-                    if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
-                        ShareLink(item: url) {
-                            HeaderRoundIcon(systemImage: "square.and.arrow.up")
-                        }
-                        .accessibilityLabel("Share")
+                    .accessibilityLabel("Like")
+                    Divider().frame(height: 18)
+                    Button {
+                        setLike(isDisliked ? "INDIFFERENT" : "DISLIKE")
+                    } label: {
+                        likeLabel(
+                            icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                            text: details.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText },
+                            isActive: isDisliked
+                        )
+                    }
+                    .accessibilityLabel("Dislike")
+                }
+                .frame(maxWidth: .infinity)
+                .glassEffect(.regular, in: .capsule)
+                if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
+                    ShareLink(item: url) {
+                        HeaderRoundIcon(systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share")
+                    Button {
+                        toggleWatchLater(id, isSaved: details.isInWatchLater)
+                    } label: {
+                        HeaderRoundIcon(
+                            systemImage: details.isInWatchLater ? "clock.fill" : "clock",
+                            tint: details.isInWatchLater ? settings.accentColor : .primary
+                        )
+                    }
+                    .accessibilityLabel(details.isInWatchLater ? "Remove from Watch Later" : "Save to Watch Later")
+                    Button {
+                        showsPlaylists = true
+                    } label: {
+                        HeaderRoundIcon(systemImage: "text.badge.plus")
+                    }
+                    .accessibilityLabel("Save to Playlist")
+                    if let video = router.current {
+                        let isSaved = downloads.isDownloaded(id)
+                        let isSaving = downloads.active.contains { $0.id == id }
                         Button {
-                            toggleWatchLater(id, isSaved: details.isInWatchLater)
+                            router.run { try await downloads.download(video, maxHeight: router.maxHeight) }
                         } label: {
-                            HeaderRoundIcon(
-                                systemImage: details.isInWatchLater ? "clock.fill" : "clock",
-                                tint: details.isInWatchLater ? settings.accentColor : .primary
-                            )
-                        }
-                        .accessibilityLabel(details.isInWatchLater ? "Remove from Watch Later" : "Save to Watch Later")
-                        Button {
-                            showsPlaylists = true
-                        } label: {
-                            HeaderRoundIcon(systemImage: "text.badge.plus")
-                        }
-                        .accessibilityLabel("Save to Playlist")
-                        if let video = router.current {
-                            let isSaved = downloads.isDownloaded(id)
-                            let isSaving = downloads.active.contains { $0.id == id }
-                            Button {
-                                router.run { try await downloads.download(video, maxHeight: router.maxHeight) }
-                            } label: {
-                                if isSaving {
-                                    ProgressView()
-                                        .frame(width: 38, height: 38)
-                                        .glassEffect(.regular, in: .circle)
-                                } else {
-                                    HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down")
-                                }
+                            if isSaving {
+                                ProgressView()
+                                    .frame(width: 38, height: 38)
+                                    .glassEffect(.regular, in: .circle)
+                            } else {
+                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down")
                             }
-                            .disabled(isSaved || isSaving)
-                            .accessibilityLabel(isSaved ? "Downloaded" : isSaving ? "Downloading" : "Download")
                         }
+                        .disabled(isSaved || isSaving)
+                        .accessibilityLabel(isSaved ? "Downloaded" : isSaving ? "Downloading" : "Download")
                     }
                 }
-                .buttonStyle(ZoomPressStyle(scale: 0.92))
-                .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
-                .sensoryFeedback(.success, trigger: details.isInWatchLater) { _, saved in saved }
             }
+            .buttonStyle(ZoomPressStyle(scale: 0.92))
+            .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
+            .sensoryFeedback(.success, trigger: details.isInWatchLater) { _, saved in saved }
         }
-        // Scrolls right up to the screen's edges.
-        .contentMargins(.horizontal, Layout.screenPadding, for: .scrollContent)
-        .padding(.horizontal, -Layout.screenPadding)
-        .scrollClipDisabled()
     }
 
     private func likeLabel(icon: String, text: String?, isActive: Bool) -> some View {
@@ -1247,10 +1254,14 @@ private struct WatchDetailsView: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
             if let text {
-                Text(text).font(.subheadline.weight(.semibold))
+                Text(text)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Layout.chipSpacing)
+        .frame(maxWidth: .infinity)
         .frame(height: 38)
         // Reaches 44 pt, using the space around the capsule.
         .contentShape(Rectangle().inset(by: -3))
@@ -1297,6 +1308,9 @@ private struct WatchDetailsView: View {
     private func setLike(_ status: String) {
         guard let id = router.current?.videoId, let previous = router.details?.likeStatus else { return }
         router.setDetails { $0.likeStatus = status }
+        if status == "LIKE", let video = router.current {
+            downloads.downloadIfLikesSave(video, maxHeight: router.maxHeight)
+        }
         Task {
             do {
                 let tube = InnerTubeClient.wooftube
@@ -1457,7 +1471,11 @@ struct SubscribeButton: View {
     }
 
     private func toggle() {
-        let target = !isSubscribed
+        Self.set(!isSubscribed, channelId: channelId, onChange: onChange)
+    }
+
+    /// Shows the change straight away, and takes it back if YouTube refuses.
+    static func set(_ target: Bool, channelId: String, onChange: @escaping (Bool) -> Void) {
         onChange(target)
         Subscriptions.shared.setSubscribed(channelId, target)
         Task {

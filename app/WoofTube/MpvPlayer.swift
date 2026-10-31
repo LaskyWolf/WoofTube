@@ -179,6 +179,10 @@ final class MpvPlayer: ObservableObject {
         }
     }
 
+    private func addLog(_ line: String) {
+        recentLog = Array((recentLog + [line]).suffix(Self.logLimit))
+    }
+
     private func publish(_ change: @escaping (MpvPlayer) -> Void) {
         DispatchQueue.main.async { [weak self] in
             if let self { change(self) }
@@ -221,6 +225,7 @@ final class MpvPlayer: ObservableObject {
         queue.async { [self] in
             guard let mpv, decoderResets < Self.maxDecoderResets else { return }
             decoderResets += 1
+            publish { $0.addLog("[player] restarted the decoder at \($0.time.clockText)") }
             mpv_set_property_string(mpv, "hwdec", "no")
             mpv_set_property_string(mpv, "hwdec", "videotoolbox")
         }
@@ -277,7 +282,7 @@ final class MpvPlayer: ObservableObject {
                 guard let message = event.pointee.data?.load(as: mpv_event_log_message.self),
                       let text = message.text, let prefix = message.prefix else { continue }
                 let line = "[\(String(cString: prefix))] \(String(cString: text))".trimmingCharacters(in: .whitespacesAndNewlines)
-                player?.publish { $0.recentLog = Array(($0.recentLog + [line]).suffix(logLimit)) }
+                player?.publish { $0.addLog(line) }
             case MPV_EVENT_PLAYBACK_RESTART:
                 player?.publish {
                     $0.isBuffering = false
@@ -292,7 +297,10 @@ final class MpvPlayer: ObservableObject {
                     if name == "pause" {
                         player?.publish { $0.isPaused = isOn }
                     } else {
-                        player?.publish { $0.isBuffering = isOn }
+                        player?.publish {
+                            $0.isBuffering = isOn
+                            if isOn { $0.addLog("[player] ran out of video at \($0.time.clockText)") }
+                        }
                     }
                 } else if property.format == MPV_FORMAT_DOUBLE, let value = property.data?.load(as: Double.self), value.isFinite {
                     if name == "duration" {
@@ -352,7 +360,11 @@ struct MpvVideoView: UIViewRepresentable {
 
 final class MpvVideoUIView: UIView {
     private let player: MpvPlayer
-    var fills = false
+    var fills = false {
+        didSet {
+            if fills != oldValue { setNeedsLayout() }
+        }
+    }
     var isActive = true {
         didSet {
             if isActive != oldValue { setNeedsLayout() }
@@ -363,6 +375,7 @@ final class MpvVideoUIView: UIView {
         self.player = player
         super.init(frame: .zero)
         backgroundColor = .black
+        clipsToBounds = true
         isUserInteractionEnabled = false
     }
 

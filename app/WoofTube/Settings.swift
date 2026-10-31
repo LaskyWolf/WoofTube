@@ -66,6 +66,7 @@ final class AppSettings: ObservableObject {
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @EnvironmentObject private var router: Router
+    @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
 
     var body: some View {
         List {
@@ -88,6 +89,16 @@ struct SettingsView: View {
             }
             Section("Playback") {
                 settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
+                settingsRow("Downloads", icon: "arrow.down.circle") { DownloadSettingsView() }
+            }
+            Section("Search") {
+                Toggle(isOn: $tracksSearchHistory) {
+                    Label {
+                        Text("Search History")
+                    } icon: {
+                        Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90").foregroundStyle(.tint)
+                    }
+                }
             }
             Section("Support") {
                 settingsRow("Diagnostics", icon: "stethoscope") {

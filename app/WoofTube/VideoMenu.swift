@@ -40,6 +40,7 @@ struct VideoMenuItems: View {
     var body: some View {
         ControlGroup {
             Button("Like", systemImage: "hand.thumbsup") {
+                DownloadStore.shared.downloadIfLikesSave(video, maxHeight: router.maxHeight)
                 router.run { _ = try await InnerTubeClient.wooftube.like(videoId: video.videoId) }
             }
             Button("Save to Playlist", systemImage: "text.badge.plus") { showsPlaylists = true }
@@ -60,7 +61,11 @@ struct VideoMenuItems: View {
             Button("Save to Watch Later", systemImage: "clock") {
                 router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
             }
-            if !DownloadStore.shared.isDownloaded(video.videoId) {
+            if let item = DownloadStore.shared.items.first(where: { $0.id == video.videoId }) {
+                Button("Delete Download", systemImage: "trash", role: .destructive) {
+                    DownloadStore.shared.delete(item)
+                }
+            } else {
                 Button("Download", systemImage: "arrow.down.circle") {
                     router.run { try await DownloadStore.shared.download(video, maxHeight: router.maxHeight) }
                 }

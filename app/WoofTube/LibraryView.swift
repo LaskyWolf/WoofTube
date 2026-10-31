@@ -4,7 +4,6 @@ import SwiftyTube
 /// Woof Music's library: filters, shortcut tiles, then the sections.
 struct LibraryView: View {
     private enum Filter: String, CaseIterable {
-        case history = "History"
         case playlists = "Playlists"
         case channels = "Channels"
     }
@@ -45,7 +44,8 @@ struct LibraryView: View {
                         selectedFilter = selectedFilter == filter ? nil : filter
                     }
                     shortcuts
-                    if shows(.history) {
+                    LibraryDownloadCard()
+                    if selectedFilter == nil {
                         HistoryStrip(model: history)
                     }
                     if shows(.playlists) {
@@ -96,6 +96,9 @@ struct LibraryView: View {
         async let channelsLoad: Void = subscriptions.load()
         await loadPlaylists()
         _ = await (historyLoad, likedLoad, laterLoad, channelsLoad)
+        if liked.videos.isEmpty {
+            await liked.load(.browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.likedVideosPlaylistId)))
+        }
     }
 
     private func loadPlaylists() async {
@@ -116,7 +119,7 @@ struct LibraryView: View {
             NavigationLink {
                 PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
             } label: {
-                ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .pink, covers: covers(liked.videos))
+                ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .pink, covers: likedCovers)
             }
             NavigationLink {
                 PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
@@ -141,8 +144,17 @@ struct LibraryView: View {
         .padding(.bottom, Layout.sectionGap)
     }
 
+    /// Built from the video's id, because YouTube sends some list entries with an unusable picture.
     private func covers(_ videos: [YouTubeVideo]) -> [String] {
-        videos.prefix(2).map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" }
+        videos.prefix(2).map { "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" }
+    }
+
+    /// The hidden Liked Videos playlist has a cover of its own, for when its videos don't load.
+    private var likedCovers: [String] {
+        let loaded = covers(liked.videos)
+        guard loaded.isEmpty else { return loaded }
+        let playlist = playlists.first { $0.playlistId == YouTubeFeeds.likedVideosPlaylistId || $0.playlistId == "VL" + YouTubeFeeds.likedVideosPlaylistId }
+        return [playlist?.thumbnailURL].compactMap { $0 }
     }
 
     /// YouTube sends a page at a time, so a long list shows the first page and a plus.
@@ -170,6 +182,11 @@ struct LibraryView: View {
                     .buttonStyle(RowPressStyle())
                     .padding(.horizontal, Layout.screenPadding)
                     .contextMenu {
+                        Button("Download", systemImage: "arrow.down.circle") {
+                            Task {
+                                downloads.download(await FeedModel.allVideos(ofPlaylist: playlist.playlistId), maxHeight: router.maxHeight)
+                            }
+                        }
                         Button("Delete Playlist", systemImage: "trash", role: .destructive) {
                             playlistToDelete = playlist
                         }
@@ -484,8 +501,13 @@ struct PlaylistPage: View {
             }
         }
         .toolbar {
-            if allowsRenaming {
-                Menu("Options", systemImage: "ellipsis") {
+            Menu("Options", systemImage: "ellipsis") {
+                Button("Download", systemImage: "arrow.down.circle") {
+                    Task {
+                        DownloadStore.shared.download(await FeedModel.allVideos(ofPlaylist: playlistId), maxHeight: router.maxHeight)
+                    }
+                }
+                if allowsRenaming {
                     Button("Rename", systemImage: "pencil") {
                         draftTitle = shownTitle
                         isRenaming = true

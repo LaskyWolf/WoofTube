@@ -255,7 +255,12 @@ struct ShortsView: View {
                 }
             }
             .frame(maxHeight: .infinity)
-            .clipShape(.rect(bottomLeadingRadius: Layout.sheetRadius, bottomTrailingRadius: Layout.sheetRadius, style: .continuous))
+            .clipped()
+            .overlay {
+                BottomCornersCover(radius: Layout.sheetRadius)
+                    .fill(.black, style: FillStyle(eoFill: true))
+                    .allowsHitTesting(false)
+            }
 
             commentArea(isCurrent: isCurrent)
         }
@@ -317,9 +322,6 @@ struct ShortsView: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                if let details, let id = details.channelId {
-                    SubscribeButton(channelId: id, isSubscribed: details.isSubscribed) { model.setSubscribed($0) }
-                }
             }
             Button {
                 showsDescription = true
@@ -344,8 +346,18 @@ struct ShortsView: View {
         let details = model.details
         let isLiked = details?.likeStatus == "LIKE"
         let isDisliked = details?.likeStatus == "DISLIKE"
-        return VStack(spacing: Layout.chipSpacing) {
+        return VStack(spacing: Layout.screenPadding) {
+            if let details, let id = details.channelId {
+                Button {
+                    SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
+                } label: {
+                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus", text: details.isSubscribed ? "Subscribed" : "Subscribe")
+                }
+                .accessibilityLabel(details.isSubscribed ? "Unsubscribe" : "Subscribe")
+                .sensoryFeedback(.selection, trigger: details.isSubscribed)
+            }
             Button {
+                if !isLiked { DownloadStore.shared.downloadIfLikesSave(video, maxHeight: 1080) }
                 Task { await model.setLike(isLiked ? "INDIFFERENT" : "LIKE", video: video) }
             } label: {
                 RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like")
@@ -363,6 +375,18 @@ struct ShortsView: View {
             ShortsMoreMenu(model: model, player: model.player, video: video, showsDescription: $showsDescription)
         }
         .buttonStyle(PlayerPressStyle())
+    }
+}
+
+/// Black in the two bottom corners, drawn over the video. Rounding only some corners of a
+/// view takes a mask, and a mask turns this video layer black during the zoom back to the card.
+private struct BottomCornersCover: Shape {
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        path.addPath(UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius, style: .continuous).path(in: rect))
+        return path
     }
 }
 

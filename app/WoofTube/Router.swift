@@ -364,7 +364,7 @@ final class Router: ObservableObject {
                     audioTracks = extras.tracks
                     storyboard = extras.storyboard
                 }
-                if isNewPlayback, let tracking = stream.trackingURL {
+                if isNewPlayback, !SearchSettings.isIncognito, let tracking = stream.trackingURL {
                     try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: tracking, client: .web)
                 }
             } catch {
@@ -472,6 +472,7 @@ enum WatchPositions {
     }
 
     static func save(videoId: String, time: Double, duration: Double) {
+        guard !SearchSettings.isIncognito else { return }
         if time / duration >= finishedFraction {
             guard positions.removeValue(forKey: videoId) != nil else { return }
         } else if time >= minimumPosition, Int(time) % saveEverySeconds == 0, Int(positions[videoId] ?? -1) != Int(time) {
