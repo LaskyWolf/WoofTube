@@ -57,7 +57,7 @@ struct NotificationsView: View {
                             item.isRead = true
                             open(item)
                         }
-                        .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.chipSpacing, bottom: Layout.rowPadding, trailing: 0))
+                        .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.screenPadding, bottom: Layout.rowPadding, trailing: Layout.screenPadding))
                         .listRowSeparator(.hidden)
                     }
                 } header: {
@@ -82,7 +82,7 @@ struct NotificationsView: View {
             }
         }
         .navigationTitle("Notifications")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .task {
             session.unseenNotifications = 0
@@ -162,49 +162,47 @@ private struct NotificationRow: View {
     @State private var showsPlaylists = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Button(action: onOpen) {
-                HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                    Circle()
-                        .fill(item.isRead ? AnyShapeStyle(Color.clear) : AnyShapeStyle(.tint))
-                        .frame(width: 6, height: 6)
-                        .padding(.top, 21)
-                    Avatar(url: item.avatar, size: 48)
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let name = item.name {
-                            Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        }
-                        Text(item.message)
-                            .font(.subheadline)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                        if let time = item.time {
-                            Text(time).font(.caption).foregroundStyle(.secondary)
+        Button(action: onOpen) {
+            HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                Avatar(url: item.avatar, size: Layout.avatarSmall)
+                    .overlay(alignment: .topLeading) {
+                        if !item.isRead {
+                            Circle()
+                                .fill(.tint)
+                                .frame(width: 10, height: 10)
+                                .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
+                                .offset(x: -2, y: -2)
+                                .accessibilityLabel("New")
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if let thumbnail = item.thumbnail, let id = item.videoId {
-                        Thumbnail(url: thumbnail, videoId: id).frame(width: 112)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let name = item.name {
+                        Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    }
+                    Text(item.message)
+                        .font(.subheadline)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if let time = item.time {
+                        Text(time).font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .contentShape(.rect)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if let thumbnail = item.thumbnail, let id = item.videoId {
+                    Thumbnail(url: thumbnail, videoId: id).frame(width: 112)
+                }
             }
-            .buttonStyle(.plain)
-
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
             if let id = item.videoId {
-                Menu {
-                    VideoMenuItems(video: YouTubeVideo(videoId: id, title: item.videoTitle), router: router, showsPlaylists: $showsPlaylists)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .rotationEffect(.degrees(90))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 44)
-                        .contentShape(.rect)
-                }
-                .accessibilityLabel("More")
-                .sheet(isPresented: $showsPlaylists) {
-                    PlaylistPickerSheet(video: YouTubeVideo(videoId: id, title: item.videoTitle))
-                }
+                VideoMenuItems(video: YouTubeVideo(videoId: id, title: item.videoTitle), router: router, showsPlaylists: $showsPlaylists)
+            }
+        }
+        .sheet(isPresented: $showsPlaylists) {
+            if let id = item.videoId {
+                PlaylistPickerSheet(video: YouTubeVideo(videoId: id, title: item.videoTitle))
             }
         }
     }

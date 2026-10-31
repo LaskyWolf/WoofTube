@@ -11,6 +11,10 @@ enum Layout {
     static let thumbRadius: CGFloat = 4
     static let tileRadius: CGFloat = 12
     static let thumbSmall: CGFloat = 40
+    /// A channel's picture: large on its own page, medium in the Library, small everywhere else.
+    static let avatarSmall: CGFloat = 36
+    static let avatarMedium: CGFloat = 60
+    static let avatarLarge: CGFloat = 104
     static let cardRadius: CGFloat = 8
     static let sheetRadius: CGFloat = 16
     static let menuRowSpacing: CGFloat = 14

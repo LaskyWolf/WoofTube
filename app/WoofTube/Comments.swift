@@ -282,7 +282,7 @@ private struct CommentRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Layout.rowSpacing) {
-            Avatar(url: comment.avatar, size: 32)
+            Avatar(url: comment.avatar, size: Layout.avatarSmall)
             VStack(alignment: .leading, spacing: Layout.rowPadding) {
                 Text([comment.author, comment.time].compactMap { $0 }.joined(separator: " · "))
                     .font(.footnote)

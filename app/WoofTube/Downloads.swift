@@ -81,7 +81,7 @@ final class DownloadStore: ObservableObject {
             while !waiting.isEmpty {
                 let video = waiting.removeFirst()
                 do {
-                    try await download(video, maxHeight: maxHeight)
+                    try await save(video, maxHeight: maxHeight)
                     batch?.completed += 1
                 } catch {
                     batch?.failed += 1
@@ -89,6 +89,23 @@ final class DownloadStore: ObservableObject {
                 }
             }
             isRunningQueue = false
+        }
+    }
+
+    /// One video, whose failure the caller shows. The Library's card follows it too.
+    func download(_ video: YouTubeVideo, maxHeight: Int) async throws {
+        let id = video.videoId
+        guard !isDownloaded(id), !active.contains(where: { $0.id == id }), !waiting.contains(where: { $0.videoId == id }) else { return }
+        var next = batch.flatMap { $0.isDone ? nil : $0 } ?? Batch()
+        next.total += 1
+        batch = next
+        do {
+            try await save(video, maxHeight: maxHeight)
+            batch?.completed += 1
+        } catch {
+            batch?.failed += 1
+            batch?.failureReason = error.localizedDescription
+            throw error
         }
     }
 
@@ -141,7 +158,7 @@ final class DownloadStore: ObservableObject {
         )
     }
 
-    func download(_ video: YouTubeVideo, maxHeight: Int) async throws {
+    private func save(_ video: YouTubeVideo, maxHeight: Int) async throws {
         let id = video.videoId
         guard !isDownloaded(id), !active.contains(where: { $0.id == id }) else { return }
         if UserDefaults.standard.bool(forKey: DownloadSettings.wifiOnlyKey), network.currentPath.usesInterfaceType(.cellular) {
@@ -276,10 +293,9 @@ struct DownloadedBadge: View {
 struct LibraryDownloadCard: View {
     @ObservedObject private var store = DownloadStore.shared
     private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-    private static let smallestBatch = 2
 
     var body: some View {
-        if let batch = store.batch, batch.total >= Self.smallestBatch {
+        if let batch = store.batch {
             NavigationLink {
                 DownloadsView().onAppear { store.clearFinishedBatch() }
             } label: {
@@ -364,8 +380,9 @@ struct LibraryDownloadCard: View {
     }
 
     private func title(_ batch: DownloadStore.Batch) -> String {
-        guard batch.isDone else { return "Downloading \(batch.total) videos" }
-        return batch.failed > 0 ? "\(batch.completed) of \(batch.total) videos downloaded" : "\(batch.total) videos downloaded"
+        let videos = batch.total == 1 ? "video" : "videos"
+        guard batch.isDone else { return "Downloading \(batch.total) \(videos)" }
+        return batch.failed > 0 ? "\(batch.completed) of \(batch.total) \(videos) downloaded" : "\(batch.total) \(videos) downloaded"
     }
 
     private func detail(_ batch: DownloadStore.Batch) -> String {
@@ -399,7 +416,7 @@ struct DownloadsView: View {
                 }
                 if store.items.isEmpty, store.active.isEmpty, store.waiting.isEmpty {
                     ContentUnavailableView {
-                        Label("No Downloads", systemImage: "arrow.down.circle")
+                        Label("No Downloads", systemImage: "arrow.down.to.line")
                     } description: {
                         Text("Long press a video and choose Download.")
                     } actions: {
@@ -450,7 +467,7 @@ struct DownloadsView: View {
                 }
             }
         }
-        .navigationTitle("Downloads")
+        .detailBarTitle("Downloads", pinnedTitle: videos.isEmpty ? "Downloads" : nil)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {

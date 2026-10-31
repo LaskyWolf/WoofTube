@@ -66,7 +66,7 @@ struct VideoMenuItems: View {
                     DownloadStore.shared.delete(item)
                 }
             } else {
-                Button("Download", systemImage: "arrow.down.circle") {
+                Button("Download", systemImage: "arrow.down.to.line") {
                     router.run { try await DownloadStore.shared.download(video, maxHeight: router.maxHeight) }
                 }
             }

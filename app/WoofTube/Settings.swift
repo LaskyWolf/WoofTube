@@ -89,7 +89,7 @@ struct SettingsView: View {
             }
             Section("Playback") {
                 settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
-                settingsRow("Downloads", icon: "arrow.down.circle") { DownloadSettingsView() }
+                settingsRow("Downloads", icon: "arrow.down.to.line") { DownloadSettingsView() }
             }
             Section("Search") {
                 Toggle(isOn: $tracksSearchHistory) {
@@ -318,7 +318,8 @@ private struct DiagnosticsView: View {
 
     private var report: String {
         let feedTypes = "Feed content types: " + FeedParser.seenContentTypes.sorted().joined(separator: ", ")
-        return ([stream ?? "No stream", state, feedTypes] + player.recentLog).joined(separator: "\n")
+        let homePosts = "Home posts: YouTube sent \(FeedParser.homePostsSent), app shows \(FeedParser.homePostsShown), in \(FeedParser.homePages) pages"
+        return ([stream ?? "No stream", state, feedTypes, homePosts] + player.recentLog).joined(separator: "\n")
     }
 
     var body: some View {

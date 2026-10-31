@@ -93,6 +93,31 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
     }
 }
 
+/// `DetailHeaderCard` already shows the title, so the bar repeats it only once the
+/// header has scrolled away. A pinned title always shows.
+private struct DetailBarTitle: ViewModifier {
+    let title: String
+    let pinnedTitle: String?
+    @State private var isHeaderScrolledAway = false
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top > Layout.artLarge
+            } action: { _, isScrolledAway in
+                isHeaderScrolledAway = isScrolledAway
+            }
+            .navigationTitle(pinnedTitle ?? (isHeaderScrolledAway ? title : ""))
+    }
+}
+
+extension View {
+    /// Goes on the ScrollView of a page that starts with `DetailHeaderCard`.
+    func detailBarTitle(_ title: String, pinnedTitle: String? = nil) -> some View {
+        modifier(DetailBarTitle(title: title, pinnedTitle: pinnedTitle))
+    }
+}
+
 /// Woof Music's blurred artwork that fades into the page behind a header.
 struct BlurredArtworkBackdrop: View {
     let url: String?

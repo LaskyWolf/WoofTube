@@ -57,6 +57,11 @@ final class ShortsModel: ObservableObject {
             guard !Task.isCancelled else { return }
             captions = stream.captions
             player.load(url: stream.url)
+            if captions.isEmpty {
+                let found = await StreamLoader.captions(videoId: video.videoId)
+                guard !Task.isCancelled else { return }
+                captions = found
+            }
         } catch {
             guard !Task.isCancelled else { return }
             errorText = error.localizedDescription
@@ -235,6 +240,10 @@ struct ShortsView: View {
                     onHoldMoved: moveHold
                 )
                 if isCurrent {
+                    ShortStartSpinner(player: model.player, hasFailed: model.errorText != nil)
+                        .frame(maxHeight: .infinity)
+                }
+                if isCurrent {
                     CaptionOverlay(clock: model.player.clock, cues: model.captionCues, isFullscreen: false)
                         .padding(.bottom, 120)
                 }
@@ -308,7 +317,7 @@ struct ShortsView: View {
                     router.openChannelPage(id)
                 } label: {
                     HStack(spacing: Layout.chipSpacing) {
-                        Avatar(url: details?.channelAvatar ?? video.channelAvatarURL, size: 32)
+                        Avatar(url: details?.channelAvatar ?? video.channelAvatarURL, size: Layout.avatarSmall)
                         Text(details?.channelTitle ?? video.channelTitle ?? "")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
@@ -341,15 +350,6 @@ struct ShortsView: View {
         let isLiked = details?.likeStatus == "LIKE"
         let isDisliked = details?.likeStatus == "DISLIKE"
         return VStack(spacing: Layout.screenPadding) {
-            if let details, let id = details.channelId {
-                Button {
-                    SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
-                } label: {
-                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus", text: details.isSubscribed ? "Subscribed" : "Subscribe")
-                }
-                .accessibilityLabel(details.isSubscribed ? "Unsubscribe" : "Subscribe")
-                .sensoryFeedback(.selection, trigger: details.isSubscribed)
-            }
             Button {
                 if !isLiked { DownloadStore.shared.downloadIfLikesSave(video, maxHeight: 1080) }
                 Task { await model.setLike(isLiked ? "INDIFFERENT" : "LIKE", video: video) }
@@ -361,12 +361,21 @@ struct ShortsView: View {
             } label: {
                 RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike")
             }
-            if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
-                ShareLink(item: url) {
-                    RailLabel(icon: "square.and.arrow.up", text: "Share")
-                }
-            }
             ShortsMoreMenu(model: model, player: model.player, video: video, showsDescription: $showsDescription)
+            if let details, let id = details.channelId {
+                Button {
+                    SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
+                } label: {
+                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus")
+                        .background {
+                            Circle()
+                                .fill(details.isSubscribed ? AnyShapeStyle(.white.opacity(0.2)) : AnyShapeStyle(.tint))
+                                .frame(width: 44, height: 44)
+                        }
+                }
+                .accessibilityLabel(details.isSubscribed ? "Unsubscribe" : "Subscribe")
+                .sensoryFeedback(.selection, trigger: details.isSubscribed)
+            }
         }
         .buttonStyle(PlayerPressStyle())
     }
@@ -384,17 +393,31 @@ private struct BottomCornersCover: Shape {
     }
 }
 
+/// Shows until the Short has its first frame.
+private struct ShortStartSpinner: View {
+    @ObservedObject var player: MpvPlayer
+    let hasFailed: Bool
+
+    var body: some View {
+        if !player.isVideoReady, !hasFailed, player.errorText == nil {
+            ProgressView().tint(.white).controlSize(.large).allowsHitTesting(false)
+        }
+    }
+}
+
 private struct RailLabel: View {
     let icon: String
-    let text: String
+    var text: String?
 
     var body: some View {
         VStack(spacing: 2) {
             Image(systemName: icon)
                 .font(.system(size: 22, weight: .semibold))
-            Text(text)
-                .font(.caption2.weight(.semibold))
-                .lineLimit(1)
+            if let text {
+                Text(text)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+            }
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.5), radius: 3)
@@ -412,6 +435,11 @@ private struct ShortsMoreMenu: View {
 
     var body: some View {
         Menu {
+            if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
+                ShareLink(item: url) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
             Button("Description", systemImage: "text.alignleft") { showsDescription = true }
             Button("Save to Watch Later", systemImage: "clock") {
                 router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
@@ -431,8 +459,9 @@ private struct ShortsMoreMenu: View {
                 }
             }
         } label: {
-            RailLabel(icon: "ellipsis", text: "More")
+            RailLabel(icon: "ellipsis")
         }
+        .accessibilityLabel("More")
     }
 }
 

@@ -173,6 +173,25 @@ extension YouTubeVideo {
 /// SwiftyTube's parser only returns a flat list of videos.
 enum FeedParser {
     private(set) static var seenContentTypes: Set<String> = []
+    private(set) static var homePages = 0
+    private(set) static var homePostsSent = 0
+    private(set) static var homePostsShown = 0
+
+    /// Tells a bug from a feed with no posts: if YouTube sends posts, both numbers rise.
+    static func noteHomePage(_ json: [String: Any], items: [FeedItem]) {
+        homePages += 1
+        homePostsSent += postCount(in: json)
+        homePostsShown += items.filter { if case .post = $0 { return true } else { return false } }.count
+    }
+
+    private static func postCount(in node: Any) -> Int {
+        if let array = node as? [Any] { return array.reduce(0) { $0 + postCount(in: $1) } }
+        guard let dict = node as? [String: Any] else { return 0 }
+        return dict.reduce(0) { total, entry in
+            total + (entry.key == "backstagePostRenderer" || entry.key == "postRenderer" ? 1 : postCount(in: entry.value))
+        }
+    }
+
 
     private static let shelfKeys = ["reelShelfRenderer", "richShelfRenderer", "shelfRenderer", "gridShelfViewModel"]
     private static let postKeys = ["backstagePostThreadRenderer", "backstagePostRenderer", "sharedPostRenderer", "postRenderer"]

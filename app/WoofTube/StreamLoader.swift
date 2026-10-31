@@ -90,6 +90,12 @@ enum StreamLoader {
         return (tracks, JSON.string("spec", in: json["storyboards"]).flatMap(Storyboard.init(spec:)))
     }
 
+    /// The clients tried first for streams can return no captions at all, so these come from the iOS client.
+    static func captions(videoId: String) async -> [YouTubeCaptionTrack] {
+        let response: PlayerResponse? = try? await InnerTubeClient.wooftube.playerResponse(videoId: videoId, client: .iOS, options: PlayerRequestOptions(signatureTimestamp: nil))
+        return response.map { YouTubeWatchParser.captionTracks(from: $0) } ?? []
+    }
+
     /// `StreamFallback.resolveVideo` returns a 360p combined stream whenever one
     /// exists, so this looks for separate video and audio first.
     static func load(videoId: String, maxHeight: Int) async throws -> LoadedStream {

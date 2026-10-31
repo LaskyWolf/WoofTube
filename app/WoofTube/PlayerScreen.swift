@@ -792,8 +792,14 @@ private struct PlayerControls: View {
     @State private var seekHint: SeekHint?
     @State private var showsSpinner = false
 
+    /// Nothing to show yet, so the spinner appears at once.
+    private var isStarting: Bool {
+        !player.isVideoReady && router.loadError == nil && player.errorText == nil
+    }
+
+    /// Playing video that ran out of data, which often lasts too little to be worth a spinner.
     private var isLoading: Bool {
-        router.loadError == nil && (router.streamSummary == nil || player.isBuffering)
+        player.isVideoReady && player.isBuffering
     }
 
     var body: some View {
@@ -815,7 +821,7 @@ private struct PlayerControls: View {
             )
             .ignoresSafeArea(edges: isFullscreen ? .all : [])
 
-            if showsSpinner {
+            if isStarting || showsSpinner {
                 ProgressView().tint(.white).controlSize(.large).allowsHitTesting(false)
             }
             if showsControls {
@@ -869,7 +875,7 @@ private struct PlayerControls: View {
                 optionsMenu
             }
             Spacer(minLength: 0)
-            if !showsSpinner {
+            if !isStarting, !showsSpinner {
                 HStack(spacing: 24) {
                     Button("Back 10 Seconds", systemImage: "gobackward.10") { skip(-Self.skipSeconds) }
                         .labelStyle(PlayerGlyphLabelStyle(size: 24))
@@ -1123,7 +1129,7 @@ private struct WatchDetailsView: View {
                 actions(details)
             } else if !router.detailsUnavailable {
                 HStack(spacing: Layout.rowSpacing) {
-                    ShimmerBlock(width: Layout.thumbSmall, height: Layout.thumbSmall, radius: Layout.thumbSmall / 2)
+                    ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
                     VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                         ShimmerBlock(width: 140, height: 14)
                         ShimmerBlock(width: 90, height: 12)
@@ -1138,9 +1144,9 @@ private struct WatchDetailsView: View {
     private func channelLabel(_ details: WatchDetails) -> some View {
         HStack(spacing: Layout.rowSpacing) {
             if details.collaborators.count > 1 {
-                AvatarStack(urls: details.collaborators.map(\.avatar), size: Layout.thumbSmall)
+                AvatarStack(urls: details.collaborators.map(\.avatar), size: Layout.avatarSmall)
             } else {
-                Avatar(url: details.channelAvatar, size: Layout.thumbSmall)
+                Avatar(url: details.channelAvatar, size: Layout.avatarSmall)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(details.channelTitle ?? "")
@@ -1258,7 +1264,7 @@ private struct WatchDetailsView: View {
                                     .frame(width: 38, height: 38)
                                     .glassEffect(.regular, in: .circle)
                             } else {
-                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down")
+                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down.to.line")
                             }
                         }
                         .disabled(isSaved || isSaving)
@@ -1377,7 +1383,7 @@ struct CommentsCard: View {
                 }
                 if let comment = details?.topComment {
                     HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                        Avatar(url: comment.avatar, size: 24)
+                        Avatar(url: comment.avatar, size: Layout.avatarSmall)
                         Text(comment.text)
                             .font(.footnote)
                             .lineLimit(commentLines)
@@ -1518,6 +1524,64 @@ struct SubscribeButton: View {
     }
 }
 
+/// The channel page's search button grown into a search bar, with the results under it.
+private struct ChannelSearchContent: View {
+    static let barId = "channelSearchBar"
+    /// The code channel pages use for their search tab.
+    private static let searchTab = "EgZzZWFyY2jyBgQKAloA"
+
+    let channelId: String
+    let channelTitle: String
+    let morph: Namespace.ID
+    let onClose: () -> Void
+    @StateObject private var model = FeedModel()
+    @State private var text = ""
+    @State private var query = ""
+    @FocusState private var isFocused: Bool
+
+    private var source: FeedSource { .scoped(browseId: channelId, params: Self.searchTab, query: query) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Layout.chipSpacing) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField(channelTitle.isEmpty ? "Search this channel" : "Search \(channelTitle)", text: $text)
+                    .focused($isFocused)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                Button("Close Search", systemImage: "xmark", action: onClose)
+                    .labelStyle(.iconOnly)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
+                    .buttonStyle(.plain)
+            }
+            .padding(.leading, Layout.screenPadding)
+            .frame(height: 50)
+            .glassEffect(.regular, in: .capsule)
+            .matchedGeometryEffect(id: Self.barId, in: morph)
+            .padding(.horizontal, Layout.screenPadding)
+            .padding(.vertical, Layout.chipSpacing)
+
+            if query.isEmpty {
+                ContentUnavailableView("Search This Channel", systemImage: "magnifyingglass")
+            } else {
+                FeedContent(model: model, retry: { await model.load(source) }, isCompact: true) { EmptyView() }
+            }
+        }
+        .onAppear { isFocused = true }
+        .task(id: text) {
+            // Waits for a pause in typing, because each change cancels this task.
+            if !text.isEmpty { try? await Task.sleep(for: .milliseconds(300)) }
+            if !Task.isCancelled { query = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        .task(id: query) {
+            if !query.isEmpty { await model.load(source) }
+        }
+    }
+}
+
 /// Woof Music's artist page over the channel's banner, then the pinned or latest video,
 /// then the channel's tabs as filters.
 struct ChannelView: View {
@@ -1531,12 +1595,10 @@ struct ChannelView: View {
     @State private var featured: YouTubeVideo?
     @State private var isFeaturedPinned = false
     @State private var avatar: String?
+    @State private var isSearching = false
+    @Namespace private var searchMorph
 
     private static let shownTabs: Set<String> = ["videos", "playlists", "posts", "community"]
-    private static let avatarSize: CGFloat = 104
-    /// The code channel pages use for their search tab.
-    private static let searchTab = "EgZzZWFyY2jyBgQKAloA"
-
     private var tabs: [YouTubeChannelTab] {
         page?.tabs.filter { tab in
             tab.browseId != nil && Self.tabName(tab).map { Self.shownTabs.contains($0) } == true
@@ -1570,9 +1632,16 @@ struct ChannelView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            content(topInset: geometry.safeAreaInsets.top)
+            if isSearching {
+                ChannelSearchContent(channelId: channelId, channelTitle: page?.channel?.title ?? "", morph: searchMorph) {
+                    withAnimation(.snappy) { isSearching = false }
+                }
+                .transition(.opacity)
+            } else {
+                content(topInset: geometry.safeAreaInsets.top)
+                    .transition(.opacity)
+            }
         }
-        .navigationTitle(page?.channel?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .task { await load() }
@@ -1605,13 +1674,14 @@ struct ChannelView: View {
                 }
             }
         }
+        .detailBarTitle(page?.channel?.title ?? "")
     }
 
     private func header(topInset: CGFloat) -> some View {
         let channel = page?.channel
         let banner = page?.bannerURL
         let avatarURL = avatar ?? channel?.thumbnailURL
-        return DetailHeaderCard(meta: channel?.handle ?? "Channel", title: channel?.title ?? "", artSize: Self.avatarSize) {
+        return DetailHeaderCard(meta: channel?.handle ?? "Channel", title: channel?.title ?? "", artSize: Layout.avatarLarge) {
             CoverImage(url: avatarURL)
                 .clipShape(.circle)
                 .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 3))
@@ -1624,10 +1694,11 @@ struct ChannelView: View {
             }
         } buttons: {
             SubscribeButton(channelId: channelId, isSubscribed: isSubscribed, isLarge: true) { isSubscribed = $0 }
-            NavigationLink {
-                ScopedSearchPage(title: channel?.title ?? "Channel", prompt: "Search this channel", browseId: channelId, params: Self.searchTab)
+            Button {
+                withAnimation(.snappy) { isSearching = true }
             } label: {
                 HeaderRoundIcon(systemImage: "magnifyingglass")
+                    .matchedGeometryEffect(id: ChannelSearchContent.barId, in: searchMorph)
             }
             .accessibilityLabel("Search This Channel")
         }

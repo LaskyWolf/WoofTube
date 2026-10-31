@@ -128,7 +128,6 @@ enum CreatorMatch {
 }
 
 struct SearchScreen: View {
-    @EnvironmentObject private var settings: AppSettings
     @StateObject private var history = SearchHistory()
     @AppStorage(SearchSettings.incognitoKey) private var isIncognito = false
     @State private var text = ""
@@ -145,28 +144,11 @@ struct SearchScreen: View {
                     SearchStart(text: text, history: history, isIncognito: isIncognito) { submit($0) }
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
-            .modifier(ChannelPageDestination(tab: .search))
-            .toolbar {
-                // In the bar rather than a large title, which always sits under the bar's buttons.
-                ToolbarItem(placement: .topBarLeading) {
-                    Text("Search")
-                        .font(.largeTitle.bold())
-                        .fixedSize()
-                }
-                .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(isIncognito ? "Turn Off Incognito" : "Turn On Incognito", systemImage: "eyeglasses") {
-                        isIncognito.toggle()
-                    }
-                    .tint(isIncognito ? settings.accentColor : Color.primary)
-                    .sensoryFeedback(.selection, trigger: isIncognito)
-                }
-            }
-            .searchable(text: $text, prompt: "Videos and channels")
-            .searchFocused($isFieldFocused)
-            .onSubmit(of: .search) { submit(text) }
+            .tabRoot(title: "Search", tab: .search, incognito: $isIncognito)
         }
+        .searchable(text: $text, prompt: "Videos and channels")
+        .searchFocused($isFieldFocused)
+        .onSubmit(of: .search) { submit(text) }
     }
 
     private func submit(_ query: String) {
@@ -362,7 +344,7 @@ private struct SearchResults: View {
             router.openChannelPage(id)
         } label: {
             HStack(spacing: 14) {
-                Avatar(url: channel.thumbnailURL, size: Layout.artSmall)
+                Avatar(url: channel.thumbnailURL, size: Layout.avatarSmall)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Channel")
                         .font(.caption.weight(.semibold))

@@ -204,7 +204,7 @@ struct LibraryView: View {
                     .buttonStyle(RowPressStyle())
                     .padding(.horizontal, Layout.screenPadding)
                     .contextMenu {
-                        Button("Download", systemImage: "arrow.down.circle") {
+                        Button("Download", systemImage: "arrow.down.to.line") {
                             Task {
                                 downloads.download(await FeedModel.allVideos(ofPlaylist: playlist.playlistId), maxHeight: router.maxHeight)
                             }
@@ -237,7 +237,7 @@ struct LibraryView: View {
                     Button {
                         if let id = channel.channelId { router.openChannelPage(id) }
                     } label: {
-                        ChannelRow(channel: channel)
+                        ChannelRow(channel: channel, avatarSize: Layout.avatarMedium)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
                     }
@@ -427,7 +427,7 @@ private struct HistoryStrip: View {
     private static let padding: CGFloat = 12
 
     var body: some View {
-        if model.isLoading || !model.videos.isEmpty {
+        if model.isLoading || !model.videosAndShorts.isEmpty {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 NavigationLink {
                     ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history, listsWithoutQuery: true)
@@ -449,12 +449,12 @@ private struct HistoryStrip: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 10) {
-                        if model.videos.isEmpty {
+                        if model.videosAndShorts.isEmpty {
                             ForEach(0..<3, id: \.self) { _ in
                                 ShimmerBlock(width: Self.coverWidth, height: Self.coverWidth * 9 / 16, radius: Layout.tileRadius)
                             }
                         }
-                        ForEach(Array(model.videos.prefix(Self.shown)), id: \.videoId) { video in
+                        ForEach(Array(model.videosAndShorts.prefix(Self.shown)), id: \.videoId) { video in
                             tile(video)
                         }
                     }
@@ -542,7 +542,7 @@ struct PlaylistPage: View {
         }
         .toolbar {
             Menu("Options", systemImage: "ellipsis") {
-                Button("Download", systemImage: "arrow.down.circle") {
+                Button("Download", systemImage: "arrow.down.to.line") {
                     Task {
                         DownloadStore.shared.download(await FeedModel.allVideos(ofPlaylist: playlistId), maxHeight: router.maxHeight)
                     }
@@ -569,7 +569,7 @@ struct PlaylistPage: View {
                 }
             }
         }
-        .navigationTitle(shownTitle)
+        .detailBarTitle(shownTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .refreshable { await load() }

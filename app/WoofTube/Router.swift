@@ -354,6 +354,14 @@ final class Router: ObservableObject {
         }
     }
 
+    private func loadMissingCaptions(videoId: String) async {
+        guard captions.isEmpty else { return }
+        let found = await StreamLoader.captions(videoId: videoId)
+        guard !Task.isCancelled else { return }
+        captions = found
+        restoreCaption()
+    }
+
     private func startStream(videoId: String, start: Double, isNewPlayback: Bool) {
         loadTask?.cancel()
         streamSummary = nil
@@ -364,6 +372,7 @@ final class Router: ObservableObject {
                 streamSummary = "Downloaded"
                 player.load(url: local, start: start)
                 updateNowPlaying()
+                await loadMissingCaptions(videoId: videoId)
                 return
             }
             do {
@@ -376,6 +385,8 @@ final class Router: ObservableObject {
                 restoreCaption()
                 player.load(url: stream.url, start: start)
                 updateNowPlaying()
+                await loadMissingCaptions(videoId: videoId)
+                guard !Task.isCancelled else { return }
                 if let client = stream.client {
                     let extras = await StreamLoader.extras(videoId: videoId, client: client)
                     guard !Task.isCancelled else { return }

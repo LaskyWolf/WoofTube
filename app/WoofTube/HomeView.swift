@@ -40,8 +40,20 @@ final class FeedModel: ObservableObject {
     @Published private(set) var errorText: String?
     private var nextToken: String?
     private var nextQuery: String?
+    private var isHome = false
 
     var hasMore: Bool { nextToken != nil }
+
+    /// The same in page order, with Shorts too.
+    var videosAndShorts: [YouTubeVideo] {
+        items.flatMap { item -> [YouTubeVideo] in
+            switch item {
+            case .video(let video, _): return [video]
+            case .shelf(_, let videos), .shorts(_, let videos): return videos
+            default: return []
+            }
+        }
+    }
 
     /// Every video on the page, including those inside shelves.
     var videos: [YouTubeVideo] {
@@ -60,6 +72,8 @@ final class FeedModel: ObservableObject {
         do {
             let json = try await source.fetch()
             items = FeedParser.items(in: json)
+            isHome = source == .browse(YouTubeFeeds.home)
+            if isHome { FeedParser.noteHomePage(json, items: items) }
             if !keepChips { chips = Self.parseChips(json) }
             nextToken = YouTubeFeedParser.continuation(in: json)
             if case .search(let query, _) = source { nextQuery = query } else { nextQuery = nil }
@@ -79,7 +93,9 @@ final class FeedModel: ObservableObject {
             ? tube.search(query: nextQuery ?? "", continuation: token)
             : tube.browse(continuation: token)) else { return }
         let known = Set(items.map(\.id))
-        items += FeedParser.items(in: json).filter { !known.contains($0.id) }
+        let page = FeedParser.items(in: json)
+        if isHome { FeedParser.noteHomePage(json, items: page) }
+        items += page.filter { !known.contains($0.id) }
         nextToken = YouTubeFeedParser.continuation(in: json)
     }
 
@@ -161,6 +177,8 @@ struct TabHeader: View {
     let title: String
     /// Shows a + button when set, for the Library's new playlist.
     var onAdd: (() -> Void)?
+    /// Shows the Incognito button when set, for Search.
+    var incognito: Binding<Bool>?
     @EnvironmentObject private var session: Session
 
     var body: some View {
@@ -179,6 +197,17 @@ struct TabHeader: View {
                             .contentShape(.rect)
                     }
                     .accessibilityLabel("New Playlist")
+                }
+                if let incognito {
+                    Button { incognito.wrappedValue.toggle() } label: {
+                        Image(systemName: "eyeglasses")
+                            .font(.title3)
+                            .foregroundStyle(incognito.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .frame(width: 36, height: 36)
+                            .contentShape(.rect)
+                    }
+                    .accessibilityLabel(incognito.wrappedValue ? "Turn Off Incognito" : "Turn On Incognito")
+                    .sensoryFeedback(.selection, trigger: incognito.wrappedValue)
                 }
                 NavigationLink(value: HeaderRoute.notifications) {
                     Image(systemName: "bell")
@@ -219,9 +248,9 @@ struct TabHeader: View {
 
 extension View {
     /// For the first screen of a tab, which shows TabHeader instead of a navigation bar.
-    func tabRoot(title: String, tab: AppTab, onAdd: (() -> Void)? = nil) -> some View {
+    func tabRoot(title: String, tab: AppTab, onAdd: (() -> Void)? = nil, incognito: Binding<Bool>? = nil) -> some View {
         safeAreaBar(edge: .top, spacing: 0) {
-            TabHeader(title: title, onAdd: onAdd).background(Color(.systemBackground))
+            TabHeader(title: title, onAdd: onAdd, incognito: incognito).background(Color(.systemBackground))
         }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: HeaderRoute.self) { route in
@@ -417,8 +446,11 @@ struct ScopedSearchPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: prompt)
-        .onSubmit(of: .search) { submitted = text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .onChange(of: text) { if text.isEmpty { submitted = "" } }
+        .task(id: text) {
+            // Waits for a pause in typing, because each change cancels this task.
+            if !text.isEmpty { try? await Task.sleep(for: .milliseconds(300)) }
+            if !Task.isCancelled { submitted = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
         .task(id: submitted) {
             if !submitted.isEmpty || listsWithoutQuery { await model.load(source) }
         }
@@ -623,11 +655,14 @@ struct VideoRow: View {
                                 .font(.subheadline.weight(.medium))
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
-                            Text(details)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            VoteLine(videoId: video.videoId)
+                            HStack(spacing: Layout.chipSpacing) {
+                                Text(details)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                VoteLine(videoId: video.videoId).fixedSize()
+                            }
                         }
                         Spacer(minLength: 0)
                         DownloadedBadge(videoId: video.videoId)
@@ -649,7 +684,7 @@ struct VideoRow: View {
                     }
                 }
             } label: {
-                AvatarStack(urls: extras.collaborators.map(\.avatar), size: 36)
+                AvatarStack(urls: extras.collaborators.map(\.avatar), size: Layout.avatarSmall)
                     .contentShape(.rect)
             }
             .accessibilityLabel("Creators")
@@ -658,14 +693,14 @@ struct VideoRow: View {
                 Button {
                     router.openChannel(id)
                 } label: {
-                    Avatar(url: url, size: 36)
+                    Avatar(url: url, size: Layout.avatarSmall)
                         // Reaches 44 pt, using the gap around the avatar.
                         .contentShape(Circle().inset(by: -4))
                 }
                 .buttonStyle(ZoomPressStyle())
                 .accessibilityLabel("Open \(video.channelTitle ?? "Channel")")
             } else {
-                Avatar(url: url, size: 36)
+                Avatar(url: url, size: Layout.avatarSmall)
             }
         }
     }
@@ -943,7 +978,7 @@ private struct PostRow: View {
                 if let id = post.channelId { router.openChannel(id) }
             } label: {
                 HStack(spacing: Layout.rowSpacing) {
-                    Avatar(url: post.authorAvatar, size: 36)
+                    Avatar(url: post.authorAvatar, size: Layout.avatarSmall)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(post.author).font(.subheadline.weight(.semibold)).lineLimit(1)
                         if let time = post.time {
@@ -1051,10 +1086,11 @@ struct AvatarStack: View {
 
 struct ChannelRow: View {
     let channel: YouTubeChannel
+    var avatarSize = Layout.avatarSmall
 
     var body: some View {
         HStack(spacing: Layout.menuRowSpacing) {
-            Avatar(url: channel.thumbnailURL, size: Layout.artSmall)
+            Avatar(url: channel.thumbnailURL, size: avatarSize)
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 Text(channel.title)
                     .font(.body.weight(.semibold))
