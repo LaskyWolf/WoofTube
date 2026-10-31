@@ -17,7 +17,8 @@ All phases have a first version. Each one still needs testing and fixes on a dev
 - [ ] AirPlay video: the route button moves audio only.
 - [ ] Verify signed-in comment posting, comment likes, notifications and the mixed Home feed. Their response shapes were only checked signed out.
 - [ ] Download videos from the long press menu.
-- [ ] Like, comment on and vote in community posts.
+- [ ] Verify signed-in post likes and poll votes.
+- [ ] Comment on community posts.
 
 ## Missing compared to YouTube
 
@@ -25,19 +26,18 @@ Home feed:
 
 - [ ] Verify community posts on the signed-in Home feed.
 - [ ] Vertical Shorts cards in the correct size, with a "More" entry.
-- [ ] Live, upcoming and premiere badges, and watch progress on thumbnails.
+- [ ] Premiere badge.
 - [ ] Movies, mixes, courses and sponsored-free shelves.
 - [ ] Hide and "Don't recommend channel" feedback on Shorts and posts.
 
 Shorts:
 
-- [ ] Channel avatar, Subscribe, dislike, counts and description sheet.
-- [ ] Scrubbable progress bar, sound page, captions and a menu.
+- [ ] Sound page. The web response has no sound data.
 
 Player:
 
-- [ ] Double-tap to seek, chapters, seek-bar previews and SponsorBlock.
-- [ ] Audio track picker, caption translation and resume position.
+- [ ] Seek-bar previews.
+- [ ] Audio track picker.
 
 Video page:
 
@@ -46,6 +46,6 @@ Video page:
 
 Account and library:
 
-- [ ] Edit, create and reorder playlists, channels list, and history search and removal.
-- [ ] Profile page content, account switching and notification settings.
+- [ ] Rename and reorder playlists, remove videos from them, and search history.
+- [ ] Account switching.
 - [ ] Offline downloads and Cast.

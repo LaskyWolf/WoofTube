@@ -39,6 +39,10 @@ final class Router: ObservableObject {
     @Published var autoplay: Bool {
         didSet { UserDefaults.standard.set(autoplay, forKey: Self.autoplayKey) }
     }
+    @Published var skipsSponsors: Bool {
+        didSet { UserDefaults.standard.set(skipsSponsors, forKey: Self.skipsSponsorsKey) }
+    }
+    @Published private(set) var isCaptionTranslated = false
 
     let player = MpvPlayer()
     /// Created on the first Short, and kept because mpv isn't torn down.
@@ -52,15 +56,18 @@ final class Router: ObservableObject {
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
     private static let autoplayKey = "autoplay"
+    private static let skipsSponsorsKey = "skipsSponsors"
     private static let captionLanguageKey = "captionLanguage"
     private var loadTask: Task<Void, Never>?
     private var nowPlayingSubscriptions: [Any] = []
+    private var sponsorSegments: [ClosedRange<Double>] = []
 
     init() {
         let defaults = UserDefaults.standard
         let saved = defaults.integer(forKey: Self.maxHeightKey)
         maxHeight = saved > 0 ? saved : 1080
         autoplay = defaults.object(forKey: Self.autoplayKey) as? Bool ?? true
+        skipsSponsors = defaults.bool(forKey: Self.skipsSponsorsKey)
         setUpRemoteCommands()
         player.onEnded = { [weak self] in self?.playNextAfterEnd() }
     }
@@ -76,9 +83,16 @@ final class Router: ObservableObject {
         details = nil
         selectedCaption = nil
         captionCues = []
+        sponsorSegments = []
         player.prepareForNewVideo()
-        startStream(videoId: video.videoId, start: 0)
+        startStream(videoId: video.videoId, start: WatchPositions.start(for: video), isNewPlayback: true)
         Task { await loadDetails(videoId: video.videoId) }
+        if skipsSponsors {
+            Task {
+                let segments = await SponsorBlock.segments(videoId: video.videoId)
+                if current?.videoId == video.videoId { sponsorSegments = segments }
+            }
+        }
     }
 
     /// Plays the first video and queues the rest.
@@ -131,7 +145,7 @@ final class Router: ObservableObject {
     func changeQuality(to height: Int) {
         maxHeight = height
         guard let current else { return }
-        startStream(videoId: current.videoId, start: player.time)
+        startStream(videoId: current.videoId, start: player.time, isNewPlayback: false)
     }
 
     func close() {
@@ -145,14 +159,15 @@ final class Router: ObservableObject {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
-    func selectCaption(_ track: YouTubeCaptionTrack?) {
+    func selectCaption(_ track: YouTubeCaptionTrack?, translated: Bool = false) {
         selectedCaption = track?.languageCode
+        isCaptionTranslated = translated
         captionCues = []
         UserDefaults.standard.set(track?.languageCode, forKey: Self.captionLanguageKey)
         guard let track else { return }
         Task {
             do {
-                let cues = try await CaptionLoader.cues(for: track)
+                let cues = try await CaptionLoader.cues(for: track, translated: translated)
                 guard selectedCaption == track.languageCode else { return }
                 captionCues = cues
                 if cues.isEmpty { actionMessage = "YouTube returned no captions for this language." }
@@ -181,7 +196,16 @@ final class Router: ObservableObject {
         }
     }
 
-    private func startStream(videoId: String, start: Double) {
+    /// Saves the position and jumps over sponsor segments as playback advances.
+    private func playbackTick(_ time: Double) {
+        guard let current, player.duration > 0 else { return }
+        WatchPositions.save(videoId: current.videoId, time: time, duration: player.duration)
+        if let segment = sponsorSegments.first(where: { $0.contains(time) }) {
+            player.seek(to: segment.upperBound)
+        }
+    }
+
+    private func startStream(videoId: String, start: Double, isNewPlayback: Bool) {
         loadTask?.cancel()
         streamSummary = nil
         loadError = nil
@@ -195,7 +219,7 @@ final class Router: ObservableObject {
                 restoreCaption()
                 player.load(url: stream.url, start: start)
                 updateNowPlaying()
-                if start == 0, let tracking = stream.trackingURL {
+                if isNewPlayback, let tracking = stream.trackingURL {
                     try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: tracking, client: .web)
                 }
             } catch {
@@ -240,7 +264,8 @@ final class Router: ObservableObject {
         }
         nowPlayingSubscriptions = [
             player.$duration.sink { [weak self] _ in self?.updateNowPlaying() },
-            player.$isPaused.sink { [weak self] _ in self?.updateNowPlaying() }
+            player.$isPaused.sink { [weak self] _ in self?.updateNowPlaying() },
+            player.clock.$time.sink { [weak self] time in self?.playbackTick(time) }
         ]
     }
 
@@ -253,6 +278,50 @@ final class Router: ObservableObject {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: player.time,
             MPNowPlayingInfoPropertyPlaybackRate: player.isPaused ? 0.0 : player.speed
         ]
+    }
+}
+
+/// Where each video was left, on this device.
+enum WatchPositions {
+    private static let key = "watchPositions"
+    private static let minimumPosition = 10.0
+    private static let finishedFraction = 0.95
+    private static let saveEverySeconds = 5
+    // ponytail: grows by one number per video watched; prune by date if it ever gets large.
+    private static var positions = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+
+    static func start(for video: YouTubeVideo) -> Double {
+        positions[video.videoId] ?? 0
+    }
+
+    /// From 0 to 1, for the line on a thumbnail.
+    static func progress(of video: YouTubeVideo) -> Double? {
+        guard let position = positions[video.videoId], let duration = video.durationSeconds, duration > 0 else { return nil }
+        return min(position / Double(duration), 1)
+    }
+
+    static func save(videoId: String, time: Double, duration: Double) {
+        if time / duration >= finishedFraction {
+            guard positions.removeValue(forKey: videoId) != nil else { return }
+        } else if time >= minimumPosition, Int(time) % saveEverySeconds == 0, Int(positions[videoId] ?? -1) != Int(time) {
+            positions[videoId] = time
+        } else {
+            return
+        }
+        UserDefaults.standard.set(positions, forKey: key)
+    }
+}
+
+/// SponsorBlock's community list of sponsor segments. It receives the video ID, so it's opt-in.
+enum SponsorBlock {
+    static func segments(videoId: String) async -> [ClosedRange<Double>] {
+        guard let url = URL(string: "https://sponsor.ajay.app/api/skipSegments?videoID=\(videoId)&category=sponsor"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
+        return entries.compactMap { entry in
+            guard let segment = entry["segment"] as? [Double], segment.count == 2, segment[0] < segment[1] else { return nil }
+            return segment[0]...segment[1]
+        }
     }
 }
 

@@ -9,8 +9,10 @@ struct CaptionCue {
 
 enum CaptionLoader {
     /// YouTube's json3 format lists events with a start, a duration and text segments.
-    static func cues(for track: YouTubeCaptionTrack) async throws -> [CaptionCue] {
-        guard let base = track.baseURL, let url = URL(string: base + "&fmt=json3") else { return [] }
+    static func cues(for track: YouTubeCaptionTrack, translated: Bool = false) async throws -> [CaptionCue] {
+        let language = translated ? Locale.current.language.languageCode?.identifier : nil
+        let translation = language.map { "&tlang=\($0)" } ?? ""
+        guard let base = track.baseURL, let url = URL(string: base + "&fmt=json3" + translation) else { return [] }
         let (data, _) = try await URLSession.shared.data(from: url)
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let events = json?["events"] as? [[String: Any]] ?? []

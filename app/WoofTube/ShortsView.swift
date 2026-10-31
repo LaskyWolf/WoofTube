@@ -12,6 +12,9 @@ final class ShortsModel: ObservableObject {
     @Published private(set) var errorText: String?
     /// The Short attached to the player. Other pages show their thumbnail.
     @Published private(set) var playingId: String?
+    @Published private(set) var captions: [YouTubeCaptionTrack] = []
+    @Published private(set) var selectedCaption: String?
+    @Published private(set) var captionCues: [CaptionCue] = []
     let player: MpvPlayer
     private var nextToken: String?
     private var didLoadMore = false
@@ -26,9 +29,13 @@ final class ShortsModel: ObservableObject {
         playingId = video.videoId
         details = nil
         errorText = nil
+        captions = []
+        selectedCaption = nil
+        captionCues = []
         do {
             let stream = try await StreamLoader.load(videoId: video.videoId, maxHeight: 1080)
             guard !Task.isCancelled else { return }
+            captions = stream.captions
             player.load(url: stream.url)
         } catch {
             errorText = error.localizedDescription
@@ -38,16 +45,33 @@ final class ShortsModel: ObservableObject {
         await loadMoreIfNeeded(after: video)
     }
 
-    func toggleLike(_ video: YouTubeVideo) async {
-        guard let status = details?.likeStatus else { return }
-        let isLiked = status == "LIKE"
-        details?.likeStatus = isLiked ? "INDIFFERENT" : "LIKE"
+    func setLike(_ status: String, video: YouTubeVideo) async {
+        guard let previous = details?.likeStatus else { return }
+        details?.likeStatus = status
         let tube = InnerTubeClient.wooftube
         do {
-            _ = isLiked ? try await tube.unlike(videoId: video.videoId) : try await tube.like(videoId: video.videoId)
+            switch status {
+            case "LIKE": _ = try await tube.like(videoId: video.videoId)
+            case "DISLIKE": _ = try await tube.dislike(videoId: video.videoId)
+            default: _ = try await tube.unlike(videoId: video.videoId)
+            }
         } catch {
-            details?.likeStatus = status
+            details?.likeStatus = previous
             errorText = error.localizedDescription
+        }
+    }
+
+    func setSubscribed(_ value: Bool) {
+        details?.isSubscribed = value
+    }
+
+    func selectCaption(_ track: YouTubeCaptionTrack?) {
+        selectedCaption = track?.languageCode
+        captionCues = []
+        guard let track else { return }
+        Task {
+            let cues = (try? await CaptionLoader.cues(for: track)) ?? []
+            if selectedCaption == track.languageCode { captionCues = cues }
         }
     }
 
@@ -77,7 +101,11 @@ struct ShortsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var currentId: String?
     @State private var showsComments = false
+    @State private var showsDescription = false
     @State private var isBoosting = false
+
+    /// Time for the full screen cover to close before the channel sheet can open.
+    private static let coverCloseDelay = Duration.milliseconds(400)
 
     init(route: ShortsRoute, player: MpvPlayer) {
         _model = StateObject(wrappedValue: ShortsModel(shorts: route.videos, player: player))
@@ -115,6 +143,17 @@ struct ShortsView: View {
                 CommentsSheet(token: token)
             }
         }
+        .sheet(isPresented: $showsDescription) {
+            ScrollView {
+                Text(model.details?.description ?? "No description.")
+                    .font(.subheadline)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Layout.screenPadding)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .task(id: currentId) {
             guard let video = model.shorts.first(where: { $0.videoId == currentId }) else { return }
             await model.play(video)
@@ -129,7 +168,8 @@ struct ShortsView: View {
     }
 
     private func page(_ video: YouTubeVideo) -> some View {
-        ZStack(alignment: .bottom) {
+        let isCurrent = video.videoId == currentId
+        return ZStack(alignment: .bottom) {
             if video.videoId == model.playingId {
                 MpvVideoView(player: model.player)
                 VideoPoster(player: model.player, video: video)
@@ -143,39 +183,173 @@ struct ShortsView: View {
                     model.player.setBoosted(boosting)
                 }
             )
-            HStack(alignment: .bottom, spacing: Layout.rowSpacing) {
-                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                    if let channel = video.channelTitle {
-                        Text(channel).font(.subheadline.weight(.semibold))
-                    }
-                    Text(video.title).font(.subheadline).lineLimit(3)
-                    if video.videoId == currentId, let failure = model.errorText {
-                        Text(failure).font(.footnote).foregroundStyle(.red)
-                    }
-                }
-                .foregroundStyle(.white)
-                .shadow(radius: 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .allowsHitTesting(false)
-
-                VStack(spacing: Layout.chipSpacing) {
-                    let isLiked = video.videoId == currentId && model.details?.likeStatus == "LIKE"
-                    Button("Like", systemImage: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup") {
-                        Task { await model.toggleLike(video) }
-                    }
-                    Button("Comments", systemImage: "bubble.left") { showsComments = true }
-                    if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
-                        ShareLink(item: url) {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                }
-                .buttonStyle(PlayerPressStyle())
-                .labelStyle(PlayerGlyphLabelStyle(size: 24))
+            if isCurrent {
+                CaptionOverlay(clock: model.player.clock, cues: model.captionCues, isFullscreen: false)
+                    .padding(.bottom, 160)
             }
-            .padding(.horizontal, Layout.screenPadding)
-            .padding(.bottom, 48)
+            VStack(spacing: Layout.chipSpacing) {
+                HStack(alignment: .bottom, spacing: Layout.rowSpacing) {
+                    info(video, isCurrent: isCurrent)
+                    if isCurrent {
+                        rail(video)
+                    }
+                }
+                .padding(.horizontal, Layout.screenPadding)
+                if isCurrent {
+                    ShortsProgress(clock: model.player.clock, player: model.player)
+                }
+            }
+            .padding(.bottom, Layout.screenPadding)
         }
         .clipped()
+    }
+
+    private func info(_ video: YouTubeVideo, isCurrent: Bool) -> some View {
+        let details = isCurrent ? model.details : nil
+        return VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+            HStack(spacing: Layout.chipSpacing) {
+                Button {
+                    guard let id = details?.channelId ?? video.channelId else { return }
+                    router.shortsRoute = nil
+                    Task {
+                        try? await Task.sleep(for: Self.coverCloseDelay)
+                        router.openChannel(id)
+                    }
+                } label: {
+                    HStack(spacing: Layout.chipSpacing) {
+                        Avatar(url: details?.channelAvatar ?? video.channelAvatarURL, size: 32)
+                        Text(details?.channelTitle ?? video.channelTitle ?? "")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                if let details, let id = details.channelId {
+                    SubscribeButton(channelId: id, isSubscribed: details.isSubscribed) { model.setSubscribed($0) }
+                }
+            }
+            Button {
+                showsDescription = true
+            } label: {
+                Text(video.title)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            if isCurrent, let failure = model.errorText {
+                Text(failure).font(.footnote).foregroundStyle(.red)
+            }
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.5), radius: 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func rail(_ video: YouTubeVideo) -> some View {
+        let details = model.details
+        let isLiked = details?.likeStatus == "LIKE"
+        let isDisliked = details?.likeStatus == "DISLIKE"
+        return VStack(spacing: Layout.chipSpacing) {
+            Button {
+                Task { await model.setLike(isLiked ? "INDIFFERENT" : "LIKE", video: video) }
+            } label: {
+                RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like")
+            }
+            Button {
+                Task { await model.setLike(isDisliked ? "INDIFFERENT" : "DISLIKE", video: video) }
+            } label: {
+                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: "Dislike")
+            }
+            Button {
+                showsComments = true
+            } label: {
+                RailLabel(icon: "bubble.left", text: details?.commentCount ?? "Comments")
+            }
+            if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
+                ShareLink(item: url) {
+                    RailLabel(icon: "square.and.arrow.up", text: "Share")
+                }
+            }
+            ShortsMoreMenu(model: model, player: model.player, video: video, showsDescription: $showsDescription)
+        }
+        .buttonStyle(PlayerPressStyle())
+    }
+}
+
+private struct RailLabel: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .semibold))
+            Text(text)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.5), radius: 3)
+        .frame(minWidth: 52, minHeight: 44)
+        .contentShape(.rect)
+    }
+}
+
+private struct ShortsMoreMenu: View {
+    @ObservedObject var model: ShortsModel
+    @ObservedObject var player: MpvPlayer
+    let video: YouTubeVideo
+    @Binding var showsDescription: Bool
+    @EnvironmentObject private var router: Router
+
+    var body: some View {
+        Menu {
+            Button("Description", systemImage: "text.alignleft") { showsDescription = true }
+            Button("Save to Watch Later", systemImage: "clock") {
+                router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
+            }
+            Picker("Speed", systemImage: "gauge.with.dots.needle.67percent", selection: Binding(get: { player.speed }, set: { player.setSpeed($0) })) {
+                ForEach(Router.speeds, id: \.self) { speed in
+                    Text(speed == 1 ? "Normal" : speed.speedText).tag(speed)
+                }
+            }
+            .pickerStyle(.menu)
+            if !model.captions.isEmpty {
+                Menu("Captions", systemImage: "captions.bubble") {
+                    Button("Off") { model.selectCaption(nil) }
+                    ForEach(model.captions, id: \.languageCode) { track in
+                        Button(track.name ?? track.languageCode ?? "Unknown") { model.selectCaption(track) }
+                    }
+                }
+            }
+        } label: {
+            RailLabel(icon: "ellipsis", text: "More")
+        }
+    }
+}
+
+/// Its own view, so only the bar redraws as the time ticks.
+private struct ShortsProgress: View {
+    @ObservedObject var clock: PlayerClock
+    @ObservedObject var player: MpvPlayer
+    @State private var position = 0.0
+    @State private var isEditing = false
+
+    var body: some View {
+        let total = max(player.duration, 1)
+        ProgressBar(
+            progress: Binding(get: { isEditing ? position : clock.time / total }, set: { position = $0 }),
+            onEditingChanged: { editing in
+                if editing {
+                    position = clock.time / total
+                } else {
+                    player.seek(to: position * total)
+                }
+                isEditing = editing
+            }
+        )
     }
 }

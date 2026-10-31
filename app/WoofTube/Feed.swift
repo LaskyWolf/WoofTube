@@ -51,6 +51,21 @@ struct Collaborator: Hashable, Identifiable {
     }
 }
 
+/// What the feed knows about a video beyond what SwiftyTube parses.
+struct VideoExtras {
+    var feedback: [FeedbackAction] = []
+    var collaborators: [Collaborator] = []
+    /// From 0 to 1. YouTube only sends this when signed in.
+    var progress: Double?
+    var isUpcoming = false
+}
+
+struct PollChoice {
+    let title: String
+    let action: String?
+    let isSelected: Bool
+}
+
 struct CommunityPost {
     let id: String
     let author: String
@@ -62,11 +77,14 @@ struct CommunityPost {
     let comments: String?
     let images: [String]
     let video: YouTubeVideo?
-    let pollChoices: [String]
+    let pollChoices: [PollChoice]
+    let likeAction: String?
+    let unlikeAction: String?
+    let isLiked: Bool
 }
 
 enum FeedItem: Identifiable {
-    case video(YouTubeVideo, feedback: [FeedbackAction], collaborators: [Collaborator])
+    case video(YouTubeVideo, VideoExtras)
     case shorts(title: String?, [YouTubeVideo])
     case shelf(title: String?, [YouTubeVideo])
     case post(CommunityPost)
@@ -75,7 +93,7 @@ enum FeedItem: Identifiable {
 
     var id: String {
         switch self {
-        case .video(let video, _, _): return video.videoId
+        case .video(let video, _): return video.videoId
         case .shorts(_, let videos): return "shorts-" + (videos.first?.videoId ?? "")
         case .shelf(_, let videos): return "shelf-" + (videos.first?.videoId ?? "")
         case .post(let post): return post.id
@@ -170,7 +188,13 @@ enum FeedParser {
             if video.isShort {
                 items.append(.shorts(title: nil, [video]))
             } else {
-                items.append(.video(video, feedback: feedbackActions(in: dict), collaborators: Collaborator.all(in: dict)))
+                let percent = (JSON.first("percentDurationWatched", in: dict) ?? JSON.first("startPercent", in: dict)) as? Double
+                items.append(.video(video, VideoExtras(
+                    feedback: feedbackActions(in: dict),
+                    collaborators: Collaborator.all(in: dict),
+                    progress: percent.map { $0 / 100 },
+                    isUpcoming: JSON.first("upcomingEventData", in: dict) != nil
+                )))
             }
         } else if let playlist = YouTubeFeedParser.playlists(in: dict).first {
             items.append(.playlist(playlist))
@@ -200,6 +224,7 @@ enum FeedParser {
         let imageNodes = multiImages?["images"] as? [Any] ?? [attachment].compactMap { $0 }
         let poll = JSON.first("pollRenderer", in: attachment) as? [String: Any]
         let choices = poll?["choices"] as? [[String: Any]] ?? []
+        let likeButton = JSON.first("toggleButtonRenderer", in: JSON.first("likeButton", in: post["actionButtons"])) as? [String: Any]
         return CommunityPost(
             id: id,
             author: JSON.text(post["authorText"]) ?? "",
@@ -211,7 +236,14 @@ enum FeedParser {
             comments: JSON.text(JSON.first("text", in: JSON.first("replyButton", in: post["actionButtons"]))),
             images: imageNodes.compactMap { JSON.lastThumbnail(JSON.first("backstageImageRenderer", in: $0)) },
             video: (attachment as? [String: Any]).flatMap { YouTubeFeedParser.videos(in: $0).first },
-            pollChoices: choices.compactMap { JSON.text($0["text"]) }
+            pollChoices: choices.compactMap { choice in
+                JSON.text(choice["text"]).map {
+                    PollChoice(title: $0, action: JSON.string("action", in: choice["selectServiceEndpoint"]), isSelected: choice["selected"] as? Bool ?? false)
+                }
+            },
+            likeAction: JSON.string("action", in: likeButton?["defaultServiceEndpoint"]),
+            unlikeAction: JSON.string("action", in: likeButton?["toggledServiceEndpoint"]),
+            isLiked: likeButton?["isToggled"] as? Bool ?? false
         )
     }
 }

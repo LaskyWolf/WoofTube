@@ -114,6 +114,9 @@ private struct ProfileView: View {
     @EnvironmentObject private var router: Router
     @State private var confirmsSignOut = false
 
+    private static let notificationSettings = URL(string: "https://www.youtube.com/account_notifications")!
+    private static let accountSettings = URL(string: "https://myaccount.google.com")!
+
     var body: some View {
         List {
             Section {
@@ -126,6 +129,19 @@ private struct ProfileView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .listRowBackground(Color.clear)
+            }
+            if let email = session.account?.email {
+                Section {
+                    LabeledContent("Email", value: email)
+                }
+            }
+            Section {
+                Link(destination: Self.notificationSettings) {
+                    Label("Notification Settings", systemImage: "bell.badge")
+                }
+                Link(destination: Self.accountSettings) {
+                    Label("Google Account", systemImage: "person.crop.circle")
+                }
             }
             Section {
                 Button("Sign Out", role: .destructive) { confirmsSignOut = true }
@@ -159,6 +175,13 @@ private struct PlayerSettingsView: View {
                 }
             } footer: {
                 Text("Autoplay starts the first Up Next video when one ends.")
+            }
+            Section {
+                Toggle(isOn: $router.skipsSponsors) {
+                    Label("Skip Sponsors", systemImage: "forward.end")
+                }
+            } footer: {
+                Text("Uses SponsorBlock's community list, which receives the ID of each video you watch.")
             }
         }
         .navigationTitle("Player")

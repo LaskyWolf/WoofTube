@@ -2,7 +2,16 @@ import SwiftUI
 import SwiftyTube
 
 struct LibraryView: View {
+    @EnvironmentObject private var router: Router
     @State private var playlists: [YouTubePlaylist] = []
+    @State private var isCreating = false
+    @State private var newTitle = ""
+    @State private var playlistToDelete: YouTubePlaylist?
+
+    private func loadPlaylists() async {
+        let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
+        playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,14 +37,32 @@ struct LibraryView: View {
                         } label: {
                             MenuRowLabel(icon: "hand.thumbsup", title: "Liked Videos")
                         }
+                        Divider()
+                        NavigationLink {
+                            FeedList(source: .browse("FEchannels"), isCompact: true)
+                                .navigationTitle("Channels")
+                                .navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            MenuRowLabel(icon: "person.2", title: "Channels")
+                        }
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, Layout.screenPadding)
                     .padding(.top, Layout.chipSpacing)
                     .padding(.bottom, Layout.sectionGap)
 
-                    if !playlists.isEmpty {
+                    HStack {
                         SectionTitle(title: "Playlists")
+                        Spacer()
+                        Button("New Playlist", systemImage: "plus") {
+                            newTitle = ""
+                            isCreating = true
+                        }
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .padding(.trailing, Layout.chipSpacing)
+                    }
+                    if !playlists.isEmpty {
                         LazyVStack(spacing: 0) {
                             ForEach(playlists, id: \.playlistId) { playlist in
                                 NavigationLink {
@@ -45,15 +72,41 @@ struct LibraryView: View {
                                 }
                                 .buttonStyle(RowPressStyle())
                                 .padding(.horizontal, Layout.screenPadding)
+                                .contextMenu {
+                                    Button("Delete Playlist", systemImage: "trash", role: .destructive) {
+                                        playlistToDelete = playlist
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
             .tabRoot(title: "Library")
-            .task {
-                let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
-                playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+            .task { await loadPlaylists() }
+            .alert("New Playlist", isPresented: $isCreating) {
+                TextField("Title", text: $newTitle)
+                Button("Cancel", role: .cancel) {}
+                Button("Create") {
+                    let title = newTitle
+                    router.run {
+                        _ = try await InnerTubeClient.wooftube.createPlaylist(title: title)
+                        await loadPlaylists()
+                    }
+                }
+            }
+            .confirmationDialog(
+                "Delete \"\(playlistToDelete?.title ?? "")\"?",
+                isPresented: Binding(get: { playlistToDelete != nil }, set: { if !$0 { playlistToDelete = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    guard let id = playlistToDelete?.playlistId else { return }
+                    router.run {
+                        _ = try await InnerTubeClient.wooftube.deletePlaylist(playlistId: id)
+                        await loadPlaylists()
+                    }
+                }
             }
         }
     }
@@ -70,7 +123,7 @@ struct PlaylistPage: View {
 
     private var videos: [YouTubeVideo] {
         model.items.compactMap {
-            if case .video(let video, _, _) = $0 { return video }
+            if case .video(let video, _) = $0 { return video }
             return nil
         }
     }

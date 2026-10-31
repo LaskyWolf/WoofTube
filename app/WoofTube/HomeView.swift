@@ -311,8 +311,8 @@ struct FeedRows: View {
     @ViewBuilder
     private func row(_ item: FeedItem) -> some View {
         switch item {
-        case .video(let video, let feedback, let collaborators):
-            VideoButton(video: video, feedback: feedback, collaborators: collaborators, isCompact: isCompact) { model.remove(item) }
+        case .video(let video, let extras):
+            VideoButton(video: video, extras: extras, isCompact: isCompact) { model.remove(item) }
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, isCompact ? Layout.rowPadding : Layout.rowSpacing)
         case .shorts(let title, let videos):
@@ -350,8 +350,7 @@ struct FeedRows: View {
 
 struct VideoButton: View {
     let video: YouTubeVideo
-    var feedback: [FeedbackAction] = []
-    var collaborators: [Collaborator] = []
+    var extras = VideoExtras()
     var isCompact = false
     var onRemove: (() -> Void)?
     @EnvironmentObject private var router: Router
@@ -361,19 +360,19 @@ struct VideoButton: View {
             router.play(video)
         } label: {
             if isCompact {
-                CompactVideoRow(video: video)
+                CompactVideoRow(video: video, extras: extras)
             } else {
-                VideoRow(video: video, collaborators: collaborators)
+                VideoRow(video: video, extras: extras)
             }
         }
         .buttonStyle(RowPressStyle())
-        .videoMenu(video, feedback: feedback, collaborators: collaborators, onRemove: onRemove)
+        .videoMenu(video, feedback: extras.feedback, collaborators: extras.collaborators, onRemove: onRemove)
     }
 }
 
 struct VideoRow: View {
     let video: YouTubeVideo
-    var collaborators: [Collaborator] = []
+    var extras = VideoExtras()
 
     private var details: String {
         [video.channelTitle, video.viewCountText, video.publishedTimeText]
@@ -384,9 +383,11 @@ struct VideoRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
+                .overlay { WatchProgressLine(video: video, extras: extras) }
+                .clipShape(.rect(cornerRadius: Layout.tileRadius))
             HStack(alignment: .top, spacing: Layout.rowSpacing) {
-                if collaborators.count > 1 {
-                    AvatarStack(urls: collaborators.map(\.avatar), size: 36)
+                if extras.collaborators.count > 1 {
+                    AvatarStack(urls: extras.collaborators.map(\.avatar), size: 36)
                 } else if let avatar = video.channelAvatarURL {
                     Avatar(url: avatar, size: 36)
                 }
@@ -405,6 +406,10 @@ struct VideoRow: View {
                     Text("LIVE")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tint)
+                } else if extras.isUpcoming {
+                    Text("UPCOMING")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 } else if let seconds = video.durationSeconds, seconds > 0 {
                     Text(Double(seconds).clockText)
                         .font(.caption.monospacedDigit())
@@ -416,14 +421,37 @@ struct VideoRow: View {
     }
 }
 
+/// How much of the video was watched, along the bottom of its thumbnail.
+private struct WatchProgressLine: View {
+    let video: YouTubeVideo
+    let extras: VideoExtras
+
+    var body: some View {
+        if let progress = extras.progress ?? WatchPositions.progress(of: video) {
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Rectangle()
+                        .fill(.tint)
+                        .frame(width: geometry.size.width * progress, height: 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+    }
+}
+
 /// Woof Music's playlist row, with a 16:9 cover.
 struct CompactVideoRow: View {
     let video: YouTubeVideo
+    var extras = VideoExtras()
 
     var body: some View {
         HStack(spacing: Layout.rowSpacing) {
             CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
                 .frame(width: 112, height: 63)
+                .overlay { WatchProgressLine(video: video, extras: extras) }
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(video.title)
@@ -545,6 +573,14 @@ private struct PostRow: View {
     let post: CommunityPost
     @EnvironmentObject private var router: Router
     @State private var isExpanded = false
+    @State private var isLiked: Bool?
+    @State private var votedChoice: String?
+
+    private var showsLiked: Bool { isLiked ?? post.isLiked }
+
+    private func perform(_ action: String) {
+        router.run { _ = try await YouTubeAPI.post("comment/perform_comment_action", body: ["actions": [action]]) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
@@ -574,16 +610,39 @@ private struct PostRow: View {
             if let video = post.video {
                 VideoButton(video: video)
             }
-            ForEach(post.pollChoices, id: \.self) { choice in
-                Text(choice)
+            ForEach(post.pollChoices, id: \.title) { choice in
+                let isVoted = votedChoice == choice.title || (votedChoice == nil && choice.isSelected)
+                Button {
+                    guard let action = choice.action else { return }
+                    votedChoice = choice.title
+                    perform(action)
+                } label: {
+                    HStack {
+                        Text(choice.title).multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        if isVoted {
+                            Image(systemName: "checkmark").foregroundStyle(.tint)
+                        }
+                    }
                     .font(.subheadline)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Layout.rowSpacing)
                     .background(Color(.secondarySystemFill), in: .rect(cornerRadius: Layout.tileRadius))
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
             }
             HStack(spacing: Layout.screenPadding) {
                 if let likes = post.likes {
-                    Label(likes, systemImage: "hand.thumbsup")
+                    Button {
+                        guard let action = showsLiked ? post.unlikeAction : post.likeAction else { return }
+                        isLiked = !showsLiked
+                        perform(action)
+                    } label: {
+                        Label(likes, systemImage: showsLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
                 }
                 if let comments = post.comments {
                     Label(comments, systemImage: "bubble.left")

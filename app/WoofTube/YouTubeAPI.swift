@@ -95,6 +95,12 @@ enum YouTubeAPI {
 }
 
 /// Everything on the video page that SwiftyTube's watch parser leaves out.
+struct Chapter: Hashable {
+    let title: String
+    let start: Double
+    let thumbnail: String?
+}
+
 struct WatchDetails {
     var description: String?
     var metadata: String?
@@ -109,6 +115,8 @@ struct WatchDetails {
     var related: [YouTubeVideo] = []
     var commentsToken: String?
     var collaborators: [Collaborator] = []
+    var commentCount: String?
+    var chapters: [Chapter] = []
 
     init(json: [String: Any], videoId: String) {
         let secondary = JSON.first("videoSecondaryInfoRenderer", in: json)
@@ -135,6 +143,18 @@ struct WatchDetails {
         likeStatus = JSON.string("likeStatus", in: likeButton) ?? "INDIFFERENT"
 
         let watch = YouTubeWatchParser.watch(in: json, videoId: videoId)
+        let panels = json["engagementPanels"] as? [[String: Any]] ?? []
+        let commentsPanel = panels.first { JSON.string("panelIdentifier", in: $0) == "engagement-panel-comments-section" }
+        commentCount = JSON.text(JSON.first("contextualInfo", in: commentsPanel))
+        let markers = JSON.first("markersMap", in: json) as? [[String: Any]] ?? []
+        let chapterMap = markers.first { $0["key"] as? String == "DESCRIPTION_CHAPTERS" }
+        let chapterList = JSON.first("chapters", in: chapterMap) as? [[String: Any]] ?? []
+        chapters = chapterList.compactMap { item in
+            guard let chapter = item["chapterRenderer"] as? [String: Any],
+                  let title = JSON.text(chapter["title"]),
+                  let milliseconds = chapter["timeRangeStartMillis"] as? Double else { return nil }
+            return Chapter(title: title, start: milliseconds / 1000, thumbnail: JSON.lastThumbnail(chapter["thumbnail"]))
+        }
         related = watch.related
         commentsToken = watch.commentsContinuation
     }
