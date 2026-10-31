@@ -146,8 +146,6 @@ struct ShortsView: View {
     @State private var lastSeek = 0.0
     @State private var pullDistance: CGFloat = 0
 
-    /// Time for the full screen cover to close before the channel sheet can open.
-    private static let coverCloseDelay = Duration.milliseconds(400)
     private static let commentAreaHeight: CGFloat = 82
     /// Seconds the scrub must move before the video seeks again.
     private static let seekStep = 0.25
@@ -307,11 +305,7 @@ struct ShortsView: View {
             HStack(spacing: Layout.chipSpacing) {
                 Button {
                     guard let id = details?.channelId ?? video.channelId else { return }
-                    router.minimizeShorts()
-                    Task {
-                        try? await Task.sleep(for: Self.coverCloseDelay)
-                        router.openChannel(id)
-                    }
+                    router.openChannelPage(id)
                 } label: {
                     HStack(spacing: Layout.chipSpacing) {
                         Avatar(url: details?.channelAvatar ?? video.channelAvatarURL, size: 32)

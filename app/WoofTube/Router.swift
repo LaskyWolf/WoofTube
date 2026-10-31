@@ -6,6 +6,12 @@ struct ChannelRoute: Identifiable {
     let id: String
 }
 
+/// A channel opened as a real page, pushed in the tab it was opened from.
+struct ChannelPageRoute: Hashable, Identifiable {
+    let id: String
+    let tab: AppTab
+}
+
 struct ShortsRoute: Identifiable {
     let model: ShortsModel
     var id: ObjectIdentifier { ObjectIdentifier(model) }
@@ -27,6 +33,8 @@ final class Router: ObservableObject {
     @Published var isWatchPageOnScreen = false
     @Published private(set) var queue: [YouTubeVideo] = []
     @Published var channelRoute: ChannelRoute?
+    @Published var channelPage: ChannelPageRoute?
+    @Published var selectedTab = AppTab.home
     /// The open Shorts page. With `shortsModel` set and this nil, the Short is in the floating card.
     @Published var shortsRoute: ShortsRoute?
     @Published private(set) var shortsModel: ShortsModel?
@@ -245,8 +253,18 @@ final class Router: ObservableObject {
         }
     }
 
+    /// A sheet, for a channel among many, as on the Home feed.
     func openChannel(_ channelId: String) {
         channelRoute = ChannelRoute(id: channelId)
+    }
+
+    /// The whole page, when the channel is what the person is looking at.
+    /// The video carries on in the floating card.
+    func openChannelPage(_ channelId: String) {
+        channelRoute = nil
+        isExpanded = false
+        shortsRoute = nil
+        channelPage = ChannelPageRoute(id: channelId, tab: selectedTab)
     }
 
     /// Runs a menu action. The haptic confirms it, and a failure shows as an alert.
@@ -456,7 +474,7 @@ enum WatchPositions {
 
     private static let key = "watchPositions"
     private static let minimumPosition = 10.0
-    private static let finishedFraction = 0.95
+    static let finishedFraction = 0.95
     private static let saveEverySeconds = 5
     // ponytail: grows by one number per video watched; prune by date if it ever gets large.
     private static var positions = ProfileStorage.defaults.dictionary(forKey: key) as? [String: Double] ?? [:]

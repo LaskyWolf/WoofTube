@@ -4,6 +4,8 @@ import SwiftyTube
 enum FeedSource: Hashable {
     case browse(String, params: String? = nil)
     case search(String, params: String? = nil)
+    /// A search inside one page, such as a channel or the watch history.
+    case scoped(browseId: String, params: String? = nil, query: String)
     case continuation(String)
 
     func fetch() async throws -> [String: Any] {
@@ -13,6 +15,10 @@ enum FeedSource: Hashable {
             return try await tube.browse(browseId: id, params: params)
         case .search(let query, let params):
             return try await tube.search(query: query, params: params)
+        case .scoped(let browseId, let params, let query):
+            var body: [String: Any] = ["browseId": browseId, "query": query]
+            if let params { body["params"] = params }
+            return try await YouTubeAPI.post("browse", body: body)
         case .continuation(let token):
             return try await tube.browse(continuation: token)
         }
@@ -79,6 +85,48 @@ final class FeedModel: ObservableObject {
 
     func remove(_ item: FeedItem) {
         items.removeAll { $0.id == item.id }
+    }
+
+    /// The newest posts from these channels. YouTube has no feed of them, so this reads each channel's tab.
+    func loadPosts(ofChannels ids: [String]) async {
+        struct Page: @unchecked Sendable { let json: [String: Any]? }
+        isLoading = true
+        defer { isLoading = false }
+        var pages: [Page] = []
+        for start in stride(from: 0, to: ids.count, by: Self.postRequestsAtOnce) {
+            let group = ids[start..<min(start + Self.postRequestsAtOnce, ids.count)]
+            pages += await withTaskGroup(of: Page.self) { tasks in
+                for id in group {
+                    tasks.addTask { Page(json: try? await FeedSource.browse(id, params: Self.postsTab).fetch()) }
+                }
+                return await tasks.reduce(into: [Page]()) { $0.append($1) }
+            }
+        }
+        // Parsed here, because the parser keeps shared notes for Diagnostics.
+        let found = pages.compactMap(\.json).flatMap { FeedParser.items(in: $0).prefix(Self.postsPerChannel) }
+        items = found
+            .filter { if case .post = $0 { return true } else { return false } }
+            .sorted { Self.age(of: $0) < Self.age(of: $1) }
+        nextToken = nil
+        errorText = nil
+    }
+
+    private static let postsTab = "EgVwb3N0c_IGBAoCSgA%3D"
+    private static let postRequestsAtOnce = 6
+    private static let postsPerChannel = 3
+
+    private static func age(of item: FeedItem) -> Int {
+        guard case .post(let post) = item else { return .max }
+        return secondsAgo(post.time ?? "")
+    }
+
+    /// Reads YouTube's "3 hours ago". Text it can't read sorts last.
+    static func secondsAgo(_ text: String) -> Int {
+        let units = [("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800), ("month", 2592000), ("year", 31536000)]
+        let words = text.lowercased().split(separator: " ")
+        guard let count = words.compactMap({ Int($0) }).first,
+              let unit = units.first(where: { unit in words.contains { $0.hasPrefix(unit.0) } }) else { return .max }
+        return count * unit.1
     }
 
     /// Every page of a playlist.
@@ -171,7 +219,7 @@ struct TabHeader: View {
 
 extension View {
     /// For the first screen of a tab, which shows TabHeader instead of a navigation bar.
-    func tabRoot(title: String, onAdd: (() -> Void)? = nil) -> some View {
+    func tabRoot(title: String, tab: AppTab, onAdd: (() -> Void)? = nil) -> some View {
         safeAreaBar(edge: .top, spacing: 0) {
             TabHeader(title: title, onAdd: onAdd).background(Color(.systemBackground))
         }
@@ -182,6 +230,7 @@ extension View {
                 case .settings: SettingsView()
                 }
             }
+            .modifier(ChannelPageDestination(tab: tab))
     }
 }
 
@@ -236,7 +285,7 @@ struct HomeView: View {
                     FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
                 }
             }
-            .tabRoot(title: "Home")
+            .tabRoot(title: "Home", tab: .home)
             .task {
                 await session.refreshUnseenNotifications()
                 if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.home)) }
@@ -265,18 +314,113 @@ struct HomeView: View {
 }
 
 struct SubsView: View {
+    private enum Filter: String, CaseIterable {
+        case videos = "Videos"
+        case shorts = "Shorts"
+        case posts = "Posts"
+    }
+
     @StateObject private var model = FeedModel()
+    @StateObject private var posts = FeedModel()
+    @ObservedObject private var subscriptions = Subscriptions.shared
+    @State private var filter: Filter?
+
+    /// A filter can leave a page empty, so it looks a little further before giving up.
+    private static let pagesToSearch = 3
+    // ponytail: only this many channels get their posts read, one request each. Raise it if posts go missing.
+    private static let channelsWithPosts = 30
+
+    private var keeps: ((FeedItem) -> Bool)? {
+        switch filter {
+        case .videos:
+            return {
+                switch $0 {
+                case .video, .shelf: return true
+                default: return false
+                }
+            }
+        case .shorts:
+            return { if case .shorts = $0 { return true } else { return false } }
+        case .posts, nil:
+            return nil
+        }
+    }
 
     var body: some View {
         NavigationStack {
-            FeedContent(model: model, retry: { await model.load(.browse(YouTubeFeeds.subscriptions)) }) {
-                EmptyView()
+            FeedContent(model: filter == .posts ? posts : model, retry: reload, keeps: keeps) {
+                FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
+                    let tapped = Filter(rawValue: title)
+                    filter = filter == tapped ? nil : tapped
+                }
             }
-            .tabRoot(title: "Subs")
+            .tabRoot(title: "Subs", tab: .subs)
             .task {
                 if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.subscriptions)) }
                 Subscriptions.shared.add(model.videos.compactMap(\.channelId))
             }
+            .task(id: filter) {
+                if filter == .posts {
+                    if posts.items.isEmpty { await loadPosts() }
+                } else if let keeps {
+                    for _ in 0..<Self.pagesToSearch where !model.items.contains(where: keeps) {
+                        guard let last = model.items.last else { break }
+                        await model.loadMore(after: last)
+                    }
+                }
+            }
+        }
+    }
+
+    private func reload() async {
+        if filter == .posts {
+            await loadPosts()
+        } else {
+            await model.load(.browse(YouTubeFeeds.subscriptions))
+        }
+    }
+
+    /// Channels that uploaded lately come first, because the list has a limit.
+    private func loadPosts() async {
+        var seen = Set<String>()
+        let recent = model.videos.compactMap(\.channelId)
+        let ids = (recent + subscriptions.channels.compactMap(\.channelId)).filter { seen.insert($0).inserted }
+        await posts.loadPosts(ofChannels: Array(ids.prefix(Self.channelsWithPosts)))
+    }
+}
+
+/// A list with a search field for one page: the whole list until something is searched, if it has one.
+struct ScopedSearchPage: View {
+    let title: String
+    let prompt: String
+    let browseId: String
+    var params: String?
+    /// The watch history lists everything. A channel starts empty, as its own page already lists it.
+    var listsWithoutQuery = false
+    @StateObject private var model = FeedModel()
+    @State private var text = ""
+    @State private var submitted = ""
+
+    private var source: FeedSource {
+        submitted.isEmpty ? .browse(browseId) : .scoped(browseId: browseId, params: params, query: submitted)
+    }
+
+    var body: some View {
+        Group {
+            if submitted.isEmpty, !listsWithoutQuery {
+                ContentUnavailableView(prompt, systemImage: "magnifyingglass")
+            } else {
+                FeedContent(model: model, retry: { await model.load(source) }, isCompact: true) { EmptyView() }
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: prompt)
+        .onSubmit(of: .search) { submitted = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .onChange(of: text) { if text.isEmpty { submitted = "" } }
+        .task(id: submitted) {
+            if !submitted.isEmpty || listsWithoutQuery { await model.load(source) }
         }
     }
 }
@@ -301,6 +445,8 @@ struct FeedContent<Header: View>: View {
     @ObservedObject var model: FeedModel
     let retry: () async -> Void
     var isCompact = false
+    /// Leaves out what a filter doesn't want.
+    var keeps: ((FeedItem) -> Bool)?
     @ViewBuilder let header: () -> Header
 
     var body: some View {
@@ -310,7 +456,7 @@ struct FeedContent<Header: View>: View {
                 if model.items.isEmpty {
                     emptyState
                 }
-                FeedRows(model: model, isCompact: isCompact)
+                FeedRows(model: model, isCompact: isCompact, keeps: keeps)
             }
         }
         .refreshable { await retry() }
@@ -341,12 +487,17 @@ struct FeedRows: View {
     var editablePlaylistId: String?
     /// Set on a playlist, so a tapped video carries on with the ones after it.
     var playlistTitle: String?
+    var keeps: ((FeedItem) -> Bool)?
     @EnvironmentObject private var router: Router
 
     var body: some View {
-        ForEach(model.items) { item in
+        let shown = keeps.map { model.items.filter($0) } ?? model.items
+        ForEach(shown) { item in
             row(item)
-                .task { await model.loadMore(after: item) }
+                .task {
+                    // The next page follows the last row shown, which a filter can move up.
+                    if item.id == shown.last?.id, let last = model.items.last { await model.loadMore(after: last) }
+                }
         }
     }
 
@@ -394,7 +545,7 @@ struct FeedRows: View {
         case .channel(let channel):
             if let id = channel.channelId {
                 Button {
-                    router.openChannel(id)
+                    router.openChannelPage(id)
                 } label: {
                     ChannelRow(channel: channel)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -22,7 +22,9 @@ struct PlayerOverlay: View {
     private static let miniMargin: CGFloat = 12
     /// Keeps the miniplayer just above the tab bar, which sits outside this view's safe area.
     private static let tabBarClearance: CGFloat = 58
-    private static let handleSize = CGSize(width: 44, height: 72)
+    private static let handleSize = CGSize(width: 44, height: 96)
+    /// The rest of the handle stays off screen, so it reads as attached to the edge.
+    private static let handleVisibleWidth: CGFloat = 24
 
     /// The Short in the card. The card stays under its page, because the page zooms out of it and back in.
     private var short: ShortsModel? { router.shortsModel }
@@ -63,8 +65,7 @@ struct PlayerOverlay: View {
             if isDocked {
                 handle
                     .offset(
-                        // Part of it stays off screen, so it reads as attached to the edge.
-                        x: isMiniLeading ? -Layout.chipSpacing : screen.width - Self.handleSize.width + Layout.chipSpacing,
+                        x: isMiniLeading ? Self.handleVisibleWidth - Self.handleSize.width : screen.width - Self.handleVisibleWidth,
                         y: mini.y + (miniCardHeight - Self.handleSize.height) / 2
                     )
                     .transition(.opacity)
@@ -122,16 +123,24 @@ struct PlayerOverlay: View {
     }
 
     private var handle: some View {
-        Button("Show Video", systemImage: isMiniLeading ? "chevron.right" : "chevron.left") {
+        Button {
             isDocked = false
+        } label: {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(white: 0.19))
+                .overlay(alignment: .leading) {
+                    HandleChevron()
+                        .stroke(Color(white: 0.75), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                        .frame(width: 8, height: 26)
+                        .padding(.leading, 8)
+                }
+                .frame(width: Self.handleSize.width, height: Self.handleSize.height)
+                .scaleEffect(x: isMiniLeading ? -1 : 1)
+                // Reaches 44 pt, using the space next to the visible part.
+                .contentShape(Rectangle().inset(by: -Layout.rowSpacing))
         }
-        .labelStyle(.iconOnly)
-        .font(.system(size: 15, weight: .bold))
-        .foregroundStyle(.primary)
         .buttonStyle(.plain)
-        .frame(width: Self.handleSize.width, height: Self.handleSize.height)
-        .contentShape(.capsule)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .accessibilityLabel("Show Video")
     }
 
     /// Snaps to the corner the flick is heading for. A flick past the screen's side hides the card.
@@ -144,6 +153,17 @@ struct PlayerOverlay: View {
             isDocked = endX < 0 || endX > screen.width
             dragOffset = .zero
         }
+    }
+}
+
+/// Points at the side of the screen the card comes back from, like the system's Picture in Picture.
+private struct HandleChevron: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        return path
     }
 }
 
@@ -196,6 +216,14 @@ struct WatchPage: View {
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             Orientation.unlockIfHeldUpright()
         }
+        // The phone can lock again while paused, like every other video app.
+        .onChange(of: isFullscreen) { _, fullscreen in
+            UIApplication.shared.isIdleTimerDisabled = fullscreen && !router.player.isPaused
+        }
+        .onReceive(router.player.$isPaused.removeDuplicates()) { paused in
+            UIApplication.shared.isIdleTimerDisabled = isFullscreen && !paused
+        }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
     private var video: some View {
@@ -536,7 +564,7 @@ private struct CardEdgeProgress: View {
     @ObservedObject var clock: PlayerClock
     let duration: Double
     let radius: CGFloat
-    private static let lineHeight: CGFloat = 3
+    private static let lineHeight: CGFloat = 5
 
     var body: some View {
         GeometryReader { geometry in
@@ -830,10 +858,6 @@ private struct PlayerControls: View {
     private var controls: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                // The handle only shows outside full screen.
-                if isFullscreen {
-                    Button("Close", systemImage: "chevron.down") { router.isExpanded = false }
-                }
                 Spacer()
                 if sleepTimer.isActive {
                     Button("Sleep Timer", systemImage: "moon.zzz.fill") { showsSleepTimer = true }
@@ -1139,7 +1163,7 @@ private struct WatchDetailsView: View {
                         ForEach(details.collaborators) { creator in
                             Menu {
                                 Button("Open Channel", systemImage: "person.crop.circle") {
-                                    router.openChannel(creator.channelId)
+                                    router.openChannelPage(creator.channelId)
                                 }
                                 Button("Subscribe", systemImage: "bell") {
                                     router.run { _ = try await InnerTubeClient.wooftube.subscribe(channelId: creator.channelId) }
@@ -1158,7 +1182,7 @@ private struct WatchDetailsView: View {
                     .buttonStyle(.plain)
                 } else {
                     Button {
-                        router.openChannel(id)
+                        router.openChannelPage(id)
                     } label: {
                         channelLabel(details)
                     }
@@ -1435,8 +1459,8 @@ extension View {
 struct SubscribeButton: View {
     let channelId: String
     let isSubscribed: Bool
-    /// Woof Music's round icon, for the channel page's header.
-    var isCompact = false
+    /// Spelled out with an icon and as wide as it can be, for the channel page's header.
+    var isLarge = false
     let onChange: (Bool) -> Void
     @EnvironmentObject private var settings: AppSettings
 
@@ -1444,11 +1468,15 @@ struct SubscribeButton: View {
         Button {
             toggle()
         } label: {
-            if isCompact {
-                HeaderRoundIcon(
-                    systemImage: isSubscribed ? "person.fill.checkmark" : "person.badge.plus",
-                    tint: isSubscribed ? settings.accentColor : .primary
-                )
+            if isLarge {
+                Label(isSubscribed ? "Subscribed" : "Subscribe", systemImage: isSubscribed ? "person.fill.checkmark" : "person.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(isSubscribed ? Color.primary : Color.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .glassEffect(isSubscribed ? Glass.regular : Glass.regular.tint(settings.accentColor), in: .capsule)
+                    .contentShape(.capsule)
             } else {
                 Text(isSubscribed ? "Subscribed" : "Subscribe")
                     .font(.subheadline.weight(.semibold))
@@ -1495,8 +1523,6 @@ struct SubscribeButton: View {
 struct ChannelView: View {
     let channelId: String
 
-    @EnvironmentObject private var router: Router
-    @EnvironmentObject private var settings: AppSettings
     @StateObject private var model = FeedModel()
     @State private var page: YouTubeChannelPage?
     @State private var isSubscribed = false
@@ -1508,6 +1534,8 @@ struct ChannelView: View {
 
     private static let shownTabs: Set<String> = ["videos", "playlists", "posts", "community"]
     private static let avatarSize: CGFloat = 104
+    /// The code channel pages use for their search tab.
+    private static let searchTab = "EgZzZWFyY2jyBgQKAloA"
 
     private var tabs: [YouTubeChannelTab] {
         page?.tabs.filter { tab in
@@ -1595,18 +1623,13 @@ struct ChannelView: View {
                     .lineLimit(1)
             }
         } buttons: {
-            SubscribeButton(channelId: channelId, isSubscribed: isSubscribed, isCompact: true) { isSubscribed = $0 }
-            let all = (featured.map { [$0] } ?? []) + videos
-            if !all.isEmpty {
-                Button { router.playAll(all, shuffled: true) } label: {
-                    HeaderRoundIcon(systemImage: "shuffle")
-                }
-                .accessibilityLabel("Shuffle")
-                Button { router.playAll(all) } label: {
-                    HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
-                }
-                .accessibilityLabel("Play All")
+            SubscribeButton(channelId: channelId, isSubscribed: isSubscribed, isLarge: true) { isSubscribed = $0 }
+            NavigationLink {
+                ScopedSearchPage(title: channel?.title ?? "Channel", prompt: "Search this channel", browseId: channelId, params: Self.searchTab)
+            } label: {
+                HeaderRoundIcon(systemImage: "magnifyingglass")
             }
+            .accessibilityLabel("Search This Channel")
         }
         .padding(.top, banner == nil ? Layout.screenPadding : ChannelBanner.contentInset)
         .padding(.bottom, Layout.screenPadding)

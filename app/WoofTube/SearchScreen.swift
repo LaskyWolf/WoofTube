@@ -10,6 +10,37 @@ enum SearchSettings {
     static var tracksHistory: Bool { UserDefaults.standard.object(forKey: tracksHistoryKey) as? Bool ?? true }
 }
 
+/// YouTube's own suggestions, the job Woof Music gives to YouTube Music's. They need no account.
+enum YouTubeSuggestions {
+    static func fetch(_ query: String) async throws -> [String] {
+        var components = URLComponents(string: "https://suggestqueries-clients6.youtube.com/complete/search")
+        components?.queryItems = [
+            URLQueryItem(name: "client", value: "youtube"),
+            URLQueryItem(name: "ds", value: "yt"),
+            URLQueryItem(name: "oe", value: "utf8"),
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "hl", value: Locale.current.language.languageCode?.identifier ?? "en"),
+            URLQueryItem(name: "gl", value: Locale.current.region?.identifier ?? "US")
+        ]
+        guard let url = components?.url else { throw URLError(.badURL) }
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return parse(String(decoding: data, as: UTF8.self))
+    }
+
+    /// The answer is `window.google.ac.h(["query",[["suggestion",0,[…]],…],…])`.
+    static func parse(_ answer: String) -> [String] {
+        guard let open = answer.firstIndex(of: "("), let close = answer.lastIndex(of: ")"), open < close,
+              let root = try? JSONSerialization.jsonObject(with: Data(answer[answer.index(after: open)..<close].utf8)) as? [Any],
+              root.count > 1, let entries = root[1] as? [[Any]] else { return [] }
+        return entries.compactMap { $0.first as? String }
+    }
+
+    static func selfCheck() {
+        assert(parse(#"window.google.ac.h(["mr",[["mrbeast",0,[512]],["mr bean (old)",0]],{"a":1}])"#) == ["mrbeast", "mr bean (old)"])
+        assert(parse("<html>").isEmpty)
+    }
+}
+
 /// Woof Music's recent searches. Each account keeps its own.
 @MainActor
 final class SearchHistory: ObservableObject {
@@ -21,6 +52,7 @@ final class SearchHistory: ObservableObject {
 
     init() {
         CreatorMatch.selfCheck()
+        YouTubeSuggestions.selfCheck()
         entries = ProfileStorage.defaults.stringArray(forKey: Self.key) ?? []
     }
 
@@ -113,8 +145,16 @@ struct SearchScreen: View {
                     SearchStart(text: text, history: history, isIncognito: isIncognito) { submit($0) }
                 }
             }
-            .navigationTitle("Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .modifier(ChannelPageDestination(tab: .search))
             .toolbar {
+                // In the bar rather than a large title, which always sits under the bar's buttons.
+                ToolbarItem(placement: .topBarLeading) {
+                    Text("Search")
+                        .font(.largeTitle.bold())
+                        .fixedSize()
+                }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(isIncognito ? "Turn Off Incognito" : "Turn On Incognito", systemImage: "eyeglasses") {
                         isIncognito.toggle()
@@ -175,7 +215,7 @@ private struct SearchStart: View {
             }
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            hints = (try? await SearchSuggestions.suggest(query: text)) ?? []
+            hints = (try? await YouTubeSuggestions.fetch(text)) ?? []
         }
     }
 
@@ -250,14 +290,16 @@ private struct SearchResults: View {
         case shorts = "Shorts"
         case channels = "Channels"
         case playlists = "Playlists"
+        case history = "My History"
 
         /// The codes youtube.com puts in its search filter links.
-        var params: String {
+        var params: String? {
             switch self {
             case .videos: return "EgIQAQ%3D%3D"
             case .shorts: return "EgIQCQ%3D%3D"
             case .channels: return "EgIQAg%3D%3D"
             case .playlists: return "EgIQAw%3D%3D"
+            case .history: return nil
             }
         }
     }
@@ -269,7 +311,7 @@ private struct SearchResults: View {
     @State private var creator: YouTubeChannel?
 
     var body: some View {
-        FeedContent(model: model, retry: { await load() }) {
+        FeedContent(model: model, retry: { await load() }, isCompact: filter == .history) {
             FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
                 let tapped = Filter(rawValue: title)
                 filter = filter == tapped ? nil : tapped
@@ -282,7 +324,11 @@ private struct SearchResults: View {
     }
 
     private func load() async {
-        await model.load(.search(query, params: filter?.params))
+        if filter == .history {
+            await model.load(.scoped(browseId: YouTubeFeeds.history, query: query))
+        } else {
+            await model.load(.search(query, params: filter?.params))
+        }
         guard filter == nil else {
             creator = nil
             return
@@ -313,7 +359,7 @@ private struct SearchResults: View {
     private func creatorCard(_ channel: YouTubeChannel, id: String) -> some View {
         let shape = RoundedRectangle(cornerRadius: 16)
         return Button {
-            router.openChannel(id)
+            router.openChannelPage(id)
         } label: {
             HStack(spacing: 14) {
                 Avatar(url: channel.thumbnailURL, size: Layout.artSmall)

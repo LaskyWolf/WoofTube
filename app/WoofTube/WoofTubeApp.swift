@@ -70,13 +70,14 @@ extension View {
     /// Channels and errors. Only the top screen can present them, so the
     /// tabs and the video page each attach these and the tabs stand down while it's open.
     func routerPresentations(_ router: Router, isActive: Bool) -> some View {
-        fullScreenCover(item: Binding(get: { isActive ? router.channelRoute : nil }, set: { router.channelRoute = $0 })) { route in
+        sheet(item: Binding(get: { isActive ? router.channelRoute : nil }, set: { router.channelRoute = $0 })) { route in
             NavigationStack {
                 ChannelView(channelId: route.id)
                     .toolbar {
                         Button("Close", systemImage: "xmark") { router.channelRoute = nil }
                     }
             }
+            .presentationDragIndicator(.visible)
         }
         .alert("That Didn't Work", isPresented: Binding(get: { isActive && router.actionMessage != nil }, set: { if !$0 { router.actionMessage = nil } })) {
             Button("OK", role: .cancel) {}
@@ -90,15 +91,26 @@ enum AppTab: Hashable {
     case home, library, subs, search
 }
 
+/// Pushes a channel's page on this tab's navigation stack.
+struct ChannelPageDestination: ViewModifier {
+    let tab: AppTab
+    @EnvironmentObject private var router: Router
+
+    func body(content: Content) -> some View {
+        content.navigationDestination(item: Binding(get: { router.channelPage?.tab == tab ? router.channelPage : nil }, set: { router.channelPage = $0 })) { route in
+            ChannelView(channelId: route.id).id(route.id)
+        }
+    }
+}
+
 struct RootTabs: View {
     @EnvironmentObject private var router: Router
     @Environment(\.scenePhase) private var scenePhase
-    @State private var tab = AppTab.home
     /// Links the floating card and the video page for the zoom, as Woof Music does for its player.
     @Namespace private var playerZoom
 
     var body: some View {
-        TabView(selection: $tab) {
+        TabView(selection: $router.selectedTab) {
             Tab("Home", systemImage: "house", value: AppTab.home) {
                 HomeView()
             }

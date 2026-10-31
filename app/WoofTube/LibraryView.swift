@@ -6,6 +6,8 @@ struct LibraryView: View {
     private enum Filter: String, CaseIterable {
         case playlists = "Playlists"
         case channels = "Channels"
+        case downloaded = "Downloaded"
+        case inProgress = "In Progress"
     }
 
     @EnvironmentObject private var router: Router
@@ -28,6 +30,16 @@ struct LibraryView: View {
             !LibraryPlaylists.isHidden($0.playlistId)
                 && !musicPlaylistIds.contains($0.playlistId)
                 && seen.insert($0.playlistId).inserted
+        }
+    }
+
+    /// History videos the person stopped partway through, by YouTube's count or this phone's.
+    private var unfinished: [(video: YouTubeVideo, extras: VideoExtras)] {
+        history.items.compactMap { item in
+            guard case .video(let video, let extras) = item,
+                  let progress = extras.progress ?? WatchPositions.progress(of: video),
+                  progress > 0, progress < WatchPositions.finishedFraction else { return nil }
+            return (video, extras)
         }
     }
 
@@ -54,9 +66,19 @@ struct LibraryView: View {
                     if shows(.channels) {
                         channelsSection
                     }
+                    if selectedFilter == .downloaded {
+                        videoSection(
+                            title: "Downloaded",
+                            videos: downloads.items.map { ($0.video, VideoExtras()) },
+                            emptyText: "Long press a video and choose Download."
+                        )
+                    }
+                    if selectedFilter == .inProgress {
+                        videoSection(title: "In Progress", videos: unfinished, emptyText: "Videos you stop partway through show up here.")
+                    }
                 }
             }
-            .tabRoot(title: "Library") {
+            .tabRoot(title: "Library", tab: .library) {
                 newTitle = ""
                 isCreating = true
             }
@@ -213,7 +235,7 @@ struct LibraryView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(subscriptions.channels, id: \.self) { channel in
                     Button {
-                        if let id = channel.channelId { router.openChannel(id) }
+                        if let id = channel.channelId { router.openChannelPage(id) }
                     } label: {
                         ChannelRow(channel: channel)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -222,6 +244,26 @@ struct LibraryView: View {
                     .buttonStyle(RowPressStyle())
                     .padding(.horizontal, Layout.screenPadding)
                     .padding(.vertical, Layout.rowPadding)
+                }
+            }
+        }
+        .padding(.bottom, Layout.sectionGap)
+    }
+
+    private func videoSection(title: String, videos: [(video: YouTubeVideo, extras: VideoExtras)], emptyText: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionTitle(title: title, count: videos.count)
+            if videos.isEmpty {
+                Text(emptyText)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, Layout.screenPadding)
+            }
+            LazyVStack(spacing: 0) {
+                ForEach(videos, id: \.video.videoId) { entry in
+                    VideoButton(video: entry.video, extras: entry.extras, isCompact: true)
+                        .padding(.horizontal, Layout.screenPadding)
+                        .padding(.vertical, Layout.rowPadding)
                 }
             }
         }
@@ -388,9 +430,7 @@ private struct HistoryStrip: View {
         if model.isLoading || !model.videos.isEmpty {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 NavigationLink {
-                    FeedList(source: .browse(YouTubeFeeds.history), isCompact: true)
-                        .navigationTitle("History")
-                        .navigationBarTitleDisplayMode(.inline)
+                    ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history, listsWithoutQuery: true)
                 } label: {
                     HStack(alignment: .firstTextBaseline) {
                         Text("History").font(.title3.bold())
