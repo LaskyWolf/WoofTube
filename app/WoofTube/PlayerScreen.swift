@@ -66,6 +66,7 @@ struct PlayerOverlay: View {
             page(topInset: insets.top, bottomInset: insets.bottom, videoHeight: videoSize.height, progress: progress)
 
             MpvVideoView(player: router.player)
+                .overlay { VideoPoster(player: router.player, video: router.current) }
                 .frame(width: videoSize.width, height: videoSize.height)
                 .background(.black)
                 .clipShape(.rect(cornerRadius: radius))
@@ -668,27 +669,51 @@ private struct WatchDetailsView: View {
         .padding(Layout.screenPadding)
     }
 
+    private func channelLabel(_ details: WatchDetails) -> some View {
+        HStack(spacing: Layout.rowSpacing) {
+            if details.collaborators.count > 1 {
+                AvatarStack(urls: details.collaborators.map(\.avatar), size: Layout.thumbSmall)
+            } else {
+                Avatar(url: details.channelAvatar, size: Layout.thumbSmall)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(details.channelTitle ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(details.subscribers ?? (details.collaborators.count > 1 ? "\(details.collaborators.count) creators" : ""))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(.rect)
+    }
+
     @ViewBuilder
     private func channelRow(_ details: WatchDetails) -> some View {
         if let id = details.channelId {
             HStack(spacing: Layout.rowSpacing) {
-                Button {
-                    router.openChannel(id)
-                } label: {
-                    HStack(spacing: Layout.rowSpacing) {
-                        Avatar(url: details.channelAvatar, size: Layout.thumbSmall)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(details.channelTitle ?? "")
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                            Text(details.subscribers ?? "")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                if details.collaborators.count > 1 {
+                    Menu {
+                        ForEach(details.collaborators) { creator in
+                            Button {
+                                router.openChannel(creator.channelId)
+                            } label: {
+                                Text(creator.name)
+                                Text(creator.subtitle)
+                            }
                         }
+                    } label: {
+                        channelLabel(details)
                     }
-                    .contentShape(.rect)
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        router.openChannel(id)
+                    } label: {
+                        channelLabel(details)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 Spacer(minLength: 0)
                 SubscribeButton(channelId: id, isSubscribed: details.isSubscribed) { value in
                     router.setDetails { $0.isSubscribed = value }
@@ -861,7 +886,7 @@ struct ChannelView: View {
 
     private var videos: [YouTubeVideo] {
         model.items.compactMap {
-            if case .video(let video, _) = $0 { return video }
+            if case .video(let video, _, _) = $0 { return video }
             return nil
         }
     }

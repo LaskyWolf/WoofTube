@@ -76,6 +76,7 @@ final class Router: ObservableObject {
         details = nil
         selectedCaption = nil
         captionCues = []
+        player.prepareForNewVideo()
         startStream(videoId: video.videoId, start: 0)
         Task { await loadDetails(videoId: video.videoId) }
     }

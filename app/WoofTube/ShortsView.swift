@@ -10,6 +10,8 @@ final class ShortsModel: ObservableObject {
     @Published private(set) var shorts: [YouTubeVideo]
     @Published private(set) var details: WatchDetails?
     @Published private(set) var errorText: String?
+    /// The Short attached to the player. Other pages show their thumbnail.
+    @Published private(set) var playingId: String?
     let player: MpvPlayer
     private var nextToken: String?
     private var didLoadMore = false
@@ -20,6 +22,8 @@ final class ShortsModel: ObservableObject {
     }
 
     func play(_ video: YouTubeVideo) async {
+        player.prepareForNewVideo()
+        playingId = video.videoId
         details = nil
         errorText = nil
         do {
@@ -126,14 +130,11 @@ struct ShortsView: View {
 
     private func page(_ video: YouTubeVideo) -> some View {
         ZStack(alignment: .bottom) {
-            if video.videoId == currentId {
+            if video.videoId == model.playingId {
                 MpvVideoView(player: model.player)
+                VideoPoster(player: model.player, video: video)
             } else {
-                AsyncImage(url: video.thumbnailURL.flatMap(URL.init(string:))) { image in
-                    image.resizable().scaledToFit()
-                } placeholder: {
-                    Color.black
-                }
+                CoverImage(url: video.thumbnailURL)
             }
             PlayerTouchSurface(
                 onTap: { model.player.togglePause() },

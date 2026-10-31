@@ -108,6 +108,7 @@ struct WatchDetails {
     var likeStatus = "INDIFFERENT"
     var related: [YouTubeVideo] = []
     var commentsToken: String?
+    var collaborators: [Collaborator] = []
 
     init(json: [String: Any], videoId: String) {
         let secondary = JSON.first("videoSecondaryInfoRenderer", in: json)
@@ -122,9 +123,11 @@ struct WatchDetails {
         metadata = [JSON.text(JSON.first("viewCount", in: primary)), JSON.text(JSON.first("dateText", in: primary))]
             .compactMap { $0 }
             .joined(separator: " · ")
-        channelTitle = JSON.text(JSON.first("title", in: owner))
+        collaborators = Collaborator.all(in: owner)
+        // A video with several creators has only attributedTitle, and its collaborator list also has titles.
+        channelTitle = JSON.text((owner as? [String: Any])?["attributedTitle"]) ?? JSON.text(JSON.first("title", in: owner))
         channelId = subscribeButton?["channelId"] as? String ?? JSON.string("browseId", in: JSON.first("navigationEndpoint", in: owner))
-        channelAvatar = JSON.lastThumbnail(JSON.first("thumbnail", in: owner))
+        channelAvatar = JSON.lastThumbnail(JSON.first("thumbnail", in: owner)) ?? collaborators.first?.avatar
         subscribers = JSON.text(JSON.first("subscriberCountText", in: owner))
         isSubscribed = subscribeButton?["subscribed"] as? Bool ?? false
         likeCount = JSON.string("title", in: JSON.first("defaultButtonViewModel", in: toggle))

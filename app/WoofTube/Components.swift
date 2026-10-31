@@ -128,6 +128,18 @@ struct CoverImage: View {
     }
 }
 
+/// Covers the video surface with the thumbnail until the new video has a frame.
+struct VideoPoster: View {
+    @ObservedObject var player: MpvPlayer
+    let video: YouTubeVideo?
+
+    var body: some View {
+        if !player.isVideoReady, let video {
+            CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
+        }
+    }
+}
+
 /// Woof Music's rounded card that stacks menu rows.
 struct MenuCard<Content: View>: View {
     @ViewBuilder let content: Content

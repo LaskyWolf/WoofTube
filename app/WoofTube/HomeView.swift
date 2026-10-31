@@ -136,8 +136,9 @@ struct TabHeader: View {
 
 extension View {
     /// For the first screen of a tab, which shows TabHeader instead of a navigation bar.
-    func tabRoot() -> some View {
-        toolbar(.hidden, for: .navigationBar)
+    func tabRoot(title: String) -> some View {
+        safeAreaBar(edge: .top, spacing: 0) { TabHeader(title: title) }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: HeaderRoute.self) { route in
                 switch route {
                 case .notifications: NotificationsView()
@@ -194,12 +195,11 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             FeedContent(model: model, retry: { await reload() }) {
-                TabHeader(title: "Home")
                 if !model.chips.isEmpty {
                     FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
                 }
             }
-            .tabRoot()
+            .tabRoot(title: "Home")
             .task {
                 await session.refreshUnseenNotifications()
                 if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.home)) }
@@ -233,9 +233,9 @@ struct SubsView: View {
     var body: some View {
         NavigationStack {
             FeedContent(model: model, retry: { await model.load(.browse(YouTubeFeeds.subscriptions)) }) {
-                TabHeader(title: "Subs")
+                EmptyView()
             }
-            .tabRoot()
+            .tabRoot(title: "Subs")
             .task {
                 if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.subscriptions)) }
             }
@@ -311,8 +311,8 @@ struct FeedRows: View {
     @ViewBuilder
     private func row(_ item: FeedItem) -> some View {
         switch item {
-        case .video(let video, let feedback):
-            VideoButton(video: video, feedback: feedback, isCompact: isCompact) { model.remove(item) }
+        case .video(let video, let feedback, let collaborators):
+            VideoButton(video: video, feedback: feedback, collaborators: collaborators, isCompact: isCompact) { model.remove(item) }
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, isCompact ? Layout.rowPadding : Layout.rowSpacing)
         case .shorts(let title, let videos):
@@ -351,6 +351,7 @@ struct FeedRows: View {
 struct VideoButton: View {
     let video: YouTubeVideo
     var feedback: [FeedbackAction] = []
+    var collaborators: [Collaborator] = []
     var isCompact = false
     var onRemove: (() -> Void)?
     @EnvironmentObject private var router: Router
@@ -362,16 +363,17 @@ struct VideoButton: View {
             if isCompact {
                 CompactVideoRow(video: video)
             } else {
-                VideoRow(video: video)
+                VideoRow(video: video, collaborators: collaborators)
             }
         }
         .buttonStyle(RowPressStyle())
-        .videoMenu(video, feedback: feedback, onRemove: onRemove)
+        .videoMenu(video, feedback: feedback, collaborators: collaborators, onRemove: onRemove)
     }
 }
 
 struct VideoRow: View {
     let video: YouTubeVideo
+    var collaborators: [Collaborator] = []
 
     private var details: String {
         [video.channelTitle, video.viewCountText, video.publishedTimeText]
@@ -383,7 +385,9 @@ struct VideoRow: View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
             HStack(alignment: .top, spacing: Layout.rowSpacing) {
-                if let avatar = video.channelAvatarURL {
+                if collaborators.count > 1 {
+                    AvatarStack(urls: collaborators.map(\.avatar), size: 36)
+                } else if let avatar = video.channelAvatarURL {
                     Avatar(url: avatar, size: 36)
                 }
                 VStack(alignment: .leading, spacing: Layout.cardSpacing) {
@@ -618,6 +622,22 @@ private struct PostRow: View {
                 }
             }
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
+    }
+}
+
+/// Overlapping avatars for a video with several creators.
+struct AvatarStack: View {
+    let urls: [String?]
+    let size: CGFloat
+    private static let maxShown = 3
+
+    var body: some View {
+        HStack(spacing: -size * 0.45) {
+            ForEach(Array(urls.prefix(Self.maxShown).enumerated()), id: \.offset) { _, url in
+                Avatar(url: url, size: size)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
+            }
+        }
     }
 }
 

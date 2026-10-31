@@ -7,6 +7,50 @@ struct FeedbackAction: Hashable {
     let token: String
 }
 
+/// A creator of a video with several creators. YouTube lists them in the dialog the byline opens.
+struct Collaborator: Hashable, Identifiable {
+    let name: String
+    let subtitle: String
+    let avatar: String?
+    let channelId: String
+    var id: String { channelId }
+
+    private static let invisibleMarks = CharacterSet(charactersIn: "\u{200E}\u{2068}\u{2069}")
+
+    static func all(in node: Any?) -> [Collaborator] {
+        if let array = node as? [Any] {
+            for value in array {
+                let found = all(in: value)
+                if !found.isEmpty { return found }
+            }
+            return []
+        }
+        guard let dict = node as? [String: Any] else { return [] }
+        if let dialog = dict["showDialogCommand"] {
+            let items = JSON.first("listItems", in: dialog) as? [[String: Any]] ?? []
+            let creators = items.compactMap { item -> Collaborator? in
+                guard let model = item["listItemViewModel"] as? [String: Any],
+                      let name = JSON.text(model["title"]),
+                      let channelId = JSON.string("browseId", in: model) else { return nil }
+                let sources = JSON.first("sources", in: JSON.first("avatarViewModel", in: model)) as? [[String: Any]]
+                let subtitle = JSON.text(model["subtitle"])?.unicodeScalars.filter { !invisibleMarks.contains($0) }
+                return Collaborator(
+                    name: name,
+                    subtitle: subtitle.map { String(String.UnicodeScalarView($0)) } ?? "",
+                    avatar: sources?.first?["url"] as? String,
+                    channelId: channelId
+                )
+            }
+            if !creators.isEmpty { return creators }
+        }
+        for value in dict.values {
+            let found = all(in: value)
+            if !found.isEmpty { return found }
+        }
+        return []
+    }
+}
+
 struct CommunityPost {
     let id: String
     let author: String
@@ -22,7 +66,7 @@ struct CommunityPost {
 }
 
 enum FeedItem: Identifiable {
-    case video(YouTubeVideo, feedback: [FeedbackAction])
+    case video(YouTubeVideo, feedback: [FeedbackAction], collaborators: [Collaborator])
     case shorts(title: String?, [YouTubeVideo])
     case shelf(title: String?, [YouTubeVideo])
     case post(CommunityPost)
@@ -31,7 +75,7 @@ enum FeedItem: Identifiable {
 
     var id: String {
         switch self {
-        case .video(let video, _): return video.videoId
+        case .video(let video, _, _): return video.videoId
         case .shorts(_, let videos): return "shorts-" + (videos.first?.videoId ?? "")
         case .shelf(_, let videos): return "shelf-" + (videos.first?.videoId ?? "")
         case .post(let post): return post.id
@@ -47,7 +91,7 @@ enum FeedParser {
     private(set) static var seenContentTypes: Set<String> = []
 
     private static let shelfKeys = ["reelShelfRenderer", "richShelfRenderer", "shelfRenderer", "gridShelfViewModel"]
-    private static let postKeys = ["backstagePostThreadRenderer", "backstagePostRenderer"]
+    private static let postKeys = ["backstagePostThreadRenderer", "backstagePostRenderer", "sharedPostRenderer", "postRenderer"]
     private static let skippedKeys: Set<String> = [
         "responseContext", "header", "topbar", "sidebar", "microformat", "metadata", "frameworkUpdates",
         "continuationItemRenderer", "feedFilterChipBarRenderer", "engagementPanels", "menu"
@@ -126,7 +170,7 @@ enum FeedParser {
             if video.isShort {
                 items.append(.shorts(title: nil, [video]))
             } else {
-                items.append(.video(video, feedback: feedbackActions(in: dict)))
+                items.append(.video(video, feedback: feedbackActions(in: dict), collaborators: Collaborator.all(in: dict)))
             }
         } else if let playlist = YouTubeFeedParser.playlists(in: dict).first {
             items.append(.playlist(playlist))
@@ -149,7 +193,7 @@ enum FeedParser {
     }
 
     private static func post(in dict: [String: Any]) -> CommunityPost? {
-        guard let post = JSON.first("backstagePostRenderer", in: dict) as? [String: Any],
+        guard let post = (JSON.first("backstagePostRenderer", in: dict) ?? JSON.first("postRenderer", in: dict)) as? [String: Any],
               let id = post["postId"] as? String else { return nil }
         let attachment = post["backstageAttachment"]
         let multiImages = JSON.first("postMultiImageRenderer", in: attachment) as? [String: Any]

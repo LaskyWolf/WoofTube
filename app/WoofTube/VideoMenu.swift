@@ -3,14 +3,15 @@ import SwiftyTube
 
 extension View {
     /// The long press menu. Same layout as Woof Music: actions row, queue, then the rest.
-    func videoMenu(_ video: YouTubeVideo, feedback: [FeedbackAction] = [], onRemove: (() -> Void)? = nil) -> some View {
-        modifier(VideoMenuModifier(video: video, feedback: feedback, onRemove: onRemove))
+    func videoMenu(_ video: YouTubeVideo, feedback: [FeedbackAction] = [], collaborators: [Collaborator] = [], onRemove: (() -> Void)? = nil) -> some View {
+        modifier(VideoMenuModifier(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove))
     }
 }
 
 private struct VideoMenuModifier: ViewModifier {
     let video: YouTubeVideo
     let feedback: [FeedbackAction]
+    let collaborators: [Collaborator]
     let onRemove: (() -> Void)?
     @EnvironmentObject private var router: Router
     @State private var showsPlaylists = false
@@ -18,7 +19,7 @@ private struct VideoMenuModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contextMenu {
-                VideoMenuItems(video: video, feedback: feedback, onRemove: onRemove, router: router, showsPlaylists: $showsPlaylists)
+                VideoMenuItems(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove, router: router, showsPlaylists: $showsPlaylists)
             }
             .sheet(isPresented: $showsPlaylists) {
                 PlaylistPickerSheet(video: video)
@@ -29,6 +30,7 @@ private struct VideoMenuModifier: ViewModifier {
 struct VideoMenuItems: View {
     let video: YouTubeVideo
     var feedback: [FeedbackAction] = []
+    var collaborators: [Collaborator] = []
     var onRemove: (() -> Void)?
     let router: Router
     @Binding var showsPlaylists: Bool
@@ -68,7 +70,15 @@ struct VideoMenuItems: View {
                     }
                 }
             }
-            if let channelId = video.channelId {
+            if collaborators.count > 1 {
+                Menu("Go To", systemImage: "arrow.right.circle") {
+                    ForEach(collaborators) { creator in
+                        Button(creator.name, systemImage: "person.crop.circle") {
+                            router.openChannel(creator.channelId)
+                        }
+                    }
+                }
+            } else if let channelId = video.channelId {
                 Menu("Go To", systemImage: "arrow.right.circle") {
                     Button(video.channelTitle ?? "Channel", systemImage: "person.crop.circle") {
                         router.openChannel(channelId)

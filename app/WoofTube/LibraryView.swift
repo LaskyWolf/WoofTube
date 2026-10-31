@@ -8,7 +8,6 @@ struct LibraryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    TabHeader(title: "Library")
                     MenuCard {
                         NavigationLink {
                             FeedList(source: .browse(YouTubeFeeds.history), isCompact: true)
@@ -51,7 +50,7 @@ struct LibraryView: View {
                     }
                 }
             }
-            .tabRoot()
+            .tabRoot(title: "Library")
             .task {
                 let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
                 playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
@@ -71,7 +70,7 @@ struct PlaylistPage: View {
 
     private var videos: [YouTubeVideo] {
         model.items.compactMap {
-            if case .video(let video, _) = $0 { return video }
+            if case .video(let video, _, _) = $0 { return video }
             return nil
         }
     }

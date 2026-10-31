@@ -11,6 +11,8 @@ final class MpvPlayer: ObservableObject {
     let clock = PlayerClock()
     var time: Double { clock.time }
     @Published private(set) var speed = 1.0
+    /// False until the new video draws its first frame. The layer keeps the old frame until then.
+    @Published private(set) var isVideoReady = false
     @Published private(set) var duration: Double = 0
     @Published private(set) var isPaused = false
     @Published private(set) var isBuffering = false
@@ -93,6 +95,13 @@ final class MpvPlayer: ObservableObject {
         duration = 0
         isBuffering = false
         command(["stop"])
+    }
+
+    /// Silences the old video as soon as the next one is picked.
+    func prepareForNewVideo() {
+        stop()
+        isVideoReady = false
+        isBuffering = true
     }
 
     func setSpeed(_ speed: Double) {
@@ -287,7 +296,10 @@ final class MpvPlayer: ObservableObject {
                 let line = "[\(String(cString: prefix))] \(String(cString: text))".trimmingCharacters(in: .whitespacesAndNewlines)
                 player?.publish { $0.recentLog = Array(($0.recentLog + [line]).suffix(logLimit)) }
             case MPV_EVENT_PLAYBACK_RESTART:
-                player?.publish { $0.isBuffering = false }
+                player?.publish {
+                    $0.isBuffering = false
+                    $0.isVideoReady = true
+                }
             case MPV_EVENT_PROPERTY_CHANGE:
                 guard let property = event.pointee.data?.load(as: mpv_event_property.self),
                       let namePointer = property.name else { continue }
