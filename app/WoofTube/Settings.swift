@@ -108,11 +108,12 @@ struct SettingsView: View {
     }
 }
 
-/// Woof Music's account page. It only has the sign out for now.
+/// Woof Music's account page, with the accounts saved on this phone.
 private struct ProfileView: View {
     @EnvironmentObject private var session: Session
     @EnvironmentObject private var router: Router
     @State private var confirmsSignOut = false
+    @State private var isAddingAccount = false
 
     private static let notificationSettings = URL(string: "https://www.youtube.com/account_notifications")!
     private static let accountSettings = URL(string: "https://myaccount.google.com")!
@@ -135,6 +136,27 @@ private struct ProfileView: View {
                     LabeledContent("Email", value: email)
                 }
             }
+            Section("Accounts") {
+                ForEach(session.accounts) { saved in
+                    Button {
+                        guard saved.id != session.currentAccountId else { return }
+                        router.close()
+                        Task { await session.switchTo(saved) }
+                    } label: {
+                        HStack(spacing: Layout.rowSpacing) {
+                            Avatar(url: saved.thumbnailUrl, size: 32)
+                            Text(saved.name).foregroundStyle(.primary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if saved.id == session.currentAccountId {
+                                Image(systemName: "checkmark").foregroundStyle(.tint)
+                            }
+                        }
+                        .contentShape(.rect)
+                    }
+                    .accessibilityAddTraits(saved.id == session.currentAccountId ? .isSelected : [])
+                }
+                Button("Add Account", systemImage: "person.badge.plus") { isAddingAccount = true }
+            }
             Section {
                 Link(destination: Self.notificationSettings) {
                     Label("Notification Settings", systemImage: "bell.badge")
@@ -150,7 +172,10 @@ private struct ProfileView: View {
         .listSectionSpacing(.compact)
         .navigationTitle("Profile")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Sign out of YouTube?", isPresented: $confirmsSignOut, titleVisibility: .visible) {
+        .sheet(isPresented: $isAddingAccount) {
+            AddAccountSheet()
+        }
+        .confirmationDialog("Sign out of this account?", isPresented: $confirmsSignOut, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) {
                 router.close()
                 Task { await session.signOut() }

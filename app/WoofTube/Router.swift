@@ -7,9 +7,8 @@ struct ChannelRoute: Identifiable {
 }
 
 struct ShortsRoute: Identifiable {
-    let videos: [YouTubeVideo]
-    let startId: String
-    var id: String { startId }
+    let model: ShortsModel
+    var id: ObjectIdentifier { ObjectIdentifier(model) }
 }
 
 /// The video being watched. It lives above the tabs, so playback continues
@@ -28,7 +27,13 @@ final class Router: ObservableObject {
     @Published var isWatchPageOnScreen = false
     @Published private(set) var queue: [YouTubeVideo] = []
     @Published var channelRoute: ChannelRoute?
+    /// The open Shorts page. With `shortsModel` set and this nil, the Short is in the floating card.
     @Published var shortsRoute: ShortsRoute?
+    @Published private(set) var shortsModel: ShortsModel?
+    /// Like `isWatchPageOnScreen`, for the Shorts player's layer.
+    @Published var isShortsPageOnScreen = false
+    /// The playlist the queue came from.
+    @Published private(set) var playlistTitle: String?
     @Published var actionMessage: String?
     @Published private(set) var details: WatchDetails?
     @Published private(set) var streamSummary: String?
@@ -53,13 +58,14 @@ final class Router: ObservableObject {
     @Published private(set) var detailsUnavailable = false
 
     let player = MpvPlayer()
+    let pictureInPicture = PictureInPicture()
     /// Created on the first Short, and kept because mpv isn't torn down.
     private(set) lazy var shortsPlayer: MpvPlayer = {
         let player = MpvPlayer(surfaceAspect: 9 / 16)
         player.setProperty("loop-file", "inf")
         return player
     }()
-    private(set) lazy var sleepTimer = SleepTimer { [weak self] in self?.player.setPaused(true) }
+    private(set) lazy var sleepTimer = SleepTimer { [weak self] in self?.setPaused(true) }
     static let qualities = [2160, 1440, 1080, 720, 480, 360]
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
@@ -70,6 +76,10 @@ final class Router: ObservableObject {
     private var nowPlayingSubscriptions: [Any] = []
     private var sponsorSegments: [ClosedRange<Double>] = []
     private var currentStream: LoadedStream?
+    private var playlistModel: FeedModel?
+    private var pictureInPictureVideoId: String?
+    /// Fewer videos than this left in the queue fetches the playlist's next page.
+    private static let playlistRefill = 5
 
     init() {
         let defaults = UserDefaults.standard
@@ -79,6 +89,13 @@ final class Router: ObservableObject {
         skipsSponsors = defaults.bool(forKey: Self.skipsSponsorsKey)
         setUpRemoteCommands()
         player.onEnded = { [weak self] in self?.playNextAfterEnd() }
+        pictureInPicture.onStop = { [weak self] time, keepsPlaying in
+            guard let self, current?.videoId == pictureInPictureVideoId else { return }
+            player.seek(to: time)
+            player.setPaused(!keepsPlaying)
+        }
+        pictureInPicture.onFailure = { [weak self] message in self?.actionMessage = message }
+        pictureInPicture.onRestore = { [weak self] in self?.isExpanded = true }
     }
 
     func play(_ video: YouTubeVideo, expand: Bool = true) {
@@ -86,6 +103,8 @@ final class Router: ObservableObject {
             openShorts([video], start: video)
             return
         }
+        closeShorts()
+        pictureInPicture.stop()
         current = video
         channelRoute = nil
         if expand { isExpanded = true }
@@ -115,12 +134,79 @@ final class Router: ObservableObject {
         guard let first = ordered.first else { return }
         play(first)
         queue = Array(ordered.dropFirst())
+        playlistTitle = nil
+        playlistModel = nil
+    }
+
+    /// Plays a video from a playlist page, then the ones after it in order.
+    func playPlaylist(_ video: YouTubeVideo, title: String, model: FeedModel) {
+        let videos = model.videos.filter { !$0.isShort }
+        play(video)
+        queue = Array(videos.drop { $0.videoId != video.videoId }.dropFirst())
+        playlistTitle = title
+        playlistModel = model
+        refillQueue()
+    }
+
+    /// Jumps ahead in the queue. The videos before it are skipped.
+    func playFromQueue(_ video: YouTubeVideo) {
+        queue = Array(queue.drop { $0.videoId != video.videoId }.dropFirst())
+        play(video)
+        refillQueue()
+    }
+
+    private func refillQueue() {
+        guard queue.count < Self.playlistRefill, let model = playlistModel, model.hasMore, let last = model.items.last else { return }
+        let known = Set(model.videos.map(\.videoId))
+        Task {
+            await model.loadMore(after: last)
+            guard playlistModel === model else { return }
+            queue += model.videos.filter { !known.contains($0.videoId) && !$0.isShort }
+        }
     }
 
     func openShorts(_ videos: [YouTubeVideo], start: YouTubeVideo) {
         close()
         channelRoute = nil
-        shortsRoute = ShortsRoute(videos: videos, startId: start.videoId)
+        let model = ShortsModel(shorts: videos, startId: start.videoId, player: shortsPlayer)
+        shortsModel = model
+        shortsRoute = ShortsRoute(model: model)
+    }
+
+    /// The Short keeps playing in the floating card.
+    func minimizeShorts() {
+        shortsRoute = nil
+    }
+
+    func expandShorts() {
+        shortsRoute = shortsModel.map { ShortsRoute(model: $0) }
+    }
+
+    func closeShorts() {
+        shortsRoute = nil
+        shortsModel?.player.stop()
+        shortsModel = nil
+    }
+
+    /// Only the video page offers this, on the video playing now.
+    func startPictureInPicture() {
+        guard let videoId = current?.videoId else { return }
+        pictureInPictureVideoId = videoId
+        Task {
+            do {
+                try await pictureInPicture.start(videoId: videoId, at: player.time) { player.setPaused(true) }
+            } catch {
+                actionMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func setPaused(_ paused: Bool) {
+        if pictureInPicture.isActive {
+            pictureInPicture.setPaused(paused)
+        } else {
+            player.setPaused(paused)
+        }
     }
 
     func playNext(_ video: YouTubeVideo) {
@@ -163,8 +249,12 @@ final class Router: ObservableObject {
 
     func close() {
         loadTask?.cancel()
+        closeShorts()
+        pictureInPicture.stop()
         current = nil
         queue = []
+        playlistTitle = nil
+        playlistModel = nil
         isExpanded = false
         player.setBoosted(false)
         player.stop()
@@ -211,6 +301,7 @@ final class Router: ObservableObject {
         }
         if !queue.isEmpty {
             play(queue.removeFirst(), expand: false)
+            refillQueue()
         } else if autoplay, let next = details?.related.first(where: { !$0.isShort }) {
             play(next, expand: false)
         }
@@ -280,7 +371,7 @@ final class Router: ObservableObject {
         let loaded = WatchDetails(json: json, videoId: videoId)
         details = loaded
         async let dislikes = DislikeCounts.fetch(videoId: videoId)
-        async let comment = topComment(token: loaded.commentsToken)
+        async let comment = CommentsPage.topComment(token: loaded.commentsToken)
         async let options = PlaylistActions.options(for: videoId)
         let (dislikeCount, firstComment, playlists) = await (dislikes, comment, options)
         guard current?.videoId == videoId else { return }
@@ -291,29 +382,32 @@ final class Router: ObservableObject {
         }
     }
 
-    /// YouTube sorts comments by relevance first, so this is the one it would show.
-    private func topComment(token: String?) async -> Comment? {
-        guard let token, let json = try? await InnerTubeClient.wooftube.next(continuation: token) else { return nil }
-        return CommentsPage(json: json).comments.first
-    }
-
     private func setUpRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
-        center.playCommand.addTarget { [player] _ in
-            player.setPaused(false)
+        center.playCommand.addTarget { [weak self] _ in
+            self?.setPaused(false)
             return .success
         }
-        center.pauseCommand.addTarget { [player] _ in
-            player.setPaused(true)
+        center.pauseCommand.addTarget { [weak self] _ in
+            self?.setPaused(true)
             return .success
         }
-        center.togglePlayPauseCommand.addTarget { [player] _ in
-            player.togglePause()
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            if pictureInPicture.isActive {
+                pictureInPicture.togglePause()
+            } else {
+                player.togglePause()
+            }
             return .success
         }
-        center.changePlaybackPositionCommand.addTarget { [player] event in
-            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            player.seek(to: event.positionTime)
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self, let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            if pictureInPicture.isActive {
+                pictureInPicture.seek(to: event.positionTime)
+            } else {
+                player.seek(to: event.positionTime)
+            }
             return .success
         }
         nowPlayingSubscriptions = [
@@ -332,6 +426,14 @@ final class Router: ObservableObject {
             MPNowPlayingInfoPropertyElapsedPlaybackTime: player.time,
             MPNowPlayingInfoPropertyPlaybackRate: player.isPaused ? 0.0 : player.speed
         ]
+    }
+}
+
+extension CommentsPage {
+    /// YouTube sorts comments by relevance first, so this is the one it would show.
+    static func topComment(token: String?) async -> Comment? {
+        guard let token, let json = try? await InnerTubeClient.wooftube.next(continuation: token) else { return nil }
+        return CommentsPage(json: json).comments.first
     }
 }
 

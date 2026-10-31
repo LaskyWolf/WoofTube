@@ -2,12 +2,14 @@ import SwiftUI
 import SwiftyTube
 
 /// Plays one Short at a time on its own 9:16 player and keeps the feed going with the search filter,
-/// because YouTube answers FEshorts with an error when signed out.
+/// because YouTube answers FEshorts with an error when signed out. It outlives the Shorts page,
+/// so the Short carries on in the floating card.
 @MainActor
 final class ShortsModel: ObservableObject {
     private static let shortsSearchFilter = "EgIYAQ%3D%3D"
 
     @Published private(set) var shorts: [YouTubeVideo]
+    @Published var currentId: String?
     @Published private(set) var details: WatchDetails?
     @Published private(set) var errorText: String?
     /// The Short attached to the player. Other pages show their thumbnail.
@@ -18,13 +20,24 @@ final class ShortsModel: ObservableObject {
     let player: MpvPlayer
     private var nextToken: String?
     private var didLoadMore = false
+    private var loadTask: Task<Void, Never>?
 
-    init(shorts: [YouTubeVideo], player: MpvPlayer) {
+    var currentVideo: YouTubeVideo? { shorts.first { $0.videoId == currentId } }
+
+    init(shorts: [YouTubeVideo], startId: String, player: MpvPlayer) {
         self.shorts = shorts
+        self.currentId = startId
         self.player = player
     }
 
-    func play(_ video: YouTubeVideo) async {
+    /// Does nothing when the page reopens on the Short that's already playing.
+    func playCurrent() {
+        guard let video = currentVideo, video.videoId != playingId || errorText != nil else { return }
+        loadTask?.cancel()
+        loadTask = Task { await play(video) }
+    }
+
+    private func play(_ video: YouTubeVideo) async {
         player.prepareForNewVideo()
         playingId = video.videoId
         details = nil
@@ -38,12 +51,18 @@ final class ShortsModel: ObservableObject {
             captions = stream.captions
             player.load(url: stream.url)
         } catch {
+            guard !Task.isCancelled else { return }
             errorText = error.localizedDescription
         }
         let json = try? await InnerTubeClient.wooftube.next(videoId: video.videoId)
+        guard !Task.isCancelled else { return }
         details = json.map { WatchDetails(json: $0, videoId: video.videoId) }
-        let dislikes = await DislikeCounts.fetch(videoId: video.videoId)
-        if playingId == video.videoId { details?.dislikeCount = dislikes }
+        async let dislikes = DislikeCounts.fetch(videoId: video.videoId)
+        async let comment = CommentsPage.topComment(token: details?.commentsToken)
+        let (dislikeCount, topComment) = await (dislikes, comment)
+        guard !Task.isCancelled else { return }
+        details?.dislikeCount = dislikeCount
+        details?.topComment = topComment
         await loadMoreIfNeeded(after: video)
     }
 
@@ -97,26 +116,32 @@ final class ShortsModel: ObservableObject {
     }
 }
 
+/// Swipe sideways for the next Short. Hold to stop the video, and move while holding to scrub.
+/// Swipe down to send it to the floating card.
 struct ShortsView: View {
-    @StateObject private var model: ShortsModel
+    /// The fingers' scrub: where it started, and whether to carry on playing after.
+    private struct Scrub {
+        let start: Double
+        let wasPaused: Bool
+    }
+
+    @ObservedObject var model: ShortsModel
     @EnvironmentObject private var router: Router
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var currentId: String?
     @State private var showsComments = false
     @State private var showsDescription = false
-    @State private var isBoosting = false
+    @State private var scrub: Scrub?
+    @State private var lastSeek = 0.0
+    @State private var pullDistance: CGFloat = 0
 
     /// Time for the full screen cover to close before the channel sheet can open.
     private static let coverCloseDelay = Duration.milliseconds(400)
-
-    init(route: ShortsRoute, player: MpvPlayer) {
-        _model = StateObject(wrappedValue: ShortsModel(shorts: route.videos, player: player))
-        _currentId = State(initialValue: route.startId)
-    }
+    private static let commentAreaHeight: CGFloat = 82
+    /// Seconds the scrub must move before the video seeks again.
+    private static let seekStep = 0.25
 
     var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(spacing: 0) {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
                 ForEach(model.shorts, id: \.videoId) { video in
                     page(video)
                         .containerRelativeFrame([.horizontal, .vertical])
@@ -127,19 +152,21 @@ struct ShortsView: View {
         }
         .scrollTargetBehavior(.paging)
         .scrollIndicators(.hidden)
-        .scrollPosition(id: $currentId)
-        .ignoresSafeArea()
+        .scrollPosition(id: $model.currentId)
+        .scrollDisabled(scrub != nil)
+        .ignoresSafeArea(edges: .top)
+        .overlay(alignment: .top) { topBar }
+        .overlay(alignment: .top) {
+            if scrub != nil {
+                ScrubPill(clock: model.player.clock, player: model.player)
+                    .padding(.top, Layout.controlHeight)
+            }
+        }
+        .offset(y: pullDistance)
+        .gesture(PlayerDismissGesture.closing(isEnabled: scrub == nil, distance: $pullDistance) { router.minimizeShorts() })
         .background(.black)
         .environment(\.colorScheme, .dark)
-        .overlay(alignment: .topLeading) {
-            Button("Close", systemImage: "chevron.down") { router.shortsRoute = nil }
-                .buttonStyle(PlayerPressStyle())
-                .labelStyle(PlayerGlyphLabelStyle(size: 20))
-                .padding(.horizontal, Layout.chipSpacing)
-        }
-        .overlay(alignment: .top) {
-            if isBoosting { BoostPill() }
-        }
+        .sensoryFeedback(.selection, trigger: scrub != nil)
         .sheet(isPresented: $showsComments) {
             if let token = model.details?.commentsToken {
                 CommentsSheet(token: token)
@@ -156,54 +183,102 @@ struct ShortsView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .task(id: currentId) {
-            guard let video = model.shorts.first(where: { $0.videoId == currentId }) else { return }
-            await model.play(video)
-        }
-        .onChange(of: scenePhase) {
-            model.player.setVideoEnabled(scenePhase != .background)
-        }
-        .onDisappear {
-            model.player.setBoosted(false)
-            model.player.stop()
+        .onAppear { model.playCurrent() }
+        .onChange(of: model.currentId) { model.playCurrent() }
+    }
+
+    private var topBar: some View {
+        ZStack(alignment: .trailing) {
+            Button {
+                router.minimizeShorts()
+            } label: {
+                Capsule()
+                    .fill(.white.opacity(0.5))
+                    .frame(width: 36, height: 5)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Send to Mini Player")
+            Button("Close", systemImage: "xmark") { router.closeShorts() }
+                .buttonStyle(PlayerPressStyle())
+                .labelStyle(PlayerGlyphLabelStyle(size: 17))
+                .padding(.horizontal, Layout.chipSpacing)
         }
     }
 
     private func page(_ video: YouTubeVideo) -> some View {
-        let isCurrent = video.videoId == currentId
-        return ZStack(alignment: .bottom) {
-            if video.videoId == model.playingId {
-                MpvVideoView(player: model.player)
-                VideoPoster(player: model.player, video: video)
-            } else {
-                CoverImage(url: video.thumbnailURL)
-            }
-            PlayerTouchSurface(
-                onTap: { model.player.togglePause() },
-                onBoost: { boosting in
-                    isBoosting = boosting
-                    model.player.setBoosted(boosting)
+        let isCurrent = video.videoId == model.currentId
+        return VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
+                if video.videoId == model.playingId {
+                    MpvVideoView(player: model.player, fills: true)
+                    VideoPoster(player: model.player, video: video)
+                } else {
+                    CoverImage(url: video.thumbnailURL)
                 }
-            )
-            if isCurrent {
-                CaptionOverlay(clock: model.player.clock, cues: model.captionCues, isFullscreen: false)
-                    .padding(.bottom, 160)
-            }
-            VStack(spacing: Layout.chipSpacing) {
-                HStack(alignment: .bottom, spacing: Layout.rowSpacing) {
-                    info(video, isCurrent: isCurrent)
+                PlayerTouchSurface(
+                    onTap: { model.player.togglePause() },
+                    onBoost: hold,
+                    onHoldMoved: moveHold
+                )
+                if isCurrent {
+                    CaptionOverlay(clock: model.player.clock, cues: model.captionCues, isFullscreen: false)
+                        .padding(.bottom, 120)
+                }
+                VStack(spacing: Layout.chipSpacing) {
+                    HStack(alignment: .bottom, spacing: Layout.rowSpacing) {
+                        info(video, isCurrent: isCurrent)
+                        if isCurrent {
+                            rail(video)
+                        }
+                    }
+                    .padding(.horizontal, Layout.screenPadding)
+                    .opacity(scrub == nil ? 1 : 0)
                     if isCurrent {
-                        rail(video)
+                        ShortsProgress(clock: model.player.clock, player: model.player, isEmphasized: scrub != nil)
                     }
                 }
-                .padding(.horizontal, Layout.screenPadding)
-                if isCurrent {
-                    ShortsProgress(clock: model.player.clock, player: model.player)
-                }
             }
-            .padding(.bottom, Layout.screenPadding)
+            .frame(maxHeight: .infinity)
+            .clipShape(.rect(bottomLeadingRadius: Layout.sheetRadius, bottomTrailingRadius: Layout.sheetRadius, style: .continuous))
+
+            commentArea(isCurrent: isCurrent)
         }
-        .clipped()
+    }
+
+    /// Takes the space that used to stay black under the video.
+    private func commentArea(isCurrent: Bool) -> some View {
+        Group {
+            if isCurrent, let details = model.details, details.commentsToken != nil {
+                CommentsCard(details: details, commentLines: 1) { showsComments = true }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .padding(.horizontal, Layout.chipSpacing)
+        .padding(.top, Layout.chipSpacing)
+        .frame(height: Self.commentAreaHeight, alignment: .top)
+    }
+
+    private func hold(_ isHeld: Bool) {
+        if isHeld {
+            scrub = Scrub(start: model.player.time, wasPaused: model.player.isPaused)
+            lastSeek = model.player.time
+            model.player.setPaused(true)
+        } else if let finished = scrub {
+            scrub = nil
+            model.player.setPaused(finished.wasPaused)
+        }
+    }
+
+    /// The video's whole length fits in the screen's width.
+    private func moveHold(_ fraction: CGFloat) {
+        guard let scrub else { return }
+        let target = min(max(scrub.start + Double(fraction) * model.player.duration, 0), model.player.duration)
+        guard abs(target - lastSeek) >= Self.seekStep else { return }
+        lastSeek = target
+        model.player.seek(to: target)
     }
 
     private func info(_ video: YouTubeVideo, isCurrent: Bool) -> some View {
@@ -212,7 +287,7 @@ struct ShortsView: View {
             HStack(spacing: Layout.chipSpacing) {
                 Button {
                     guard let id = details?.channelId ?? video.channelId else { return }
-                    router.shortsRoute = nil
+                    router.minimizeShorts()
                     Task {
                         try? await Task.sleep(for: Self.coverCloseDelay)
                         router.openChannel(id)
@@ -264,11 +339,6 @@ struct ShortsView: View {
                 Task { await model.setLike(isDisliked ? "INDIFFERENT" : "DISLIKE", video: video) }
             } label: {
                 RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike")
-            }
-            Button {
-                showsComments = true
-            } label: {
-                RailLabel(icon: "bubble.left", text: details?.commentCount ?? "Comments")
             }
             if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
                 ShareLink(item: url) {
@@ -333,10 +403,27 @@ private struct ShortsMoreMenu: View {
     }
 }
 
+/// The time while scrubbing by holding the video.
+private struct ScrubPill: View {
+    @ObservedObject var clock: PlayerClock
+    @ObservedObject var player: MpvPlayer
+
+    var body: some View {
+        Text("\(clock.time.clockText) / \(player.duration.clockText)")
+            .font(.subheadline.weight(.semibold).monospacedDigit())
+            .foregroundStyle(.white)
+            .padding(.horizontal, Layout.rowSpacing)
+            .padding(.vertical, Layout.rowPadding)
+            .background(.black.opacity(0.55), in: .capsule)
+            .allowsHitTesting(false)
+    }
+}
+
 /// Its own view, so only the bar redraws as the time ticks.
 private struct ShortsProgress: View {
     @ObservedObject var clock: PlayerClock
     @ObservedObject var player: MpvPlayer
+    let isEmphasized: Bool
     @State private var position = 0.0
     @State private var isEditing = false
 
@@ -344,6 +431,7 @@ private struct ShortsProgress: View {
         let total = max(player.duration, 1)
         ProgressBar(
             progress: Binding(get: { isEditing ? position : clock.time / total }, set: { position = $0 }),
+            isEmphasized: isEmphasized,
             onEditingChanged: { editing in
                 if editing {
                     position = clock.time / total

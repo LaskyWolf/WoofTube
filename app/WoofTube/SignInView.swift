@@ -27,6 +27,44 @@ struct SignInView: View {
     }
 }
 
+/// Signs in to one more account, from the Profile page.
+struct AddAccountSheet: View {
+    @EnvironmentObject private var session: Session
+    @EnvironmentObject private var router: Router
+    @Environment(\.dismiss) private var dismiss
+    @State private var isReady = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isReady {
+                    GoogleSignInWebView { auth in
+                        dismiss()
+                        if let auth {
+                            router.close()
+                            Task { await session.signIn(auth) }
+                        } else {
+                            router.actionMessage = "Sign-in didn't finish."
+                        }
+                    }
+                    .ignoresSafeArea(edges: .bottom)
+                } else {
+                    ProgressView()
+                }
+            }
+            .navigationTitle("Add Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                Button("Close", systemImage: "xmark") { dismiss() }
+            }
+        }
+        .task {
+            await session.clearWebSignIn()
+            isReady = true
+        }
+    }
+}
+
 /// Google's sign-in page. SwiftyTube's docs require the desktop user agent and
 /// polling the cookies, because the first cookies after the redirect are incomplete.
 private struct GoogleSignInWebView: UIViewRepresentable {

@@ -16,7 +16,8 @@ struct WoofTubeApp: App {
         WindowGroup {
             AppearanceRoot {
                 if session.isSignedIn {
-                    RootTabs()
+                    // A new identity resets every tab's feeds when the account changes.
+                    RootTabs().id(session.generation)
                 } else {
                     SignInView()
                 }
@@ -67,7 +68,9 @@ extension View {
     /// tabs and the video page each attach these and the tabs stand down while it's open.
     func routerPresentations(_ router: Router, isActive: Bool) -> some View {
         fullScreenCover(item: Binding(get: { isActive ? router.shortsRoute : nil }, set: { router.shortsRoute = $0 })) { route in
-            ShortsView(route: route, player: router.shortsPlayer)
+            ShortsView(model: route.model)
+                .onAppear { router.isShortsPageOnScreen = true }
+                .onDisappear { router.isShortsPageOnScreen = false }
         }
         .sheet(item: Binding(get: { isActive ? router.channelRoute : nil }, set: { router.channelRoute = $0 })) { route in
             NavigationStack {
@@ -122,6 +125,9 @@ struct RootTabs: View {
         .routerPresentations(router, isActive: !router.isExpanded)
         .task { await Subscriptions.shared.load() }
         // Metal may not draw in the background. Otherwise the video is always on screen.
-        .onChange(of: scenePhase) { router.player.setVideoEnabled(scenePhase != .background) }
+        .onChange(of: scenePhase) {
+            router.player.setVideoEnabled(scenePhase != .background)
+            router.shortsModel?.player.setVideoEnabled(scenePhase != .background)
+        }
     }
 }

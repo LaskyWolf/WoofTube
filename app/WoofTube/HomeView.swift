@@ -329,6 +329,8 @@ struct FeedRows: View {
     var isCompact = false
     /// Set on a playlist the user can edit, to offer removing videos.
     var editablePlaylistId: String?
+    /// Set on a playlist, so a tapped video carries on with the ones after it.
+    var playlistTitle: String?
     @EnvironmentObject private var router: Router
 
     var body: some View {
@@ -351,11 +353,16 @@ struct FeedRows: View {
         }
     }
 
+    private func playAction(for video: YouTubeVideo) -> (() -> Void)? {
+        guard let playlistTitle else { return nil }
+        return { router.playPlaylist(video, title: playlistTitle, model: model) }
+    }
+
     @ViewBuilder
     private func row(_ item: FeedItem) -> some View {
         switch item {
         case .video(let video, let extras):
-            VideoButton(video: video, extras: extras, isCompact: isCompact, onRemove: { model.remove(item) }, onRemoveFromPlaylist: removal(of: item, extras: extras))
+            VideoButton(video: video, extras: extras, isCompact: isCompact, onRemove: { model.remove(item) }, onRemoveFromPlaylist: removal(of: item, extras: extras), onPlay: playAction(for: video))
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, isCompact ? Layout.rowPadding : Layout.rowSpacing)
         case .shorts(let title, let videos):
@@ -397,19 +404,26 @@ struct VideoButton: View {
     var isCompact = false
     var onRemove: (() -> Void)?
     var onRemoveFromPlaylist: (() -> Void)?
+    var onPlay: (() -> Void)?
     @EnvironmentObject private var router: Router
+
+    private func play() {
+        if let onPlay {
+            onPlay()
+        } else {
+            router.play(video)
+        }
+    }
 
     var body: some View {
         Group {
             if isCompact {
-                Button {
-                    router.play(video)
-                } label: {
+                Button(action: play) {
                     CompactVideoRow(video: video, extras: extras)
                 }
                 .buttonStyle(RowPressStyle())
             } else {
-                VideoRow(video: video, extras: extras)
+                VideoRow(video: video, extras: extras, onPlay: play)
             }
         }
         .videoMenu(video, feedback: extras.feedback, collaborators: extras.collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist)
@@ -420,6 +434,7 @@ struct VideoButton: View {
 struct VideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
+    let onPlay: () -> Void
     @EnvironmentObject private var router: Router
 
     private var details: String {
@@ -430,9 +445,7 @@ struct VideoRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            Button {
-                router.play(video)
-            } label: {
+            Button(action: onPlay) {
                 Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
                     .overlay { WatchProgressLine(video: video, extras: extras) }
                     .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
@@ -442,9 +455,7 @@ struct VideoRow: View {
             .buttonStyle(RowPressStyle())
             HStack(alignment: .top, spacing: Layout.rowSpacing) {
                 avatar
-                Button {
-                    router.play(video)
-                } label: {
+                Button(action: onPlay) {
                     HStack(spacing: 0) {
                         VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                             Text(video.title)

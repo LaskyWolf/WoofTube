@@ -2,7 +2,7 @@ import AVKit
 import SwiftUI
 import SwiftyTube
 
-/// The floating card above the tabs. It can be flicked off the side, leaving a small handle.
+/// The floating card above the tabs, for a video or a Short. It can be flicked off the side, leaving a small handle.
 struct PlayerOverlay: View {
     static let zoomSource = "player"
 
@@ -13,13 +13,10 @@ struct PlayerOverlay: View {
     @State private var isMiniTop = false
     @State private var isDocked = false
 
-    private static let miniSize = CGSize(width: 192, height: 108)
     /// The title, pause and close strip under the mini video.
     private static let miniStripHeight: CGFloat = 44
     /// The glass shows this far around the video.
     private static let miniInset = Layout.rowPadding
-    private static var miniCardWidth: CGFloat { miniSize.width + miniInset * 2 }
-    private static var miniCardHeight: CGFloat { miniInset + miniSize.height + miniStripHeight }
     /// Follows the video's corners, so the glass stays the same width around them.
     private static let cardRadius = Layout.tileRadius + miniInset
     private static let miniMargin: CGFloat = 12
@@ -27,9 +24,17 @@ struct PlayerOverlay: View {
     private static let tabBarHeight: CGFloat = 64
     private static let handleSize = CGSize(width: 44, height: 72)
 
+    /// The Short in the card, once its page has closed.
+    private var short: ShortsModel? { router.shortsRoute == nil ? router.shortsModel : nil }
+    private var miniPlayerObject: MpvPlayer { short?.player ?? router.player }
+    private var miniVideo: YouTubeVideo? { short?.currentVideo ?? router.current }
+    private var miniSize: CGSize { short == nil ? CGSize(width: 192, height: 108) : CGSize(width: 108, height: 192) }
+    private var miniCardWidth: CGFloat { miniSize.width + Self.miniInset * 2 }
+    private var miniCardHeight: CGFloat { Self.miniInset + miniSize.height + Self.miniStripHeight }
+
     var body: some View {
         GeometryReader { geometry in
-            if router.current != nil {
+            if router.current != nil || short != nil {
                 content(geometry)
             }
         }
@@ -47,10 +52,10 @@ struct PlayerOverlay: View {
             height: geometry.size.height + insets.top + insets.bottom
         )
         let mini = CGPoint(
-            x: isMiniLeading ? Self.miniMargin : screen.width - Self.miniCardWidth - Self.miniMargin,
-            y: isMiniTop ? insets.top + Self.miniMargin : screen.height - Self.miniCardHeight - insets.bottom - Self.tabBarHeight - Self.miniMargin
+            x: isMiniLeading ? Self.miniMargin : screen.width - miniCardWidth - Self.miniMargin,
+            y: isMiniTop ? insets.top + Self.miniMargin : screen.height - miniCardHeight - insets.bottom - Self.tabBarHeight - Self.miniMargin
         )
-        let hiddenX = isMiniLeading ? -Self.miniCardWidth - Self.miniMargin : screen.width + Self.miniMargin
+        let hiddenX = isMiniLeading ? -miniCardWidth - Self.miniMargin : screen.width + Self.miniMargin
 
         return ZStack(alignment: .topLeading) {
             card(origin: mini, screen: screen)
@@ -60,7 +65,7 @@ struct PlayerOverlay: View {
                     .offset(
                         // Part of it stays off screen, so it reads as attached to the edge.
                         x: isMiniLeading ? -Layout.chipSpacing : screen.width - Self.handleSize.width + Layout.chipSpacing,
-                        y: mini.y + (Self.miniCardHeight - Self.handleSize.height) / 2
+                        y: mini.y + (miniCardHeight - Self.handleSize.height) / 2
                     )
                     .transition(.opacity)
             }
@@ -72,27 +77,45 @@ struct PlayerOverlay: View {
 
     private func card(origin: CGPoint, screen: CGSize) -> some View {
         let shape = RoundedRectangle(cornerRadius: Self.cardRadius, style: .circular)
+        let isShort = short != nil
         return ZStack(alignment: .topLeading) {
             Color.clear.glassEffect(.regular, in: shape)
 
-            MpvVideoView(player: router.player, isActive: !router.isWatchPageOnScreen)
-                .overlay { VideoPoster(player: router.player, video: router.current) }
-                .frame(width: Self.miniSize.width, height: Self.miniSize.height)
+            MpvVideoView(player: miniPlayerObject, isActive: isShort ? !router.isShortsPageOnScreen : !router.isWatchPageOnScreen)
+                .id(isShort)
+                .overlay { VideoPoster(player: miniPlayerObject, video: miniVideo) }
+                .frame(width: miniSize.width, height: miniSize.height)
                 .background(.black)
                 .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
                 .padding(Self.miniInset)
                 .allowsHitTesting(false)
 
             MiniControls(
-                player: router.player,
-                videoAreaHeight: Self.miniInset + Self.miniSize.height,
+                player: miniPlayerObject,
+                // A Short's narrow card has no room for the title.
+                title: isShort ? nil : miniVideo?.title,
+                videoAreaHeight: Self.miniInset + miniSize.height,
+                onExpand: {
+                    if isShort {
+                        router.expandShorts()
+                    } else {
+                        router.isExpanded = true
+                    }
+                },
+                onClose: {
+                    if isShort {
+                        router.closeShorts()
+                    } else {
+                        router.close()
+                    }
+                },
                 onDragChanged: { value in dragOffset = value.translation },
                 onDragEnded: { value in finishMiniDrag(value, origin: origin, screen: screen) }
             )
 
-            CardEdgeProgress(clock: router.player.clock, duration: router.player.duration, radius: Self.cardRadius)
+            CardEdgeProgress(clock: miniPlayerObject.clock, duration: miniPlayerObject.duration, radius: Self.cardRadius)
         }
-        .frame(width: Self.miniCardWidth, height: Self.miniCardHeight)
+        .frame(width: miniCardWidth, height: miniCardHeight)
         .matchedTransitionSource(id: Self.zoomSource, in: zoom) { source in
             source.clipShape(.rect(cornerRadius: Self.cardRadius))
         }
@@ -113,8 +136,8 @@ struct PlayerOverlay: View {
 
     /// Snaps to the corner the flick is heading for. A flick past the screen's side hides the card.
     private func finishMiniDrag(_ value: DragGesture.Value, origin: CGPoint, screen: CGSize) {
-        let endX = origin.x + value.predictedEndTranslation.width + Self.miniCardWidth / 2
-        let endY = origin.y + value.predictedEndTranslation.height + Self.miniCardHeight / 2
+        let endX = origin.x + value.predictedEndTranslation.width + miniCardWidth / 2
+        let endY = origin.y + value.predictedEndTranslation.height + miniCardHeight / 2
         withAnimation(.snappy) {
             isMiniLeading = endX < screen.width / 2
             isMiniTop = endY < screen.height / 2
@@ -130,18 +153,28 @@ struct WatchPage: View {
     @EnvironmentObject private var router: Router
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showsComments = false
+    @State private var pullDistance: CGFloat = 0
+
+    /// How far past the top the details must be pulled to close the page.
+    private static let scrollPullToClose: CGFloat = 90
 
     private var isFullscreen: Bool { verticalSizeClass == .compact }
 
     var body: some View {
         VStack(spacing: 0) {
-            if !isFullscreen {
-                handle
+            VStack(spacing: 0) {
+                if !isFullscreen {
+                    handle
+                }
+                video
             }
-            video
+            .gesture(PlayerDismissGesture.closing(isEnabled: !isFullscreen, distance: $pullDistance) { router.isExpanded = false })
             if !isFullscreen {
                 ScrollView {
                     WatchDetailsView(showsComments: $showsComments)
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, offset in
+                    if offset < -Self.scrollPullToClose { router.isExpanded = false }
                 }
             }
         }
@@ -161,6 +194,7 @@ struct WatchPage: View {
                 .ignoresSafeArea()
             }
         }
+        .offset(y: pullDistance)
         .statusBarHidden(isFullscreen)
         .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
         .sheet(isPresented: $showsComments) {
@@ -203,6 +237,72 @@ struct WatchPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: isFullscreen ? .infinity : nil)
         .aspectRatio(isFullscreen ? nil : 16 / 9, contentMode: .fit)
+    }
+}
+
+/// Woof Music's pull-down to close: the page follows the finger and closes when released far or
+/// fast enough. It goes first, because the system's own pull-down often loses to the buttons and
+/// sliders: every other gesture except taps and long presses waits until this one has decided
+/// the touch isn't a downward pull.
+struct PlayerDismissGesture: UIGestureRecognizerRepresentable {
+    var isEnabled: Bool
+    var onChanged: (CGFloat) -> Void
+    var onEnded: (_ distance: CGFloat, _ velocity: CGFloat) -> Void
+
+    /// Far enough, a fifth of the screen, or a quick flick closes.
+    @MainActor
+    static func closing(isEnabled: Bool, distance: Binding<CGFloat>, onClose: @escaping () -> Void) -> PlayerDismissGesture {
+        PlayerDismissGesture(isEnabled: isEnabled) { pulled in
+            distance.wrappedValue = max(0, pulled)
+        } onEnded: { pulled, velocity in
+            if pulled > UIScreen.main.bounds.height * 0.2 || (pulled > 20 && velocity > 800) {
+                onClose()
+            }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { distance.wrappedValue = 0 }
+        }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let recognizer = UIPanGestureRecognizer()
+        recognizer.delegate = context.coordinator
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.isEnabled = isEnabled
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        recognizer.isEnabled = isEnabled
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        // Window coordinates: the page moves while dragged, the window doesn't.
+        let distance = recognizer.translation(in: nil).y
+        switch recognizer.state {
+        case .began, .changed:
+            onChanged(distance)
+        case .ended:
+            onEnded(distance, recognizer.velocity(in: nil).y)
+        case .cancelled, .failed:
+            onEnded(0, 0)
+        default:
+            break
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: nil)
+            return velocity.y > 0 && velocity.y > abs(velocity.x)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            !(other is UITapGestureRecognizer || other is UILongPressGestureRecognizer)
+        }
     }
 }
 
@@ -305,6 +405,8 @@ struct BoostPill: View {
 struct PlayerTouchSurface: UIViewRepresentable {
     let onTap: () -> Void
     let onBoost: (Bool) -> Void
+    /// How far the finger moved sideways while holding, as a fraction of the view's width.
+    var onHoldMoved: ((CGFloat) -> Void)?
     /// True for the leading half of the video.
     var onDoubleTap: ((Bool) -> Void)?
     var onDragChanged: ((CGSize) -> Void)?
@@ -348,6 +450,7 @@ struct PlayerTouchSurface: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: PlayerTouchSurface
+        private var holdStartX: CGFloat = 0
 
         init(parent: PlayerTouchSurface) {
             self.parent = parent
@@ -368,7 +471,12 @@ struct PlayerTouchSurface: UIViewRepresentable {
 
         @objc func held(_ recognizer: UILongPressGestureRecognizer) {
             switch recognizer.state {
-            case .began: parent.onBoost(true)
+            case .began:
+                holdStartX = recognizer.location(in: nil).x
+                parent.onBoost(true)
+            case .changed:
+                let width = max(recognizer.view?.bounds.width ?? 1, 1)
+                parent.onHoldMoved?((recognizer.location(in: nil).x - holdStartX) / width)
             case .ended, .cancelled, .failed: parent.onBoost(false)
             default: break
             }
@@ -397,16 +505,18 @@ struct PlayerTouchSurface: UIViewRepresentable {
 /// The controls on the floating card: the video shows above, then its title, pause and close.
 private struct MiniControls: View {
     @ObservedObject var player: MpvPlayer
+    let title: String?
     let videoAreaHeight: CGFloat
+    let onExpand: () -> Void
+    let onClose: () -> Void
     let onDragChanged: (DragGesture.Value) -> Void
     let onDragEnded: (DragGesture.Value) -> Void
-    @EnvironmentObject private var router: Router
 
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: videoAreaHeight)
             HStack(spacing: 0) {
-                Text(router.current?.title ?? "")
+                Text(title ?? "")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                     .padding(.leading, Layout.rowSpacing)
@@ -414,14 +524,14 @@ private struct MiniControls: View {
                 Button(player.isPaused ? "Play" : "Pause", systemImage: player.isPaused ? "play.fill" : "pause.fill") {
                     player.togglePause()
                 }
-                Button("Close", systemImage: "xmark") { router.close() }
+                Button("Close", systemImage: "xmark", action: onClose)
             }
             .labelStyle(MiniGlyphLabelStyle())
             .buttonStyle(.plain)
             .frame(maxHeight: .infinity)
         }
         .contentShape(.rect)
-        .onTapGesture { router.isExpanded = true }
+        .onTapGesture(perform: onExpand)
         .gesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .global)
                 .onChanged(onDragChanged)
@@ -440,19 +550,19 @@ private struct MiniGlyphLabelStyle: LabelStyle {
     }
 }
 
-/// The card's bottom edge, from where its left corner starts to where its right corner ends.
+/// The straight part of the card's bottom edge, between its two corners.
 private struct CardBottomEdge: Shape {
     let radius: CGFloat
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
-        path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius), radius: radius, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
+        path.move(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
         return path
     }
 }
 
-/// Playback progress drawn on the card's border. Its own view, so only the line redraws as the time ticks.
+/// Playback progress in a straight line on the card's border. Its own view, so only the line redraws as the time ticks.
 private struct CardEdgeProgress: View {
     @ObservedObject var clock: PlayerClock
     let duration: Double
@@ -461,9 +571,9 @@ private struct CardEdgeProgress: View {
 
     var body: some View {
         // Half the line's width in from the edge, so its outer side lies exactly on the border.
-        let edge = CardBottomEdge(radius: radius - Self.lineWidth / 2)
+        let edge = CardBottomEdge(radius: radius)
         ZStack {
-            edge.stroke(Color.primary.opacity(0.12), lineWidth: Self.lineWidth)
+            edge.stroke(Color.primary.opacity(0.12), style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
             edge.trim(from: 0, to: min(clock.time / max(duration, 1), 1))
                 .stroke(.tint, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
         }
@@ -477,23 +587,26 @@ struct ProgressBar: View {
     @Binding var progress: Double
     /// Where chapters start, from 0 to 1. The bar splits at each one.
     var marks: [Double] = []
+    /// Shows the bar as thick as while scrubbing, for scrubbing that happens elsewhere.
+    var isEmphasized = false
     let onEditingChanged: (Bool) -> Void
     @GestureState private var isScrubbing = false
     @State private var didStartEditing = false
 
     var body: some View {
         GeometryReader { geometry in
-            let inset: CGFloat = isScrubbing ? 0 : Layout.chipSpacing
+            let isThick = isScrubbing || isEmphasized
+            let inset: CGFloat = isThick ? 0 : Layout.chipSpacing
             let trackWidth = max(0, geometry.size.width - inset * 2)
-            let height: CGFloat = isScrubbing ? 12 : (marks.isEmpty ? 5 : 7)
+            let height: CGFloat = isThick ? 12 : (marks.isEmpty ? 5 : 7)
             ZStack(alignment: .leading) {
                 Rectangle().fill(.white.opacity(0.3)).frame(height: height)
                 Rectangle().fill(.tint).frame(width: trackWidth * min(max(progress, 0), 1), height: height)
             }
             .frame(height: height)
-            .clipShape(BarSegments(marks: marks, position: progress, otherHeight: isScrubbing ? 6 : 3))
+            .clipShape(BarSegments(marks: marks, position: progress, otherHeight: isThick ? 6 : 3))
             .padding(.horizontal, inset)
-            .animation(.easeInOut(duration: 0.2), value: isScrubbing)
+            .animation(.easeInOut(duration: 0.2), value: isThick)
             .frame(maxHeight: .infinity)
             .contentShape(.rect)
             .gesture(
@@ -748,6 +861,7 @@ private struct PlayerControls: View {
                     Button("Close", systemImage: "chevron.down") { router.isExpanded = false }
                 }
                 Spacer()
+                PictureInPictureButton(model: router.pictureInPicture)
                 if sleepTimer.isActive {
                     Button("Sleep Timer", systemImage: "moon.zzz.fill") { showsSleepTimer = true }
                 }
@@ -914,6 +1028,22 @@ private struct PlayerControls: View {
     }
 }
 
+/// Downloaded videos have no stream on YouTube's side for Apple's window to play.
+private struct PictureInPictureButton: View {
+    @ObservedObject var model: PictureInPicture
+    @EnvironmentObject private var router: Router
+
+    var body: some View {
+        if router.streamSummary != nil, router.streamSummary != "Downloaded" {
+            if model.isLoading {
+                ProgressView().tint(.white).frame(width: 44, height: 44)
+            } else {
+                Button("Picture in Picture", systemImage: "pip.enter") { router.startPictureInPicture() }
+            }
+        }
+    }
+}
+
 private struct RoutePicker: UIViewRepresentable {
     func makeUIView(context: Context) -> AVRoutePickerView {
         let view = AVRoutePickerView()
@@ -945,19 +1075,19 @@ private struct WatchDetailsView: View {
             if let details = router.details {
                 descriptionCard(details)
                 if details.commentsToken != nil {
-                    commentsCard(details)
+                    CommentsCard(details: details) { showsComments = true }
                 }
                 if !router.queue.isEmpty {
-                    Text("Queue")
-                        .font(.title3.bold())
-                        .padding(.top, Layout.chipSpacing)
-                    LazyVStack(spacing: Layout.rowSpacing * 2) {
-                        ForEach(router.queue, id: \.videoId) { video in
-                            VideoButton(video: video)
-                        }
-                    }
+                    QueueCard()
                 }
                 if !details.related.isEmpty {
+                    if !router.queue.isEmpty {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.2))
+                            .frame(height: 1)
+                            .padding(.vertical, Layout.chipSpacing)
+                            .accessibilityHidden(true)
+                    }
                     Text("Up Next")
                         .font(.title3.bold())
                         .padding(.top, Layout.chipSpacing)
@@ -1181,40 +1311,6 @@ private struct WatchDetailsView: View {
         .buttonStyle(.plain)
     }
 
-    private func commentsCard(_ details: WatchDetails) -> some View {
-        Button {
-            showsComments = true
-        } label: {
-            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                HStack(spacing: Layout.rowPadding) {
-                    Text("Comments").font(.subheadline.weight(.semibold))
-                    if let count = details.commentCount {
-                        Text(count)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                if let comment = details.topComment {
-                    HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                        Avatar(url: comment.avatar, size: 24)
-                        Text(comment.text)
-                            .font(.footnote)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
-            .materialCard()
-        }
-        .buttonStyle(.plain)
-    }
-
     private func toggleWatchLater(_ id: String, isSaved: Bool) {
         router.setDetails { $0.isInWatchLater = !isSaved }
         Task {
@@ -1250,7 +1346,88 @@ private struct WatchDetailsView: View {
     }
 }
 
-private extension View {
+/// The most relevant comment, in a card that opens the rest. For videos and Shorts.
+struct CommentsCard: View {
+    let details: WatchDetails
+    var commentLines = 2
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                HStack(spacing: Layout.rowPadding) {
+                    Text("Comments").font(.subheadline.weight(.semibold))
+                    if let count = details.commentCount {
+                        Text(count)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if let comment = details.topComment {
+                    HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                        Avatar(url: comment.avatar, size: 24)
+                        Text(comment.text)
+                            .font(.footnote)
+                            .lineLimit(commentLines)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .materialCard()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// What plays next, apart from YouTube's suggestions below. A long playlist stays short until opened.
+private struct QueueCard: View {
+    @EnvironmentObject private var router: Router
+    @State private var showsAll = false
+
+    private static let collapsedCount = 4
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(router.playlistTitle ?? "Queue")
+                    .font(.title3.bold())
+                    .lineLimit(2)
+                Text("\(router.queue.count)\(router.playlistTitle == nil ? "" : "+") next")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            LazyVStack(alignment: .leading, spacing: Layout.rowSpacing) {
+                ForEach(showsAll ? router.queue : Array(router.queue.prefix(Self.collapsedCount)), id: \.videoId) { video in
+                    Button {
+                        router.playFromQueue(video)
+                    } label: {
+                        CompactVideoRow(video: video)
+                    }
+                    .buttonStyle(RowPressStyle())
+                    .videoMenu(video)
+                }
+            }
+            if router.queue.count > Self.collapsedCount {
+                Button(showsAll ? "Show Less" : "Show All") {
+                    withAnimation(.snappy) { showsAll.toggle() }
+                }
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(.rect)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .materialCard()
+    }
+}
+
+extension View {
     /// The cards on the video page, over the blurred thumbnail.
     func materialCard() -> some View {
         padding(Layout.rowSpacing)

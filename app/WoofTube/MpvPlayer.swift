@@ -356,18 +356,22 @@ struct MpvVideoView: UIViewRepresentable {
     let player: MpvPlayer
     /// Only one view can hold the video layer. This one takes it when this turns true.
     var isActive = true
+    /// Fills the view and crops what's outside, instead of leaving black bars.
+    var fills = false
 
     func makeUIView(context: Context) -> MpvVideoUIView {
         MpvVideoUIView(player: player)
     }
 
     func updateUIView(_ view: MpvVideoUIView, context: Context) {
+        view.fills = fills
         view.isActive = isActive
     }
 }
 
 final class MpvVideoUIView: UIView {
     private let player: MpvPlayer
+    var fills = false
     var isActive = true {
         didSet {
             if isActive != oldValue { setNeedsLayout() }
@@ -396,7 +400,9 @@ final class MpvVideoUIView: UIView {
         let drawable = aspect >= 1
             ? CGSize(width: longSide, height: longSide / aspect)
             : CGSize(width: longSide * aspect, height: longSide)
-        let frame = AVMakeRect(aspectRatio: drawable, insideRect: bounds)
+        let fitted = AVMakeRect(aspectRatio: drawable, insideRect: bounds)
+        let scale = fills ? max(bounds.width / fitted.width, bounds.height / fitted.height) : 1
+        let frame = fitted.insetBy(dx: fitted.width * (1 - scale) / 2, dy: fitted.height * (1 - scale) / 2)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)

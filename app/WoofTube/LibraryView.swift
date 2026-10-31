@@ -480,7 +480,7 @@ struct PlaylistPage: View {
                         if let errorText = model.errorText { Text(errorText) }
                     }
                 }
-                FeedRows(model: model, isCompact: true, editablePlaylistId: allowsRemoving ? playlistId : nil)
+                FeedRows(model: model, isCompact: true, editablePlaylistId: allowsRemoving ? playlistId : nil, playlistTitle: shownTitle)
             }
         }
         .toolbar {
@@ -532,7 +532,11 @@ struct PlaylistPage: View {
                     HeaderRoundIcon(systemImage: "shuffle")
                 }
                 .accessibilityLabel("Shuffle")
-                Button { router.playAll(videos) } label: {
+                Button {
+                    if let first = videos.first {
+                        router.playPlaylist(first, title: shownTitle, model: model)
+                    }
+                } label: {
                     HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
                 }
                 .accessibilityLabel("Play All")
