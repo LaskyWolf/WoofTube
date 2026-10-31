@@ -47,7 +47,6 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
         }
         let item = AVPlayerItem(url: url)
         let player = AVPlayer(playerItem: item)
-        player.updatesNowPlayingInfoCenter = false
         player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         // The window itself holds the layer, because a full screen page removes the views behind it.
         let layer = AVPlayerLayer(player: player)
