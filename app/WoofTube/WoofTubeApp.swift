@@ -33,7 +33,10 @@ struct WoofTubeApp: App {
                 await session.restore()
             }
             .alert("Session Expired", isPresented: $session.isExpired) {
-                Button("Sign In Again") { Task { await session.signOut() } }
+                Button("Sign In Again") {
+                    router.close()
+                    Task { await session.signOut() }
+                }
                 Button("Not Now", role: .cancel) {}
             } message: {
                 Text("Google no longer accepts this sign-in. Your feeds won't be personal until you sign in again.")
@@ -64,15 +67,10 @@ private struct AppearanceRoot<Content: View>: View {
 }
 
 extension View {
-    /// Shorts, channels and errors. Only the top screen can present them, so the
+    /// Channels and errors. Only the top screen can present them, so the
     /// tabs and the video page each attach these and the tabs stand down while it's open.
     func routerPresentations(_ router: Router, isActive: Bool) -> some View {
-        fullScreenCover(item: Binding(get: { isActive ? router.shortsRoute : nil }, set: { router.shortsRoute = $0 })) { route in
-            ShortsView(model: route.model)
-                .onAppear { router.isShortsPageOnScreen = true }
-                .onDisappear { router.isShortsPageOnScreen = false }
-        }
-        .sheet(item: Binding(get: { isActive ? router.channelRoute : nil }, set: { router.channelRoute = $0 })) { route in
+        fullScreenCover(item: Binding(get: { isActive ? router.channelRoute : nil }, set: { router.channelRoute = $0 })) { route in
             NavigationStack {
                 ChannelView(channelId: route.id)
                     .toolbar {
@@ -121,6 +119,12 @@ struct RootTabs: View {
                 .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
                 .onAppear { router.isWatchPageOnScreen = true }
                 .onDisappear { router.isWatchPageOnScreen = false }
+        }
+        .fullScreenCover(item: $router.shortsRoute) { route in
+            ShortsView(model: route.model)
+                .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
+                .onAppear { router.isShortsPageOnScreen = true }
+                .onDisappear { router.isShortsPageOnScreen = false }
         }
         .routerPresentations(router, isActive: !router.isExpanded)
         .task { await Subscriptions.shared.load() }

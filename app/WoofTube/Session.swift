@@ -26,8 +26,10 @@ final class Session: ObservableObject {
     private let key = "auth"
     private let accountsKey = "accounts"
 
+    /// Google can answer as a guest while the session is stale, and that isn't an account.
     var currentAccountId: String? {
-        account.map { $0.email ?? $0.name }
+        guard let account, !account.name.isEmpty, account.name != "Guest" else { return nil }
+        return account.email ?? account.name
     }
 
     func restore() async {
@@ -41,6 +43,7 @@ final class Session: ObservableObject {
         isSignedIn = true
         await refreshIfStale(auth)
         await loadAccount()
+        openStorageOfCurrentAccount()
     }
 
     func signIn(_ auth: AuthState) async {
@@ -49,10 +52,12 @@ final class Session: ObservableObject {
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
         await loadAccount()
+        openStorageOfCurrentAccount()
         generation += 1
     }
 
     func switchTo(_ saved: SavedAccount) async {
+        openStorage(of: saved.id)
         account = nil
         unseenNotifications = 0
         save(saved.auth)
@@ -74,6 +79,20 @@ final class Session: ObservableObject {
         guard let json = try? await YouTubeAPI.post("notification/get_unseen_count", body: [:]) else { return }
         let count = JSON.first("unseenCount", in: json)
         unseenNotifications = count as? Int ?? Int(count as? String ?? "") ?? 0
+    }
+
+    // ponytail: if Google doesn't answer who signed in, the data stays put until the next launch asks again.
+    private func openStorageOfCurrentAccount() {
+        if let id = currentAccountId { openStorage(of: id) }
+    }
+
+    /// Moves the app to the account's downloads and watch positions.
+    private func openStorage(of accountId: String) {
+        let storage = ProfileStorage.claim(for: accountId)
+        guard storage != ProfileStorage.active else { return }
+        ProfileStorage.activate(storage)
+        WatchPositions.reload()
+        DownloadStore.shared.reloadForActiveProfile()
     }
 
     private func loadAccount() async {

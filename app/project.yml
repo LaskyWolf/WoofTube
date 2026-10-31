@@ -3,6 +3,11 @@ options:
   bundleIdPrefix: com.laskywolf
   deploymentTarget:
     iOS: "26.0"
+  # An .icon is a folder that Xcode reads as one file.
+  fileTypes:
+    icon:
+      file: true
+      buildPhase: resources
 packages:
   SwiftyTube:
     url: https://github.com/686udjie/SwiftyTube.git
@@ -29,6 +34,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "Amber Brown Cyan Green Indigo Lime Orange Pink Purple Red Teal"
     info:
       path: WoofTube/Info.plist
       properties:

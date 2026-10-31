@@ -11,6 +11,8 @@ final class ShortsModel: ObservableObject {
     @Published private(set) var shorts: [YouTubeVideo]
     @Published var currentId: String?
     @Published private(set) var details: WatchDetails?
+    /// True until the details and the top comment have come back.
+    @Published private(set) var isLoadingDetails = true
     @Published private(set) var errorText: String?
     /// The Short attached to the player. Other pages show their thumbnail.
     @Published private(set) var playingId: String?
@@ -25,7 +27,9 @@ final class ShortsModel: ObservableObject {
     var currentVideo: YouTubeVideo? { shorts.first { $0.videoId == currentId } }
 
     init(shorts: [YouTubeVideo], startId: String, player: MpvPlayer) {
-        self.shorts = shorts
+        // The scroll view tells pages apart by their ID, so each Short can only appear once.
+        var seen = Set<String>()
+        self.shorts = shorts.filter { seen.insert($0.videoId).inserted }
         self.currentId = startId
         self.player = player
     }
@@ -41,10 +45,13 @@ final class ShortsModel: ObservableObject {
         player.prepareForNewVideo()
         playingId = video.videoId
         details = nil
+        isLoadingDetails = true
         errorText = nil
         captions = []
         selectedCaption = nil
         captionCues = []
+        // At the same time as the stream, so the comment doesn't wait for the video.
+        async let detailsLoaded: Void = loadDetails(of: video)
         do {
             let stream = try await StreamLoader.load(videoId: video.videoId, maxHeight: 1080)
             guard !Task.isCancelled else { return }
@@ -54,6 +61,12 @@ final class ShortsModel: ObservableObject {
             guard !Task.isCancelled else { return }
             errorText = error.localizedDescription
         }
+        await detailsLoaded
+        guard !Task.isCancelled else { return }
+        await loadMoreIfNeeded(after: video)
+    }
+
+    private func loadDetails(of video: YouTubeVideo) async {
         let json = try? await InnerTubeClient.wooftube.next(videoId: video.videoId)
         guard !Task.isCancelled else { return }
         details = json.map { WatchDetails(json: $0, videoId: video.videoId) }
@@ -63,7 +76,7 @@ final class ShortsModel: ObservableObject {
         guard !Task.isCancelled else { return }
         details?.dislikeCount = dislikeCount
         details?.topComment = topComment
-        await loadMoreIfNeeded(after: video)
+        isLoadingDetails = false
     }
 
     func setLike(_ status: String, video: YouTubeVideo) async {
@@ -110,8 +123,8 @@ final class ShortsModel: ObservableObject {
             json = nil
         }
         guard let json else { return }
-        let known = Set(shorts.map(\.videoId))
-        shorts += YouTubeFeedParser.videos(in: json).filter { $0.isShort && !known.contains($0.videoId) }
+        var known = Set(shorts.map(\.videoId))
+        shorts += YouTubeFeedParser.videos(in: json).filter { $0.isShort && known.insert($0.videoId).inserted }
         nextToken = YouTubeFeedParser.continuation(in: json)
     }
 }
@@ -213,14 +226,14 @@ struct ShortsView: View {
         return VStack(spacing: 0) {
             ZStack(alignment: .bottom) {
                 if video.videoId == model.playingId {
-                    MpvVideoView(player: model.player, fills: true)
+                    MpvVideoView(player: model.player, isActive: router.isShortsPageOnScreen, fills: true)
                     VideoPoster(player: model.player, video: video)
                 } else {
                     CoverImage(url: video.thumbnailURL)
                 }
                 PlayerTouchSurface(
                     onTap: { model.player.togglePause() },
-                    onBoost: hold,
+                    onHold: hold,
                     onHoldMoved: moveHold
                 )
                 if isCurrent {
@@ -251,7 +264,9 @@ struct ShortsView: View {
     /// Takes the space that used to stay black under the video.
     private func commentArea(isCurrent: Bool) -> some View {
         Group {
-            if isCurrent, let details = model.details, details.commentsToken != nil {
+            if !isCurrent || model.isLoadingDetails {
+                CommentsCard(details: isCurrent ? model.details : nil, commentLines: 1, isLoading: true) { showsComments = true }
+            } else if let details = model.details, details.commentsToken != nil {
                 CommentsCard(details: details, commentLines: 1) { showsComments = true }
             }
         }

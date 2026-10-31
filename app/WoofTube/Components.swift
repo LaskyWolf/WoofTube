@@ -117,18 +117,18 @@ struct BlurredArtworkBackdrop: View {
 /// A channel's banner, sharp at the top of the page and fading into what's below.
 struct ChannelBanner: View {
     let url: String
+    /// The status and navigation bars' height. The banner reaches under them, up to the screen's top.
+    let topInset: CGFloat
     /// How far the page's content starts below the banner's top, to sit on its faded part.
     static let contentInset: CGFloat = 84
     private static let height: CGFloat = 150
-    /// Reaches under the navigation bar.
-    private static let overflow: CGFloat = 60
 
     var body: some View {
         CoverImage(url: url)
-            .frame(height: Self.height + Self.overflow)
+            .frame(height: Self.height + topInset)
             .frame(maxWidth: .infinity)
             .mask(LinearGradient(stops: [.init(color: .black, location: 0.6), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-            .padding(.top, -Self.overflow)
+            .padding(.top, -topInset)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -274,7 +274,8 @@ enum ImageStore {
 
     static func load(_ url: String) async throws -> UIImage {
         _ = memoryWarning
-        guard let address = URL(string: url) else { throw URLError(.badURL) }
+        // Some of YouTube's image addresses leave out the "https:".
+        guard let address = URL(string: url.hasPrefix("//") ? "https:" + url : url) else { throw URLError(.badURL) }
         let (data, _) = try await session.data(from: address)
         guard let image = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
         let prepared = await image.byPreparingForDisplay() ?? image

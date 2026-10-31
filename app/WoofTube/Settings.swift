@@ -7,6 +7,11 @@ struct AccentPreset: Identifiable, Hashable {
     let color: Color
     var id: String { name }
 
+    /// The icons in "App Icons" are named after the accent. The main icon is Default Blue.
+    var alternateIconName: String? {
+        name == AccentPreset.all[0].name ? nil : name
+    }
+
     static let all: [AccentPreset] = [
         AccentPreset(name: "Default Blue", color: Color(red: 0, green: 0.48, blue: 1)),
         AccentPreset(name: "Red", color: Color(red: 0.91, green: 0.22, blue: 0.22)),
@@ -114,6 +119,7 @@ private struct ProfileView: View {
     @EnvironmentObject private var router: Router
     @State private var confirmsSignOut = false
     @State private var isAddingAccount = false
+    @ObservedObject private var downloads = DownloadStore.shared
 
     private static let notificationSettings = URL(string: "https://www.youtube.com/account_notifications")!
     private static let accountSettings = URL(string: "https://myaccount.google.com")!
@@ -136,7 +142,7 @@ private struct ProfileView: View {
                     LabeledContent("Email", value: email)
                 }
             }
-            Section("Accounts") {
+            Section {
                 ForEach(session.accounts) { saved in
                     Button {
                         guard saved.id != session.currentAccountId else { return }
@@ -156,7 +162,14 @@ private struct ProfileView: View {
                     .accessibilityAddTraits(saved.id == session.currentAccountId ? .isSelected : [])
                 }
                 Button("Add Account", systemImage: "person.badge.plus") { isAddingAccount = true }
+            } header: {
+                Text("Accounts")
+            } footer: {
+                Text(downloads.active.isEmpty
+                    ? "Each account keeps its own downloads and watch progress on this iPhone."
+                    : "You can change account when your downloads finish.")
             }
+            .disabled(!downloads.active.isEmpty)
             Section {
                 Link(destination: Self.notificationSettings) {
                     Label("Notification Settings", systemImage: "bell.badge")
@@ -167,6 +180,7 @@ private struct ProfileView: View {
             }
             Section {
                 Button("Sign Out", role: .destructive) { confirmsSignOut = true }
+                    .disabled(!downloads.active.isEmpty)
             }
         }
         .listSectionSpacing(.compact)
@@ -246,6 +260,7 @@ private struct AppearanceSettingsView: View {
                     ForEach(AccentPreset.all) { preset in
                         Button {
                             settings.accentName = preset.name
+                            applyAppIcon(of: preset)
                         } label: {
                             ZStack {
                                 Circle()
@@ -268,12 +283,19 @@ private struct AppearanceSettingsView: View {
             } header: {
                 Text("Accent Color")
             } footer: {
-                Text("Applies to buttons, highlights, and selected items.")
+                Text("Applies to buttons, highlights, selected items, and the app icon.")
             }
         }
         .id(settings.accentName)
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// iOS shows its own message when the icon changes.
+    private func applyAppIcon(of preset: AccentPreset) {
+        let application = UIApplication.shared
+        guard application.supportsAlternateIcons, application.alternateIconName != preset.alternateIconName else { return }
+        application.setAlternateIconName(preset.alternateIconName)
     }
 }
 

@@ -31,14 +31,18 @@ final class DownloadStore: ObservableObject {
     @Published private(set) var items: [Item] = []
     @Published private(set) var active: [Active] = []
 
-    private static let folder = URL.documentsDirectory.appending(path: "Downloads", directoryHint: .isDirectory)
-    private static let index = folder.appending(path: "index.json")
+    private static var folder: URL { ProfileStorage.downloadsFolder }
+    private static var index: URL { folder.appending(path: "index.json") }
 
     private init() {
+        reloadForActiveProfile()
+    }
+
+    /// Accounts can't change while something downloads, so nothing lands in the wrong folder.
+    func reloadForActiveProfile() {
         try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        if let data = try? Data(contentsOf: Self.index) {
-            items = (try? JSONDecoder().decode([Item].self, from: data)) ?? []
-        }
+        let data = try? Data(contentsOf: Self.index)
+        items = data.flatMap { try? JSONDecoder().decode([Item].self, from: $0) } ?? []
     }
 
     func isDownloaded(_ videoId: String) -> Bool {

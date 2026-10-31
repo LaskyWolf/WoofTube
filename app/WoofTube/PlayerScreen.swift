@@ -24,8 +24,8 @@ struct PlayerOverlay: View {
     private static let tabBarHeight: CGFloat = 64
     private static let handleSize = CGSize(width: 44, height: 72)
 
-    /// The Short in the card, once its page has closed.
-    private var short: ShortsModel? { router.shortsRoute == nil ? router.shortsModel : nil }
+    /// The Short in the card. The card stays under its page, because the page zooms out of it and back in.
+    private var short: ShortsModel? { router.shortsModel }
     private var miniPlayerObject: MpvPlayer { short?.player ?? router.player }
     private var miniVideo: YouTubeVideo? { short?.currentVideo ?? router.current }
     private var miniSize: CGSize { short == nil ? CGSize(width: 192, height: 108) : CGSize(width: 108, height: 192) }
@@ -39,8 +39,8 @@ struct PlayerOverlay: View {
             }
         }
         .ignoresSafeArea(.keyboard)
-        .accessibilityHidden(router.isExpanded)
-        .onChange(of: router.isExpanded) { _, expanded in
+        .accessibilityHidden(router.isExpanded || router.shortsRoute != nil)
+        .onChange(of: router.isExpanded || router.shortsRoute != nil) { _, expanded in
             if expanded { isDocked = false }
         }
     }
@@ -155,26 +155,15 @@ struct WatchPage: View {
     @State private var showsComments = false
     @State private var pullDistance: CGFloat = 0
 
-    /// How far past the top the details must be pulled to close the page.
-    private static let scrollPullToClose: CGFloat = 90
-
     private var isFullscreen: Bool { verticalSizeClass == .compact }
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                if !isFullscreen {
-                    handle
-                }
-                video
-            }
-            .gesture(PlayerDismissGesture.closing(isEnabled: !isFullscreen, distance: $pullDistance) { router.isExpanded = false })
+            video
+                .gesture(PlayerDismissGesture.closing(isEnabled: !isFullscreen, distance: $pullDistance) { router.isExpanded = false })
             if !isFullscreen {
                 ScrollView {
                     WatchDetailsView(showsComments: $showsComments)
-                }
-                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, offset in
-                    if offset < -Self.scrollPullToClose { router.isExpanded = false }
                 }
             }
         }
@@ -206,23 +195,6 @@ struct WatchPage: View {
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             Orientation.unlockIfHeldUpright()
         }
-    }
-
-    /// Woof Music's player handle. It sits partly in the gap under the status bar.
-    private var handle: some View {
-        Button {
-            router.isExpanded = false
-        } label: {
-            Capsule()
-                .fill(Color.primary.opacity(0.3))
-                .frame(width: 36, height: 5)
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .padding(.top, -Layout.rowSpacing)
-        .accessibilityLabel("Close Video")
     }
 
     private var video: some View {
@@ -386,25 +358,11 @@ struct PlayerPressStyle: ButtonStyle {
     }
 }
 
-/// Shown while the video is held down at double speed.
-struct BoostPill: View {
-    var body: some View {
-        Label("2x", systemImage: "forward.fill")
-            .labelStyle(.titleAndIcon)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, Layout.rowSpacing)
-            .padding(.vertical, Layout.rowPadding)
-            .background(.black.opacity(0.55), in: .capsule)
-            .padding(.top, Layout.chipSpacing)
-            .allowsHitTesting(false)
-    }
-}
-
 /// UIKit gesture recognizers, because they settle tap, hold and drag on one view reliably.
 struct PlayerTouchSurface: UIViewRepresentable {
     let onTap: () -> Void
-    let onBoost: (Bool) -> Void
+    /// True when a hold starts, false when it ends. Only Shorts use it.
+    var onHold: ((Bool) -> Void)?
     /// How far the finger moved sideways while holding, as a fraction of the view's width.
     var onHoldMoved: ((CGFloat) -> Void)?
     /// True for the leading half of the video.
@@ -421,8 +379,6 @@ struct PlayerTouchSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         let coordinator = context.coordinator
-        let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.held(_:)))
-        hold.minimumPressDuration = Self.holdDuration
         let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tapped))
         view.addGestureRecognizer(tap)
         if onDoubleTap != nil {
@@ -431,7 +387,11 @@ struct PlayerTouchSurface: UIViewRepresentable {
             view.addGestureRecognizer(doubleTap)
             tap.require(toFail: doubleTap)
         }
-        view.addGestureRecognizer(hold)
+        if onHold != nil {
+            let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.held(_:)))
+            hold.minimumPressDuration = Self.holdDuration
+            view.addGestureRecognizer(hold)
+        }
         if onDragChanged != nil {
             let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:)))
             pan.delegate = coordinator
@@ -473,11 +433,11 @@ struct PlayerTouchSurface: UIViewRepresentable {
             switch recognizer.state {
             case .began:
                 holdStartX = recognizer.location(in: nil).x
-                parent.onBoost(true)
+                parent.onHold?(true)
             case .changed:
                 let width = max(recognizer.view?.bounds.width ?? 1, 1)
                 parent.onHoldMoved?((recognizer.location(in: nil).x - holdStartX) / width)
-            case .ended, .cancelled, .failed: parent.onBoost(false)
+            case .ended, .cancelled, .failed: parent.onHold?(false)
             default: break
             }
         }
@@ -787,7 +747,6 @@ private struct PlayerControls: View {
 
     @EnvironmentObject private var router: Router
     @State private var showsControls = true
-    @State private var isBoosting = false
     @State private var showsSleepTimer = false
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
@@ -803,10 +762,6 @@ private struct PlayerControls: View {
                     withAnimation(.easeOut(duration: 0.15)) { showsControls.toggle() }
                     scheduleHide()
                 },
-                onBoost: { boosting in
-                    isBoosting = boosting
-                    player.setBoosted(boosting)
-                },
                 onDoubleTap: { isLeading in
                     player.skip(by: isLeading ? -Self.skipSeconds : Self.skipSeconds)
                     seekHint = SeekHint(isLeading: isLeading)
@@ -821,11 +776,8 @@ private struct PlayerControls: View {
             if isLoading {
                 ProgressView().tint(.white).controlSize(.large).allowsHitTesting(false)
             }
-            if showsControls, !isBoosting {
+            if showsControls {
                 controls.transition(.opacity)
-            }
-            if isBoosting {
-                BoostPill().frame(maxHeight: .infinity, alignment: .top)
             }
             if let seekHint {
                 Image(systemName: seekHint.isLeading ? "gobackward.10" : "goforward.10")
@@ -856,7 +808,7 @@ private struct PlayerControls: View {
     private var controls: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                // The page's handle is hidden in full screen.
+                // The handle only shows outside full screen.
                 if isFullscreen {
                     Button("Close", systemImage: "chevron.down") { router.isExpanded = false }
                 }
@@ -894,6 +846,11 @@ private struct PlayerControls: View {
             }
         }
         .padding(.horizontal, Layout.cardSpacing)
+        .background(alignment: .top) {
+            if !isFullscreen {
+                closeHandle
+            }
+        }
         .background {
             LinearGradient(stops: [
                 .init(color: .black.opacity(0.35), location: 0),
@@ -903,6 +860,22 @@ private struct PlayerControls: View {
             ], startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false)
         }
+    }
+
+    /// Woof Music's player handle, on the video. It stays behind the buttons in the same row.
+    private var closeHandle: some View {
+        Button {
+            router.isExpanded = false
+        } label: {
+            Capsule()
+                .fill(.white.opacity(0.7))
+                .frame(width: 36, height: 5)
+                .shadow(color: .black.opacity(0.4), radius: 2)
+                .frame(width: 80, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close Video")
     }
 
     private func skip(_ seconds: Double) {
@@ -1348,8 +1321,11 @@ private struct WatchDetailsView: View {
 
 /// The most relevant comment, in a card that opens the rest. For videos and Shorts.
 struct CommentsCard: View {
-    let details: WatchDetails
+    /// Nil until it loads. The card already shows, so the page around it doesn't jump.
+    let details: WatchDetails?
     var commentLines = 2
+    /// Keeps the comment's place while it loads.
+    var isLoading = false
     let onTap: () -> Void
 
     var body: some View {
@@ -1357,7 +1333,7 @@ struct CommentsCard: View {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 HStack(spacing: Layout.rowPadding) {
                     Text("Comments").font(.subheadline.weight(.semibold))
-                    if let count = details.commentCount {
+                    if let count = details?.commentCount {
                         Text(count)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -1367,7 +1343,7 @@ struct CommentsCard: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                if let comment = details.topComment {
+                if let comment = details?.topComment {
                     HStack(alignment: .top, spacing: Layout.chipSpacing) {
                         Avatar(url: comment.avatar, size: 24)
                         Text(comment.text)
@@ -1375,6 +1351,17 @@ struct CommentsCard: View {
                             .lineLimit(commentLines)
                             .multilineTextAlignment(.leading)
                     }
+                } else if isLoading {
+                    HStack(spacing: Layout.chipSpacing) {
+                        Circle()
+                            .fill(Color(.secondarySystemFill))
+                            .frame(width: 24, height: 24)
+                        Text("The most relevant comment goes here")
+                            .font(.footnote)
+                            .lineLimit(1)
+                            .redacted(reason: .placeholder)
+                    }
+                    .accessibilityHidden(true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1382,6 +1369,7 @@ struct CommentsCard: View {
             .materialCard()
         }
         .buttonStyle(.plain)
+        .disabled(details == nil)
     }
 }
 
@@ -1504,6 +1492,7 @@ struct ChannelView: View {
     @State private var isLoading = true
     @State private var featured: YouTubeVideo?
     @State private var isFeaturedPinned = false
+    @State private var avatar: String?
 
     private static let shownTabs: Set<String> = ["videos", "playlists", "posts", "community"]
     private static let avatarSize: CGFloat = 104
@@ -1530,10 +1519,29 @@ struct ChannelView: View {
         return String(decoding: bytes[2..<(2 + Int(bytes[1]))], as: UTF8.self)
     }
 
+    /// SwiftyTube searches the whole header in a random order, so it can return the banner as the
+    /// avatar. Old-style headers don't have this key and keep SwiftyTube's answer.
+    private static func avatarURL(in json: [String: Any]) -> String? {
+        let avatar = JSON.first("decoratedAvatarViewModel", in: json["header"])
+        let url = (JSON.first("sources", in: avatar) as? [[String: Any]])?.last?["url"] as? String
+        // YouTube's largest is 160 pixels, which is blurry at this size. The address sets the size.
+        return url?.replacingOccurrences(of: "=s160-", with: "=s400-")
+    }
+
     var body: some View {
+        GeometryReader { geometry in
+            content(topInset: geometry.safeAreaInsets.top)
+        }
+        .navigationTitle(page?.channel?.title ?? "")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .task { await load() }
+    }
+
+    private func content(topInset: CGFloat) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header
+                header(topInset: topInset)
                 if let featured {
                     SectionTitle(title: isFeaturedPinned ? "Pinned Video" : "Latest Video")
                     VideoButton(video: featured)
@@ -1557,17 +1565,14 @@ struct ChannelView: View {
                 }
             }
         }
-        .navigationTitle(page?.channel?.title ?? "")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
-        .task { await load() }
     }
 
-    private var header: some View {
+    private func header(topInset: CGFloat) -> some View {
         let channel = page?.channel
         let banner = page?.bannerURL
+        let avatarURL = avatar ?? channel?.thumbnailURL
         return DetailHeaderCard(meta: channel?.handle ?? "Channel", title: channel?.title ?? "", artSize: Self.avatarSize) {
-            CoverImage(url: channel?.thumbnailURL)
+            CoverImage(url: avatarURL)
                 .clipShape(.circle)
                 .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 3))
         } secondary: {
@@ -1596,9 +1601,9 @@ struct ChannelView: View {
         .frame(maxWidth: .infinity)
         .background(alignment: .top) {
             ZStack(alignment: .top) {
-                BlurredArtworkBackdrop(url: banner ?? channel?.thumbnailURL)
+                BlurredArtworkBackdrop(url: banner ?? avatarURL)
                 if let banner {
-                    ChannelBanner(url: banner)
+                    ChannelBanner(url: banner, topInset: topInset)
                 }
             }
         }
@@ -1628,6 +1633,7 @@ struct ChannelView: View {
         defer { isLoading = false }
         guard page == nil, let json = try? await InnerTubeClient.wooftube.browse(browseId: channelId) else { return }
         page = YouTubeChannelParser.channelPage(in: json)
+        avatar = Self.avatarURL(in: json)
         isSubscribed = JSON.first("subscribed", in: json) as? Bool == true || Subscriptions.shared.ids.contains(channelId)
         if let player = JSON.first("channelVideoPlayerRenderer", in: json) as? [String: Any], let id = player["videoId"] as? String {
             featured = YouTubeVideo(

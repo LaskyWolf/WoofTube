@@ -256,7 +256,6 @@ final class Router: ObservableObject {
         playlistTitle = nil
         playlistModel = nil
         isExpanded = false
-        player.setBoosted(false)
         player.stop()
         sleepTimer.cancel()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -439,12 +438,16 @@ extension CommentsPage {
 
 /// Where each video was left, on this device.
 enum WatchPositions {
+    static func reload() {
+        positions = ProfileStorage.defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+    }
+
     private static let key = "watchPositions"
     private static let minimumPosition = 10.0
     private static let finishedFraction = 0.95
     private static let saveEverySeconds = 5
     // ponytail: grows by one number per video watched; prune by date if it ever gets large.
-    private static var positions = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+    private static var positions = ProfileStorage.defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
 
     static func start(for video: YouTubeVideo) -> Double {
         positions[video.videoId] ?? 0
@@ -464,7 +467,7 @@ enum WatchPositions {
         } else {
             return
         }
-        UserDefaults.standard.set(positions, forKey: key)
+        ProfileStorage.defaults.set(positions, forKey: key)
     }
 }
 
@@ -528,6 +531,8 @@ enum SponsorBlock {
 
 extension Double {
     var clockText: String {
+        // Duration.seconds crashes on an invalid number.
+        guard isFinite else { return "0:00" }
         let pattern: Duration.TimeFormatStyle.Pattern = self >= 3600 ? .hourMinuteSecond : .minuteSecond
         return Duration.seconds(self).formatted(.time(pattern: pattern))
     }

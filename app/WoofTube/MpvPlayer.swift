@@ -82,6 +82,8 @@ final class MpvPlayer: ObservableObject {
     }
 
     func seek(to seconds: Double) {
+        // An invalid time would crash whatever draws it.
+        guard seconds.isFinite else { return }
         clock.time = seconds
         isBuffering = true
         command(["seek", String(seconds), "absolute"])
@@ -109,11 +111,6 @@ final class MpvPlayer: ObservableObject {
     func setSpeed(_ speed: Double) {
         self.speed = speed
         setProperty("speed", String(speed))
-    }
-
-    /// Doubles the speed while the video is held down, without changing the chosen speed.
-    func setBoosted(_ boosted: Bool) {
-        setProperty("speed", String(boosted ? 2 : speed))
     }
 
     /// What mpv is doing right now, for the Diagnostics screen in Settings.
@@ -313,7 +310,7 @@ final class MpvPlayer: ObservableObject {
                     } else {
                         player?.publish { $0.isBuffering = isOn }
                     }
-                } else if property.format == MPV_FORMAT_DOUBLE, let value = property.data?.load(as: Double.self) {
+                } else if property.format == MPV_FORMAT_DOUBLE, let value = property.data?.load(as: Double.self), value.isFinite {
                     if name == "duration" {
                         player?.publish { $0.duration = value }
                     } else if Int(value * ticksPerSecond) != lastTick {
