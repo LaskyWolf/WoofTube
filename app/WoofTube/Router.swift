@@ -23,6 +23,9 @@ final class Router: ObservableObject {
             Orientation.videoPageChanged(isOpen: isExpanded)
         }
     }
+    /// True from when the video page has appeared until its closing animation ends.
+    /// It decides which view holds the one video layer.
+    @Published var isWatchPageOnScreen = false
     @Published private(set) var queue: [YouTubeVideo] = []
     @Published var channelRoute: ChannelRoute?
     @Published var shortsRoute: ShortsRoute?
@@ -274,9 +277,24 @@ final class Router: ObservableObject {
             return
         }
         guard current?.videoId == videoId else { return }
-        details = WatchDetails(json: json, videoId: videoId)
-        let dislikes = await DislikeCounts.fetch(videoId: videoId)
-        if current?.videoId == videoId { setDetails { $0.dislikeCount = dislikes } }
+        let loaded = WatchDetails(json: json, videoId: videoId)
+        details = loaded
+        async let dislikes = DislikeCounts.fetch(videoId: videoId)
+        async let comment = topComment(token: loaded.commentsToken)
+        async let options = PlaylistActions.options(for: videoId)
+        let (dislikeCount, firstComment, playlists) = await (dislikes, comment, options)
+        guard current?.videoId == videoId else { return }
+        setDetails {
+            $0.dislikeCount = dislikeCount
+            $0.topComment = firstComment
+            $0.isInWatchLater = playlists.contains { $0.id == YouTubeFeeds.watchLaterPlaylistId && $0.containsVideo }
+        }
+    }
+
+    /// YouTube sorts comments by relevance first, so this is the one it would show.
+    private func topComment(token: String?) async -> Comment? {
+        guard let token, let json = try? await InnerTubeClient.wooftube.next(continuation: token) else { return nil }
+        return CommentsPage(json: json).comments.first
     }
 
     private func setUpRemoteCommands() {
@@ -349,15 +367,40 @@ enum WatchPositions {
 }
 
 /// YouTube hides dislike counts, so this is Return YouTube Dislike's community estimate.
+struct VoteCounts {
+    let likes: Int
+    let dislikes: Int
+}
+
+@MainActor
 enum DislikeCounts {
     static let enabledKey = "showsDislikeCounts"
+    private static var cache: [String: VoteCounts] = [:]
+    /// The service limits requests, so a refusal stops them for a while.
+    private static var pausedUntil = Date.distantPast
+
+    static func cached(videoId: String) -> VoteCounts? {
+        cache[videoId]
+    }
+
+    static func votes(videoId: String) async -> VoteCounts? {
+        if let known = cache[videoId] { return known }
+        guard UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true, Date() > pausedUntil,
+              let url = URL(string: "https://returnyoutubedislikeapi.com/votes?videoId=\(videoId)"),
+              let (data, response) = try? await URLSession.shared.data(from: url) else { return nil }
+        if (response as? HTTPURLResponse)?.statusCode == 429 {
+            pausedUntil = Date().addingTimeInterval(60)
+            return nil
+        }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let likes = json["likes"] as? Int, let dislikes = json["dislikes"] as? Int else { return nil }
+        let votes = VoteCounts(likes: likes, dislikes: dislikes)
+        cache[videoId] = votes
+        return votes
+    }
 
     static func fetch(videoId: String) async -> Int? {
-        guard UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true,
-              let url = URL(string: "https://returnyoutubedislikeapi.com/votes?videoId=\(videoId)"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
-        return json["dislikes"] as? Int
+        await votes(videoId: videoId)?.dislikes
     }
 }
 

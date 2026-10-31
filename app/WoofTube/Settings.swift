@@ -189,7 +189,7 @@ private struct PlayerSettingsView: View {
                     Label("Dislike Counts", systemImage: "hand.thumbsdown")
                 }
             } footer: {
-                Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open.")
+                Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open or see in a feed.")
             }
         }
         .navigationTitle("Player")

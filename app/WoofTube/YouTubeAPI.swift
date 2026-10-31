@@ -98,7 +98,6 @@ enum YouTubeAPI {
 struct Chapter: Hashable {
     let title: String
     let start: Double
-    let thumbnail: String?
 }
 
 struct WatchDetails {
@@ -117,6 +116,8 @@ struct WatchDetails {
     var collaborators: [Collaborator] = []
     var commentCount: String?
     var dislikeCount: Int?
+    var topComment: Comment?
+    var isInWatchLater = false
     var chapters: [Chapter] = []
 
     init(json: [String: Any], videoId: String) {
@@ -154,7 +155,7 @@ struct WatchDetails {
             guard let chapter = item["chapterRenderer"] as? [String: Any],
                   let title = JSON.text(chapter["title"]),
                   let milliseconds = chapter["timeRangeStartMillis"] as? Double else { return nil }
-            return Chapter(title: title, start: milliseconds / 1000, thumbnail: JSON.lastThumbnail(chapter["thumbnail"]))
+            return Chapter(title: title, start: milliseconds / 1000)
         }
         related = watch.related
         commentsToken = watch.commentsContinuation

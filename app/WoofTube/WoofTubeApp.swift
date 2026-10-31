@@ -62,6 +62,29 @@ private struct AppearanceRoot<Content: View>: View {
     }
 }
 
+extension View {
+    /// Shorts, channels and errors. Only the top screen can present them, so the
+    /// tabs and the video page each attach these and the tabs stand down while it's open.
+    func routerPresentations(_ router: Router, isActive: Bool) -> some View {
+        fullScreenCover(item: Binding(get: { isActive ? router.shortsRoute : nil }, set: { router.shortsRoute = $0 })) { route in
+            ShortsView(route: route, player: router.shortsPlayer)
+        }
+        .sheet(item: Binding(get: { isActive ? router.channelRoute : nil }, set: { router.channelRoute = $0 })) { route in
+            NavigationStack {
+                ChannelView(channelId: route.id)
+                    .toolbar {
+                        Button("Close", systemImage: "xmark") { router.channelRoute = nil }
+                    }
+            }
+        }
+        .alert("That Didn't Work", isPresented: Binding(get: { isActive && router.actionMessage != nil }, set: { if !$0 { router.actionMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(router.actionMessage ?? "")
+        }
+    }
+}
+
 enum AppTab: Hashable {
     case home, library, subs, search
 }
@@ -70,6 +93,8 @@ struct RootTabs: View {
     @EnvironmentObject private var router: Router
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = AppTab.home
+    /// Links the floating card and the video page for the zoom, as Woof Music does for its player.
+    @Namespace private var playerZoom
 
     var body: some View {
         TabView(selection: $tab) {
@@ -87,23 +112,14 @@ struct RootTabs: View {
             }
         }
         .tabBarMinimizeBehavior(.never)
-        .overlay { PlayerOverlay() }
-        .fullScreenCover(item: $router.shortsRoute) { route in
-            ShortsView(route: route, player: router.shortsPlayer)
+        .overlay { PlayerOverlay(zoom: playerZoom) }
+        .fullScreenCover(isPresented: $router.isExpanded) {
+            WatchPage()
+                .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
+                .onAppear { router.isWatchPageOnScreen = true }
+                .onDisappear { router.isWatchPageOnScreen = false }
         }
-        .sheet(item: $router.channelRoute) { route in
-            NavigationStack {
-                ChannelView(channelId: route.id)
-                    .toolbar {
-                        Button("Close", systemImage: "xmark") { router.channelRoute = nil }
-                    }
-            }
-        }
-        .alert("That Didn't Work", isPresented: Binding(get: { router.actionMessage != nil }, set: { if !$0 { router.actionMessage = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(router.actionMessage ?? "")
-        }
+        .routerPresentations(router, isActive: !router.isExpanded)
         // Metal may not draw in the background. Otherwise the video is always on screen.
         .onChange(of: scenePhase) { router.player.setVideoEnabled(scenePhase != .background) }
     }

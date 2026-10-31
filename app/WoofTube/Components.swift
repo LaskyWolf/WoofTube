@@ -118,13 +118,7 @@ struct CoverImage: View {
 
     var body: some View {
         Color(.secondarySystemFill)
-            .overlay {
-                AsyncImage(url: url.flatMap(URL.init(string:))) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color.clear
-                }
-            }
+            .overlay { CachedImage(url: url) }
             .clipped()
     }
 }
@@ -209,14 +203,177 @@ struct MediaListRow: View {
     }
 }
 
-/// Woof Music's section title.
+/// Woof Music's section title, with the number of entries on the right.
 struct SectionTitle: View {
     let title: String
+    var count: Int?
 
     var body: some View {
-        Text(title)
-            .font(.title3.bold())
-            .padding(.horizontal, Layout.screenPadding)
-            .padding(.vertical, Layout.chipSpacing)
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.title3.bold())
+            Spacer()
+            if let count {
+                Text("\(count)")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.chipSpacing)
+    }
+}
+
+/// Decoded images in memory and their files on disk. AsyncImage keeps neither,
+/// so it downloads again whenever SwiftUI rebuilds the view.
+@MainActor
+enum ImageStore {
+    // ponytail: counts images, not bytes. Limit by bytes if memory warnings show up in Diagnostics.
+    private static let limit = 150
+    private static var images: [String: UIImage] = [:]
+    private static var order: [String] = []
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.urlCache = URLCache(memoryCapacity: 0, diskCapacity: 300 * 1024 * 1024)
+        configuration.requestCachePolicy = .returnCacheDataElseLoad
+        return URLSession(configuration: configuration)
+    }()
+    private static let memoryWarning = NotificationCenter.default.addObserver(
+        forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
+    ) { _ in
+        MainActor.assumeIsolated {
+            images.removeAll()
+            order.removeAll()
+        }
+    }
+
+    static func image(for url: String) -> UIImage? {
+        images[url]
+    }
+
+    static func load(_ url: String) async throws -> UIImage {
+        _ = memoryWarning
+        guard let address = URL(string: url) else { throw URLError(.badURL) }
+        let (data, _) = try await session.data(from: address)
+        guard let image = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
+        let prepared = await image.byPreparingForDisplay() ?? image
+        if images[url] == nil { order.append(url) }
+        images[url] = prepared
+        if order.count > limit { images[order.removeFirst()] = nil }
+        return prepared
+    }
+}
+
+/// Woof Music's AsyncImageView: a cached image shows at once, and a shimmer stands in for the rest.
+struct CachedImage: View {
+    let url: String?
+    @State private var loaded: (url: String, image: UIImage)?
+    @State private var didFail = false
+
+    private var image: UIImage? {
+        guard let url else { return nil }
+        return ImageStore.image(for: url) ?? (loaded?.url == url ? loaded?.image : nil)
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else if url == nil || didFail {
+                Color.clear
+            } else {
+                ShimmerFill(radius: 0)
+            }
+        }
+        .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        didFail = false
+        guard let url, ImageStore.image(for: url) == nil else { return }
+        var retryDelays: [Duration] = [.seconds(1), .seconds(3)]
+        while !Task.isCancelled {
+            do {
+                let image = try await ImageStore.load(url)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { loaded = (url, image) }
+                return
+            } catch {
+                guard !retryDelays.isEmpty else {
+                    didFail = true
+                    return
+                }
+                try? await Task.sleep(for: retryDelays.removeFirst())
+            }
+        }
+    }
+}
+
+/// Woof Music's ShimmerFill: a light band sweeps across a gray block.
+struct ShimmerFill: View {
+    var radius: CGFloat = Layout.cardRadius
+    @Environment(\.shimmerPhase) private var sharedPhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if reduceMotion {
+            Color(.systemGray5).clipShape(.rect(cornerRadius: radius))
+        } else if let sharedPhase {
+            fill(phase: sharedPhase)
+        } else {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+                fill(phase: shimmerPhase(at: timeline.date))
+            }
+        }
+    }
+
+    private func fill(phase: CGFloat) -> some View {
+        Color(.systemGray5)
+            .overlay {
+                GeometryReader { geometry in
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.5), location: 0.5),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: geometry.size.width * 1.5, height: geometry.size.height)
+                    .offset(x: (phase * 2 - 1) * geometry.size.width)
+                }
+            }
+            .clipShape(.rect(cornerRadius: radius))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private func shimmerPhase(at date: Date) -> CGFloat {
+    let period: TimeInterval = 1.6
+    return CGFloat(date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period)
+}
+
+extension EnvironmentValues {
+    /// Shared by every fill under `shimmerClock()`.
+    @Entry var shimmerPhase: CGFloat?
+}
+
+extension View {
+    /// Drives every ShimmerFill inside from one timeline, instead of one per block.
+    func shimmerClock() -> some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            environment(\.shimmerPhase, shimmerPhase(at: timeline.date))
+        }
+    }
+}
+
+struct ShimmerBlock: View {
+    let width: CGFloat
+    let height: CGFloat
+    var radius: CGFloat = 4
+
+    var body: some View {
+        ShimmerFill(radius: radius).frame(width: width, height: height)
     }
 }

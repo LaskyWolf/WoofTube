@@ -35,6 +35,19 @@ final class FeedModel: ObservableObject {
     private var nextToken: String?
     private var nextQuery: String?
 
+    var hasMore: Bool { nextToken != nil }
+
+    /// Every video on the page, including those inside shelves.
+    var videos: [YouTubeVideo] {
+        items.flatMap { item -> [YouTubeVideo] in
+            switch item {
+            case .video(let video, _): return [video]
+            case .shelf(_, let videos): return videos
+            default: return []
+            }
+        }
+    }
+
     func load(_ source: FeedSource, keepChips: Bool = false) async {
         isLoading = true
         defer { isLoading = false }
@@ -88,6 +101,8 @@ enum HeaderRoute: Hashable {
 /// Woof Music's TabHeaderView: the title, then 36 pt buttons 12 pt apart.
 struct TabHeader: View {
     let title: String
+    /// Shows a + button when set, for the Library's new playlist.
+    var onAdd: (() -> Void)?
     @EnvironmentObject private var session: Session
 
     var body: some View {
@@ -97,6 +112,16 @@ struct TabHeader: View {
                 .fontWeight(.bold)
             Spacer()
             HStack(spacing: Layout.rowSpacing) {
+                if let onAdd {
+                    Button(action: onAdd) {
+                        Image(systemName: "plus")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
+                            .contentShape(.rect)
+                    }
+                    .accessibilityLabel("New Playlist")
+                }
                 NavigationLink(value: HeaderRoute.notifications) {
                     Image(systemName: "bell")
                         .font(.title3)
@@ -136,8 +161,10 @@ struct TabHeader: View {
 
 extension View {
     /// For the first screen of a tab, which shows TabHeader instead of a navigation bar.
-    func tabRoot(title: String) -> some View {
-        safeAreaBar(edge: .top, spacing: 0) { TabHeader(title: title) }
+    func tabRoot(title: String, onAdd: (() -> Void)? = nil) -> some View {
+        safeAreaBar(edge: .top, spacing: 0) {
+            TabHeader(title: title, onAdd: onAdd).background(Color(.systemBackground))
+        }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: HeaderRoute.self) { route in
                 switch route {
@@ -281,7 +308,7 @@ struct FeedContent<Header: View>: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.isLoading {
-            LoadingRows()
+            LoadingRows(isCompact: isCompact)
         } else {
             ContentUnavailableView {
                 Label(model.errorText == nil ? "Nothing Here" : "Couldn't Load", systemImage: "play.rectangle")
@@ -400,6 +427,7 @@ struct VideoRow: View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
+                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
             HStack(alignment: .top, spacing: Layout.rowSpacing) {
                 if extras.collaborators.count > 1 {
@@ -416,29 +444,81 @@ struct VideoRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    VoteLine(videoId: video.videoId)
                 }
                 Spacer(minLength: 0)
-                if video.isLive {
-                    Text("LIVE")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tint)
-                } else if extras.isUpcoming {
-                    Text("UPCOMING")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                } else if let seconds = video.durationSeconds, seconds > 0 {
-                    Text(Double(seconds).clockText)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
             }
         }
         .contentShape(.rect)
     }
 }
 
+/// The time on a thumbnail. It stays black, because the accent color marks what you can act on.
+private struct VideoBadge: View {
+    let video: YouTubeVideo
+    let extras: VideoExtras
+
+    private var text: String? {
+        if video.isLive { return "LIVE" }
+        if extras.isUpcoming { return "UPCOMING" }
+        return video.durationSeconds.flatMap { $0 > 0 ? Double($0).clockText : nil }
+    }
+
+    var body: some View {
+        if let text {
+            Text(text)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(.white)
+                .padding(.horizontal, Layout.rowPadding)
+                .padding(.vertical, 2)
+                .background(video.isLive ? Color.red : Color.black.opacity(0.78), in: .rect(cornerRadius: Layout.rowPadding, style: .continuous))
+                .padding(Layout.rowPadding)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Likes and dislikes under a video card. Waits a moment, so rows scrolled past don't ask for them.
+private struct VoteLine: View {
+    let videoId: String
+    @AppStorage(DislikeCounts.enabledKey) private var isEnabled = true
+    @State private var votes: VoteCounts?
+
+    var body: some View {
+        if isEnabled {
+            HStack(spacing: Layout.rowPadding) {
+                Label(votes?.likes.compactText ?? "–", systemImage: "hand.thumbsup")
+                Text("|").foregroundStyle(.tertiary)
+                Label(votes?.dislikes.compactText ?? "–", systemImage: "hand.thumbsdown")
+            }
+            .labelStyle(VoteLabelStyle())
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .opacity(votes == nil ? 0 : 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(votes.map { "\($0.likes.compactText) likes, \($0.dislikes.compactText) dislikes" } ?? "")
+            .task(id: videoId) {
+                votes = DislikeCounts.cached(videoId: videoId)
+                guard votes == nil else { return }
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                votes = await DislikeCounts.votes(videoId: videoId)
+            }
+        }
+    }
+}
+
+private struct VoteLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.imageScale(.small)
+            configuration.title
+        }
+    }
+}
+
 /// How much of the video was watched, along the bottom of its thumbnail.
-private struct WatchProgressLine: View {
+struct WatchProgressLine: View {
     let video: YouTubeVideo
     let extras: VideoExtras
 
@@ -468,6 +548,7 @@ struct CompactVideoRow: View {
             CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
                 .frame(width: 112, height: 63)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
+                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(video.title)
@@ -482,11 +563,6 @@ struct CompactVideoRow: View {
                 }
             }
             Spacer(minLength: 0)
-            if let seconds = video.durationSeconds, seconds > 0 {
-                Text(Double(seconds).clockText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
         }
         .contentShape(.rect)
     }
@@ -494,15 +570,38 @@ struct CompactVideoRow: View {
 
 /// The shape of the feed while it loads, so the page doesn't jump when the videos arrive.
 struct LoadingRows: View {
+    var isCompact = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing * 2) {
-            ForEach(0..<4, id: \.self) { index in
-                VideoRow(video: YouTubeVideo(videoId: "loading\(index)", title: "Loading a video title that fills the line", channelTitle: "Channel name", viewCountText: "views"))
+        VStack(alignment: .leading, spacing: isCompact ? Layout.rowSpacing : Layout.rowSpacing * 2) {
+            ForEach(0..<(isCompact ? 8 : 4), id: \.self) { _ in
+                if isCompact {
+                    HStack(spacing: Layout.rowSpacing) {
+                        ShimmerBlock(width: 112, height: 63, radius: Layout.cardRadius)
+                        lines
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+                        ShimmerFill(radius: Layout.tileRadius).aspectRatio(16 / 9, contentMode: .fit)
+                        HStack(alignment: .top, spacing: Layout.rowSpacing) {
+                            ShimmerBlock(width: 36, height: 36, radius: 18)
+                            lines
+                        }
+                    }
+                }
             }
         }
         .padding(Layout.screenPadding)
-        .redacted(reason: .placeholder)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .shimmerClock()
+    }
+
+    private var lines: some View {
+        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+            ShimmerBlock(width: isCompact ? 170 : 240, height: 14)
+            ShimmerBlock(width: 110, height: 12)
+        }
     }
 }
 
@@ -510,20 +609,11 @@ struct Thumbnail: View {
     let url: String?
     let videoId: String
     var aspect: CGFloat = 16 / 9
-    @Environment(\.redactionReasons) private var redactionReasons
 
     var body: some View {
         Color(.secondarySystemFill)
             .aspectRatio(aspect, contentMode: .fit)
-            .overlay {
-                if redactionReasons.isEmpty {
-                    AsyncImage(url: URL(string: url ?? "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg")) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        Color.clear
-                    }
-                }
-            }
+            .overlay { CachedImage(url: url ?? "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg") }
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
     }
 }
@@ -689,13 +779,7 @@ private struct PostRow: View {
     private func postImage(_ url: String) -> some View {
         Color(.secondarySystemFill)
             .aspectRatio(1, contentMode: .fit)
-            .overlay {
-                AsyncImage(url: URL(string: url)) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color.clear
-                }
-            }
+            .overlay { CachedImage(url: url) }
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
     }
 }
@@ -737,16 +821,15 @@ struct Avatar: View {
     let size: CGFloat
 
     var body: some View {
-        AsyncImage(url: url.flatMap(URL.init(string:))) { image in
-            image.resizable().scaledToFill()
-        } placeholder: {
+        CachedImage(url: url)
+        .frame(width: size, height: size)
+        .background {
             Color(.secondarySystemFill)
                 .overlay {
                     Image(systemName: "person.fill")
                         .foregroundStyle(.secondary)
                 }
         }
-        .frame(width: size, height: size)
         .clipShape(.circle)
     }
 }

@@ -354,16 +354,25 @@ final class PlayerClock: ObservableObject {
 
 struct MpvVideoView: UIViewRepresentable {
     let player: MpvPlayer
+    /// Only one view can hold the video layer. This one takes it when this turns true.
+    var isActive = true
 
     func makeUIView(context: Context) -> MpvVideoUIView {
         MpvVideoUIView(player: player)
     }
 
-    func updateUIView(_ view: MpvVideoUIView, context: Context) {}
+    func updateUIView(_ view: MpvVideoUIView, context: Context) {
+        view.isActive = isActive
+    }
 }
 
 final class MpvVideoUIView: UIView {
     private let player: MpvPlayer
+    var isActive = true {
+        didSet {
+            if isActive != oldValue { setNeedsLayout() }
+        }
+    }
 
     init(player: MpvPlayer) {
         self.player = player
@@ -380,7 +389,7 @@ final class MpvVideoUIView: UIView {
     /// bounds × scale equal to it, so MoltenVK never sees a size change.
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard bounds.width > 0, bounds.height > 0 else { return }
+        guard isActive, bounds.width > 0, bounds.height > 0 else { return }
         let aspect = player.surfaceAspect
         let videoLayer = player.videoLayer
         let longSide = max(UIScreen.main.nativeBounds.width, UIScreen.main.nativeBounds.height)

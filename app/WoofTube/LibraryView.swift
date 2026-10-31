@@ -1,95 +1,67 @@
 import SwiftUI
 import SwiftyTube
 
+/// Woof Music's library: filters, shortcut tiles, then the sections.
 struct LibraryView: View {
+    private enum Filter: String, CaseIterable {
+        case history = "History"
+        case playlists = "Playlists"
+        case channels = "Channels"
+    }
+
     @EnvironmentObject private var router: Router
+    @ObservedObject private var downloads = DownloadStore.shared
+    @StateObject private var history = FeedModel()
+    @StateObject private var liked = FeedModel()
+    @StateObject private var watchLater = FeedModel()
+    @StateObject private var channels = FeedModel()
     @State private var playlists: [YouTubePlaylist] = []
+    @State private var isLoadingPlaylists = true
+    @State private var musicPlaylistIds: Set<String> = []
+    @State private var selectedFilter: Filter?
     @State private var isCreating = false
     @State private var newTitle = ""
     @State private var playlistToDelete: YouTubePlaylist?
 
-    private func loadPlaylists() async {
-        let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
-        playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+    private var shownPlaylists: [YouTubePlaylist] {
+        var seen = Set<String>()
+        return playlists.filter {
+            !LibraryPlaylists.isHidden($0.playlistId)
+                && !musicPlaylistIds.contains($0.playlistId)
+                && seen.insert($0.playlistId).inserted
+        }
+    }
+
+    private func shows(_ filter: Filter) -> Bool {
+        selectedFilter == nil || selectedFilter == filter
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    MenuCard {
-                        NavigationLink {
-                            FeedList(source: .browse(YouTubeFeeds.history), isCompact: true)
-                                .navigationTitle("History")
-                                .navigationBarTitleDisplayMode(.inline)
-                        } label: {
-                            MenuRowLabel(icon: "clock.arrow.circlepath", title: "History")
-                        }
-                        Divider()
-                        NavigationLink {
-                            PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
-                        } label: {
-                            MenuRowLabel(icon: "clock", title: "Watch Later")
-                        }
-                        Divider()
-                        NavigationLink {
-                            PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
-                        } label: {
-                            MenuRowLabel(icon: "hand.thumbsup", title: "Liked Videos")
-                        }
-                        Divider()
-                        NavigationLink {
-                            FeedList(source: .browse("FEchannels"), isCompact: true)
-                                .navigationTitle("Channels")
-                                .navigationBarTitleDisplayMode(.inline)
-                        } label: {
-                            MenuRowLabel(icon: "person.2", title: "Channels")
-                        }
-                        Divider()
-                        NavigationLink {
-                            DownloadsView()
-                        } label: {
-                            MenuRowLabel(icon: "arrow.down.circle", title: "Downloads")
-                        }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    FilterChips(titles: Filter.allCases.map(\.rawValue), selected: selectedFilter?.rawValue) { title in
+                        let filter = Filter(rawValue: title)
+                        selectedFilter = selectedFilter == filter ? nil : filter
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, Layout.screenPadding)
-                    .padding(.top, Layout.chipSpacing)
-                    .padding(.bottom, Layout.sectionGap)
-
-                    HStack {
-                        SectionTitle(title: "Playlists")
-                        Spacer()
-                        Button("New Playlist", systemImage: "plus") {
-                            newTitle = ""
-                            isCreating = true
-                        }
-                        .labelStyle(.iconOnly)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .padding(.trailing, Layout.chipSpacing)
+                    shortcuts
+                    if shows(.history) {
+                        HistoryStrip(model: history)
                     }
-                    if !playlists.isEmpty {
-                        LazyVStack(spacing: 0) {
-                            ForEach(playlists, id: \.playlistId) { playlist in
-                                NavigationLink {
-                                    PlaylistPage(title: playlist.title, playlistId: playlist.playlistId)
-                                } label: {
-                                    MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
-                                }
-                                .buttonStyle(RowPressStyle())
-                                .padding(.horizontal, Layout.screenPadding)
-                                .contextMenu {
-                                    Button("Delete Playlist", systemImage: "trash", role: .destructive) {
-                                        playlistToDelete = playlist
-                                    }
-                                }
-                            }
-                        }
+                    if shows(.playlists) {
+                        playlistsSection
+                    }
+                    if shows(.channels) {
+                        channelsSection
                     }
                 }
             }
-            .tabRoot(title: "Library")
-            .task { await loadPlaylists() }
+            .tabRoot(title: "Library") {
+                newTitle = ""
+                isCreating = true
+            }
+            .refreshable { await load() }
+            .task { await load() }
             .alert("New Playlist", isPresented: $isCreating) {
                 TextField("Title", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
@@ -115,6 +87,323 @@ struct LibraryView: View {
                 }
             }
         }
+    }
+
+    private func load() async {
+        async let historyLoad: Void = history.load(.browse(YouTubeFeeds.history))
+        async let likedLoad: Void = liked.load(.browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.likedVideosPlaylistId)))
+        async let laterLoad: Void = watchLater.load(.browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.watchLaterPlaylistId)))
+        async let channelsLoad: Void = channels.load(.browse("FEchannels"))
+        await loadPlaylists()
+        _ = await (historyLoad, likedLoad, laterLoad, channelsLoad)
+    }
+
+    private func loadPlaylists() async {
+        let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
+        playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+        isLoadingPlaylists = false
+        for playlist in playlists where !LibraryPlaylists.isHidden(playlist.playlistId) {
+            if await LibraryPlaylists.isMusicOnly(playlist) {
+                musicPlaylistIds.insert(playlist.playlistId)
+            }
+        }
+    }
+
+    // MARK: Shortcuts
+
+    private var shortcuts: some View {
+        HStack(spacing: 10) {
+            NavigationLink {
+                PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
+            } label: {
+                ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .pink, covers: covers(liked.videos))
+            }
+            NavigationLink {
+                PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
+            } label: {
+                ShortcutTile(title: "Watch Later", subtitle: countText(watchLater), icon: "clock.fill", tint: .orange, covers: covers(watchLater.videos))
+            }
+            NavigationLink {
+                DownloadsView()
+            } label: {
+                ShortcutTile(
+                    title: "Downloads",
+                    subtitle: downloads.items.isEmpty ? "Offline" : "\(downloads.items.count) \(downloads.items.count == 1 ? "video" : "videos")",
+                    icon: "arrow.down.circle.fill",
+                    tint: .blue,
+                    covers: covers(downloads.items.map(\.video))
+                )
+            }
+        }
+        .buttonStyle(ZoomPressStyle())
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.chipSpacing)
+        .padding(.bottom, Layout.sectionGap)
+    }
+
+    private func covers(_ videos: [YouTubeVideo]) -> [String] {
+        videos.prefix(2).map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" }
+    }
+
+    /// YouTube sends a page at a time, so a long list shows the first page and a plus.
+    private func countText(_ model: FeedModel) -> String? {
+        let count = model.videos.count
+        guard count > 0 else { return nil }
+        return "\(count)\(model.hasMore ? "+" : "") \(count == 1 ? "video" : "videos")"
+    }
+
+    // MARK: Sections
+
+    private var playlistsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionTitle(title: "Playlists", count: shownPlaylists.count)
+            if isLoadingPlaylists {
+                loadingRows(isCircular: false)
+            }
+            LazyVStack(spacing: 0) {
+                ForEach(shownPlaylists, id: \.playlistId) { playlist in
+                    NavigationLink {
+                        PlaylistPage(title: playlist.title, playlistId: playlist.playlistId)
+                    } label: {
+                        MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
+                    }
+                    .buttonStyle(RowPressStyle())
+                    .padding(.horizontal, Layout.screenPadding)
+                    .contextMenu {
+                        Button("Delete Playlist", systemImage: "trash", role: .destructive) {
+                            playlistToDelete = playlist
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.bottom, Layout.sectionGap)
+    }
+
+    private var channelsSection: some View {
+        let count = channels.items.reduce(0) { total, item in
+            if case .channel = item { return total + 1 }
+            return total
+        }
+        return VStack(alignment: .leading, spacing: 0) {
+            SectionTitle(title: "Channels", count: count)
+            if channels.isLoading, channels.items.isEmpty {
+                loadingRows(isCircular: true)
+            }
+            LazyVStack(alignment: .leading, spacing: 0) {
+                FeedRows(model: channels)
+            }
+        }
+        .padding(.bottom, Layout.sectionGap)
+    }
+
+    private func loadingRows(isCircular: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            ForEach(0..<4, id: \.self) { _ in
+                HStack(spacing: Layout.menuRowSpacing) {
+                    ShimmerBlock(width: Layout.artSmall, height: Layout.artSmall, radius: isCircular ? Layout.artSmall / 2 : Layout.cardRadius)
+                    VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                        ShimmerBlock(width: 160, height: 16)
+                        ShimmerBlock(width: 100, height: 13)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+        .shimmerClock()
+    }
+}
+
+/// Decides which playlists the Library leaves out. Watch Later and Liked Videos have
+/// their own tiles, and music belongs in Woof Music.
+enum LibraryPlaylists {
+    private static let hiddenIds: Set<String> = ["WL", "LL", "LM"]
+    private static let musicPrefixes = ["OLAK5uy_", "RDCLAK"]
+    private static let checksKey = "musicPlaylistChecks"
+
+    static func isHidden(_ playlistId: String) -> Bool {
+        let id = playlistId.hasPrefix("VL") ? String(playlistId.dropFirst(2)) : playlistId
+        return hiddenIds.contains(id)
+    }
+
+    /// YouTube doesn't mark music playlists, so this reads the first page: every video must
+    /// come from an auto-generated "Artist - Topic" channel or a VEVO channel.
+    /// A music playlist with ordinary uploads stays visible. The answer is kept until the
+    /// playlist's video count changes.
+    @MainActor
+    static func isMusicOnly(_ playlist: YouTubePlaylist) async -> Bool {
+        let id = playlist.playlistId
+        if musicPrefixes.contains(where: id.hasPrefix) { return true }
+        let key = id + "|" + (playlist.videoCountText ?? "")
+        var checks = UserDefaults.standard.dictionary(forKey: checksKey) as? [String: Bool] ?? [:]
+        if let known = checks[key] { return known }
+        guard let json = try? await FeedSource.browse(YouTubeFeeds.playlistBrowseId(id)).fetch() else { return false }
+        let videos = FeedParser.items(in: json).compactMap { item -> YouTubeVideo? in
+            if case .video(let video, _) = item { return video }
+            return nil
+        }
+        let isMusic = !videos.isEmpty && videos.allSatisfy { video in
+            let channel = video.channelTitle ?? ""
+            return channel.hasSuffix(" - Topic") || channel.hasSuffix("VEVO")
+        }
+        checks = UserDefaults.standard.dictionary(forKey: checksKey) as? [String: Bool] ?? [:]
+        checks[key] = isMusic
+        UserDefaults.standard.set(checks, forKey: checksKey)
+        return isMusic
+    }
+}
+
+/// Woof Music's shortcut tile: two fanned covers over a large symbol the corner crops.
+private struct ShortcutTile: View {
+    let title: String
+    let subtitle: String?
+    let icon: String
+    let tint: Color
+    let covers: [String]
+
+    private static let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            fannedCovers
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption2.weight(.semibold))
+                        .opacity(0.85)
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity)
+        .frame(height: 116)
+        .background {
+            ZStack {
+                LinearGradient(colors: [tint, tint.mix(with: .black, by: 0.3)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                LinearGradient(colors: [.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center)
+                Image(systemName: icon)
+                    .font(.system(size: 66, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .rotationEffect(.degrees(-18))
+                    .offset(x: 19, y: 9)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            }
+            .clipShape(Self.shape)
+            .shadow(color: tint.opacity(0.4), radius: 6, y: 4)
+            .accessibilityHidden(true)
+        }
+        .contentShape(Self.shape)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var fannedCovers: some View {
+        if let first = covers.first {
+            ZStack(alignment: .topLeading) {
+                if covers.count > 1 {
+                    cover(covers[1])
+                        .rotationEffect(.degrees(-8))
+                        .offset(x: 2, y: 8)
+                }
+                cover(first)
+                    .rotationEffect(.degrees(covers.count > 1 ? 6 : 0))
+                    .offset(x: covers.count > 1 ? 24 : 2, y: 2)
+            }
+        }
+    }
+
+    private func cover(_ url: String) -> some View {
+        CoverImage(url: url)
+            .frame(width: 56, height: 32)
+            .clipShape(.rect(cornerRadius: Layout.rowPadding, style: .continuous))
+            .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
+    }
+}
+
+/// Woof Music's Keep Listening card: the title on top and covers to scroll through below.
+private struct HistoryStrip: View {
+    @ObservedObject var model: FeedModel
+    @EnvironmentObject private var router: Router
+
+    private static let coverWidth: CGFloat = 150
+    private static let shown = 20
+    private static let padding: CGFloat = 12
+
+    var body: some View {
+        if model.isLoading || !model.videos.isEmpty {
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                NavigationLink {
+                    FeedList(source: .browse(YouTubeFeeds.history), isCompact: true)
+                        .navigationTitle("History")
+                        .navigationBarTitleDisplayMode(.inline)
+                } label: {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("History").font(.title3.bold())
+                        Spacer(minLength: Layout.chipSpacing)
+                        Text("See All")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, Self.padding)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 10) {
+                        if model.videos.isEmpty {
+                            ForEach(0..<3, id: \.self) { _ in
+                                ShimmerBlock(width: Self.coverWidth, height: Self.coverWidth * 9 / 16, radius: Layout.tileRadius)
+                            }
+                        }
+                        ForEach(Array(model.videos.prefix(Self.shown)), id: \.videoId) { video in
+                            tile(video)
+                        }
+                    }
+                    .padding(.horizontal, Self.padding)
+                }
+            }
+            .padding(.vertical, Self.padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18, style: .continuous))
+            .clipShape(.rect(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, Layout.screenPadding)
+            .padding(.bottom, Layout.sectionGap)
+        }
+    }
+
+    private func tile(_ video: YouTubeVideo) -> some View {
+        Button {
+            router.play(video)
+        } label: {
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
+                    .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
+                    .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
+                    .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
+                Text(video.title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(width: Self.coverWidth, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(ZoomPressStyle())
+        .videoMenu(video)
     }
 }
 
@@ -153,6 +442,9 @@ struct PlaylistPage: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
+                if videos.isEmpty, model.isLoading {
+                    LoadingRows(isCompact: true)
+                }
                 if videos.isEmpty, !model.isLoading {
                     ContentUnavailableView {
                         Label(model.errorText == nil ? "No Videos" : "Couldn't Load", systemImage: "play.rectangle")

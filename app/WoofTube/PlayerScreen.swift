@@ -2,30 +2,30 @@ import AVKit
 import SwiftUI
 import SwiftyTube
 
-/// One video surface above the tabs. It moves between the video page and the floating
-/// miniplayer by scaling, so the video keeps drawing without a resize or a reload.
+/// The floating card above the tabs. It can be flicked off the side, leaving a small handle.
 struct PlayerOverlay: View {
+    static let zoomSource = "player"
+
+    let zoom: Namespace.ID
     @EnvironmentObject private var router: Router
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var dragOffset = CGSize.zero
     @State private var isMiniLeading = false
     @State private var isMiniTop = false
-    @State private var showsComments = false
+    @State private var isDocked = false
 
     private static let miniSize = CGSize(width: 192, height: 108)
     /// The title, pause and close strip under the mini video.
     private static let miniStripHeight: CGFloat = 44
-    /// The card's material shows this far around the video.
+    /// The glass shows this far around the video.
     private static let miniInset = Layout.rowPadding
     private static var miniCardWidth: CGFloat { miniSize.width + miniInset * 2 }
     private static var miniCardHeight: CGFloat { miniInset + miniSize.height + miniStripHeight }
+    /// Follows the video's corners, so the glass stays the same width around them.
+    private static let cardRadius = Layout.tileRadius + miniInset
     private static let miniMargin: CGFloat = 12
     /// Keeps the miniplayer above the tab bar, which sits outside this view's safe area.
     private static let tabBarHeight: CGFloat = 64
-    private static let collapseDistance: CGFloat = 120
-    private static let exitFullscreenDistance: CGFloat = 60
-
-    private var isFullscreen: Bool { router.isExpanded && verticalSizeClass == .compact }
+    private static let handleSize = CGSize(width: 44, height: 72)
 
     var body: some View {
         GeometryReader { geometry in
@@ -34,15 +34,9 @@ struct PlayerOverlay: View {
             }
         }
         .ignoresSafeArea(.keyboard)
-        .statusBarHidden(isFullscreen)
-        .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
-        .sheet(isPresented: $showsComments) {
-            if let token = router.details?.commentsToken {
-                CommentsSheet(token: token)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            if router.isExpanded { Orientation.unlockIfHeldUpright() }
+        .accessibilityHidden(router.isExpanded)
+        .onChange(of: router.isExpanded) { _, expanded in
+            if expanded { isDocked = false }
         }
     }
 
@@ -52,112 +46,139 @@ struct PlayerOverlay: View {
             width: geometry.size.width + insets.leading + insets.trailing,
             height: geometry.size.height + insets.top + insets.bottom
         )
-        let videoSize = isFullscreen ? screen : CGSize(width: screen.width, height: screen.width * 9 / 16)
-        let expanded = isFullscreen ? CGPoint.zero : CGPoint(x: 0, y: insets.top)
         let mini = CGPoint(
             x: isMiniLeading ? Self.miniMargin : screen.width - Self.miniCardWidth - Self.miniMargin,
             y: isMiniTop ? insets.top + Self.miniMargin : screen.height - Self.miniCardHeight - insets.bottom - Self.tabBarHeight - Self.miniMargin
         )
-        // 0 is the full video page, 1 is the miniplayer.
-        let progress = router.isExpanded ? min(max(dragOffset.height, 0) / (screen.height * 0.6), 1) : 1
-        let miniVideo = CGPoint(x: mini.x + Self.miniInset, y: mini.y + Self.miniInset)
-        let origin = router.isExpanded
-            ? CGPoint(x: expanded.x + (miniVideo.x - expanded.x) * progress, y: expanded.y + (miniVideo.y - expanded.y) * progress)
-            : CGPoint(x: miniVideo.x + dragOffset.width, y: miniVideo.y + dragOffset.height)
-        let width = videoSize.width + (Self.miniSize.width - videoSize.width) * progress
-        let scale = width / videoSize.width
-        // The video's corners follow the card's, so the material stays the same width around them.
-        let radius = progress * Layout.tileRadius / scale
+        let hiddenX = isMiniLeading ? -Self.miniCardWidth - Self.miniMargin : screen.width + Self.miniMargin
 
         return ZStack(alignment: .topLeading) {
-            page(topInset: insets.top, bottomInset: insets.bottom, videoHeight: videoSize.height, progress: progress)
-
-            if !router.isExpanded {
-                RoundedRectangle(cornerRadius: Layout.tileRadius + Self.miniInset, style: .continuous)
-                    .fill(.regularMaterial)
-                    .shadow(color: .black.opacity(0.25), radius: 16, y: 6)
-                    .frame(width: Self.miniCardWidth, height: Self.miniCardHeight)
-                    .offset(x: origin.x - Self.miniInset, y: origin.y - Self.miniInset)
-            }
-
-            MpvVideoView(player: router.player)
-                .overlay { VideoPoster(player: router.player, video: router.current) }
-                .frame(width: videoSize.width, height: videoSize.height)
-                .background(.black)
-                .clipShape(.rect(cornerRadius: radius, style: .continuous))
-                .scaleEffect(scale, anchor: .topLeading)
-                .offset(x: origin.x, y: origin.y)
-                .allowsHitTesting(false)
-
-            if router.isExpanded {
-                PlayerControls(
-                    player: router.player,
-                    sleepTimer: router.sleepTimer,
-                    isFullscreen: isFullscreen,
-                    onDragChanged: { translation in
-                        if !isFullscreen { dragOffset = translation }
-                    },
-                    onDragEnded: finishPageDrag
-                )
-                .frame(width: videoSize.width, height: videoSize.height)
-                .background(alignment: .bottom) {
-                    CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
-                }
-                .opacity(1 - progress * 4)
-                .offset(x: expanded.x, y: expanded.y)
-            } else {
-                MiniControls(
-                    player: router.player,
-                    videoAreaHeight: Self.miniInset + Self.miniSize.height,
-                    onDragChanged: { value in dragOffset = value.translation },
-                    onDragEnded: { value in finishMiniDrag(value, origin: mini, screen: screen) }
-                )
-                .frame(width: Self.miniCardWidth, height: Self.miniCardHeight)
-                .offset(x: origin.x - Self.miniInset, y: origin.y - Self.miniInset)
+            card(origin: mini, screen: screen)
+                .offset(x: isDocked ? hiddenX : mini.x + dragOffset.width, y: mini.y + dragOffset.height)
+            if isDocked {
+                handle
+                    .offset(
+                        // Part of it stays off screen, so it reads as attached to the edge.
+                        x: isMiniLeading ? -Layout.chipSpacing : screen.width - Self.handleSize.width + Layout.chipSpacing,
+                        y: mini.y + (Self.miniCardHeight - Self.handleSize.height) / 2
+                    )
+                    .transition(.opacity)
             }
         }
         .frame(width: screen.width, height: screen.height, alignment: .topLeading)
-        .animation(.snappy, value: router.isExpanded)
+        .animation(.snappy, value: isDocked)
         .ignoresSafeArea()
     }
 
-    private func page(topInset: CGFloat, bottomInset: CGFloat, videoHeight: CGFloat, progress: CGFloat) -> some View {
-        ZStack(alignment: .top) {
-            (isFullscreen ? Color.black : Color(.systemBackground))
-            if !isFullscreen {
-                ScrollView {
-                    WatchDetailsView(showsComments: $showsComments)
-                }
-                .contentMargins(.bottom, bottomInset, for: .scrollContent)
-                .padding(.top, topInset + videoHeight)
-            }
+    private func card(origin: CGPoint, screen: CGSize) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Self.cardRadius, style: .circular)
+        return ZStack(alignment: .topLeading) {
+            Color.clear.glassEffect(.regular, in: shape)
+
+            MpvVideoView(player: router.player, isActive: !router.isWatchPageOnScreen)
+                .overlay { VideoPoster(player: router.player, video: router.current) }
+                .frame(width: Self.miniSize.width, height: Self.miniSize.height)
+                .background(.black)
+                .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
+                .padding(Self.miniInset)
+                .allowsHitTesting(false)
+
+            MiniControls(
+                player: router.player,
+                videoAreaHeight: Self.miniInset + Self.miniSize.height,
+                onDragChanged: { value in dragOffset = value.translation },
+                onDragEnded: { value in finishMiniDrag(value, origin: origin, screen: screen) }
+            )
+
+            CardEdgeProgress(clock: router.player.clock, duration: router.player.duration, radius: Self.cardRadius)
         }
-        .opacity(router.isExpanded ? 1 - progress : 0)
-        .allowsHitTesting(router.isExpanded)
+        .frame(width: Self.miniCardWidth, height: Self.miniCardHeight)
+        .matchedTransitionSource(id: Self.zoomSource, in: zoom) { source in
+            source.clipShape(.rect(cornerRadius: Self.cardRadius))
+        }
     }
 
-    private func finishPageDrag(translation: CGSize, predicted: CGSize) {
-        if isFullscreen {
-            if translation.height > Self.exitFullscreenDistance {
-                Orientation.setFullscreen(false)
-            }
-            return
+    private var handle: some View {
+        Button("Show Video", systemImage: isMiniLeading ? "chevron.right" : "chevron.left") {
+            isDocked = false
         }
-        if max(translation.height, predicted.height) > Self.collapseDistance {
-            router.isExpanded = false
-        }
-        withAnimation(.snappy) { dragOffset = .zero }
+        .labelStyle(.iconOnly)
+        .font(.system(size: 15, weight: .bold))
+        .foregroundStyle(.primary)
+        .buttonStyle(.plain)
+        .frame(width: Self.handleSize.width, height: Self.handleSize.height)
+        .contentShape(.capsule)
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 
-    /// Snaps to the corner the flick is heading for.
+    /// Snaps to the corner the flick is heading for. A flick past the screen's side hides the card.
     private func finishMiniDrag(_ value: DragGesture.Value, origin: CGPoint, screen: CGSize) {
         let endX = origin.x + value.predictedEndTranslation.width + Self.miniCardWidth / 2
         let endY = origin.y + value.predictedEndTranslation.height + Self.miniCardHeight / 2
         withAnimation(.snappy) {
             isMiniLeading = endX < screen.width / 2
             isMiniTop = endY < screen.height / 2
+            isDocked = endX < 0 || endX > screen.width
             dragOffset = .zero
         }
+    }
+}
+
+/// The video page. It opens with the system zoom from the floating card, which also
+/// gives it the system's swipe down to close.
+struct WatchPage: View {
+    @EnvironmentObject private var router: Router
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var showsComments = false
+
+    private var isFullscreen: Bool { verticalSizeClass == .compact }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            video
+            if !isFullscreen {
+                ScrollView {
+                    WatchDetailsView(showsComments: $showsComments)
+                }
+            }
+        }
+        .ignoresSafeArea(edges: isFullscreen ? .all : [])
+        .background(alignment: .top) {
+            if isFullscreen {
+                Color.black.ignoresSafeArea()
+            } else {
+                ZStack(alignment: .top) {
+                    Color(.systemBackground)
+                    BlurredArtworkBackdrop(url: router.current.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" })
+                }
+                .ignoresSafeArea()
+            }
+        }
+        .statusBarHidden(isFullscreen)
+        .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
+        .sheet(isPresented: $showsComments) {
+            if let token = router.details?.commentsToken {
+                CommentsSheet(token: token)
+            }
+        }
+        .routerPresentations(router, isActive: true)
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            Orientation.unlockIfHeldUpright()
+        }
+    }
+
+    private var video: some View {
+        ZStack {
+            MpvVideoView(player: router.player, isActive: router.isWatchPageOnScreen)
+                .overlay { VideoPoster(player: router.player, video: router.current) }
+                .background(.black)
+                .allowsHitTesting(false)
+            CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen)
+        }
+        .frame(maxWidth: .infinity, maxHeight: isFullscreen ? .infinity : nil)
+        .aspectRatio(isFullscreen ? nil : 16 / 9, contentMode: .fit)
     }
 }
 
@@ -210,6 +231,8 @@ struct PlayerTouchSurface: UIViewRepresentable {
     var onDoubleTap: ((Bool) -> Void)?
     var onDragChanged: ((CGSize) -> Void)?
     var onDragEnded: ((_ translation: CGSize, _ predicted: CGSize) -> Void)?
+    /// When false the drag is left to whatever sits behind, like the system's swipe to close.
+    var isDragEnabled = true
 
     private static let holdDuration = 0.35
     /// How far ahead a flick counts, in seconds of its speed.
@@ -230,7 +253,9 @@ struct PlayerTouchSurface: UIViewRepresentable {
         }
         view.addGestureRecognizer(hold)
         if onDragChanged != nil {
-            view.addGestureRecognizer(UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:))))
+            let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:)))
+            pan.delegate = coordinator
+            view.addGestureRecognizer(pan)
         }
         return view
     }
@@ -243,11 +268,15 @@ struct PlayerTouchSurface: UIViewRepresentable {
         Coordinator(parent: self)
     }
 
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: PlayerTouchSurface
 
         init(parent: PlayerTouchSurface) {
             self.parent = parent
+        }
+
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            parent.isDragEnabled
         }
 
         @objc func tapped() {
@@ -295,8 +324,6 @@ private struct MiniControls: View {
     let onDragEnded: (DragGesture.Value) -> Void
     @EnvironmentObject private var router: Router
 
-    private static let shape = RoundedRectangle(cornerRadius: Layout.tileRadius + Layout.rowPadding, style: .continuous)
-
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: videoAreaHeight)
@@ -304,7 +331,7 @@ private struct MiniControls: View {
                 Text(router.current?.title ?? "")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
-                    .padding(.leading, Layout.rowPadding)
+                    .padding(.leading, Layout.rowSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button(player.isPaused ? "Play" : "Pause", systemImage: player.isPaused ? "play.fill" : "pause.fill") {
                     player.togglePause()
@@ -314,20 +341,14 @@ private struct MiniControls: View {
             .labelStyle(MiniGlyphLabelStyle())
             .buttonStyle(.plain)
             .frame(maxHeight: .infinity)
-            .overlay(alignment: .bottom) {
-                ProgressLine(clock: player.clock, duration: player.duration)
-                    .clipShape(.capsule)
-                    .padding([.horizontal, .bottom], Layout.rowPadding)
-            }
         }
-        .contentShape(Self.shape)
+        .contentShape(.rect)
         .onTapGesture { router.isExpanded = true }
         .gesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .global)
                 .onChanged(onDragChanged)
                 .onEnded(onDragEnded)
         )
-        .clipShape(Self.shape)
     }
 }
 
@@ -341,18 +362,34 @@ private struct MiniGlyphLabelStyle: LabelStyle {
     }
 }
 
-/// Woof Music's bottom progress line. Its own view, so only the line redraws as playback advances.
-private struct ProgressLine: View {
+/// The card's bottom edge, from where its left corner starts to where its right corner ends.
+private struct CardBottomEdge: Shape {
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
+        path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius), radius: radius, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
+        return path
+    }
+}
+
+/// Playback progress drawn on the card's border. Its own view, so only the line redraws as the time ticks.
+private struct CardEdgeProgress: View {
     @ObservedObject var clock: PlayerClock
     let duration: Double
+    let radius: CGFloat
+    private static let lineWidth: CGFloat = 3
 
     var body: some View {
-        GeometryReader { geometry in
-            Rectangle()
-                .fill(.tint)
-                .frame(width: geometry.size.width * min(clock.time / max(duration, 1), 1), height: 2)
+        // Half the line's width in from the edge, so its outer side lies exactly on the border.
+        let edge = CardBottomEdge(radius: radius - Self.lineWidth / 2)
+        ZStack {
+            edge.stroke(Color.primary.opacity(0.12), lineWidth: Self.lineWidth)
+            edge.trim(from: 0, to: min(clock.time / max(duration, 1), 1))
+                .stroke(.tint, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
         }
-        .frame(height: 2)
+        .padding(Self.lineWidth / 2)
         .allowsHitTesting(false)
     }
 }
@@ -360,6 +397,8 @@ private struct ProgressLine: View {
 /// Woof Music's ProgressBar: a thin track that thickens while scrubbing.
 struct ProgressBar: View {
     @Binding var progress: Double
+    /// Where chapters start, from 0 to 1. The bar splits at each one.
+    var marks: [Double] = []
     let onEditingChanged: (Bool) -> Void
     @GestureState private var isScrubbing = false
     @State private var didStartEditing = false
@@ -370,9 +409,11 @@ struct ProgressBar: View {
             let trackWidth = max(0, geometry.size.width - inset * 2)
             let height: CGFloat = isScrubbing ? 12 : 5
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.3)).frame(height: height)
-                Capsule().fill(.tint).frame(width: trackWidth * min(max(progress, 0), 1), height: height)
+                Rectangle().fill(.white.opacity(0.3)).frame(height: height)
+                Rectangle().fill(.tint).frame(width: trackWidth * min(max(progress, 0), 1), height: height)
             }
+            .frame(height: height)
+            .clipShape(BarSegments(marks: marks))
             .padding(.horizontal, inset)
             .animation(.easeInOut(duration: 0.2), value: isScrubbing)
             .frame(maxHeight: .infinity)
@@ -401,6 +442,23 @@ struct ProgressBar: View {
             }
         }
         .frame(height: 24)
+    }
+}
+
+/// One rounded piece per chapter, with a small gap between them.
+private struct BarSegments: Shape {
+    let marks: [Double]
+    private static let gap: CGFloat = 2
+
+    func path(in rect: CGRect) -> Path {
+        let edges = [0] + marks + [1]
+        var path = Path()
+        for (start, end) in zip(edges, edges.dropFirst()) {
+            let x = rect.minX + rect.width * start + (start > 0 ? Self.gap / 2 : 0)
+            let width = rect.width * (end - start) - (start > 0 ? Self.gap / 2 : 0) - (end < 1 ? Self.gap / 2 : 0)
+            path.addRoundedRect(in: CGRect(x: x, y: rect.minY, width: max(width, 1), height: rect.height), cornerSize: CGSize(width: rect.height / 2, height: rect.height / 2))
+        }
+        return path
     }
 }
 
@@ -436,19 +494,25 @@ private struct PlayerProgress: View {
     let duration: Double
     let isFullscreen: Bool
     let storyboard: Storyboard?
+    let chapters: [Chapter]
     let onScrubbing: (Bool) -> Void
     @State private var position = 0.0
     @State private var isEditing = false
 
     var body: some View {
         let total = max(duration, 1)
+        let shownTime = isEditing ? position * total : clock.time
+        let chapter = chapters.last { $0.start <= shownTime }
         VStack(spacing: 0) {
             if isEditing, let storyboard {
                 StoryboardPreview(storyboard: storyboard, seconds: position * total)
             }
             HStack {
-                Text((isEditing ? position * total : clock.time).clockText)
-                Spacer()
+                Text(shownTime.clockText)
+                if let chapter {
+                    chapterMenu(current: chapter)
+                }
+                Spacer(minLength: 0)
                 Text(duration.clockText)
                 RoutePicker().frame(width: 44, height: 44)
                 Button(isFullscreen ? "Exit Full Screen" : "Full Screen", systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
@@ -464,6 +528,7 @@ private struct PlayerProgress: View {
 
             ProgressBar(
                 progress: Binding(get: { isEditing ? position : clock.time / total }, set: { position = $0 }),
+                marks: chapters.dropFirst().map { $0.start / total },
                 onEditingChanged: { editing in
                     if editing {
                         position = clock.time / total
@@ -475,6 +540,34 @@ private struct PlayerProgress: View {
                 }
             )
         }
+        .sensoryFeedback(.selection, trigger: chapter?.start) { _, _ in isEditing }
+    }
+
+    /// The name of the current chapter. It lists all of them, replacing a row under the video.
+    private func chapterMenu(current: Chapter) -> some View {
+        Menu {
+            ForEach(chapters, id: \.self) { chapter in
+                Button {
+                    player.seek(to: chapter.start)
+                } label: {
+                    if chapter == current {
+                        Label(chapter.title, systemImage: "checkmark")
+                    } else {
+                        Text(chapter.title)
+                    }
+                    Text(chapter.start.clockText)
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                Text(current.title).lineLimit(1)
+                Image(systemName: "chevron.right").imageScale(.small)
+            }
+            .font(.caption2.weight(.semibold))
+            .frame(minHeight: 44)
+            .contentShape(.rect)
+        }
+        .accessibilityLabel("Chapter: \(current.title)")
     }
 }
 
@@ -485,12 +578,11 @@ private struct SeekHint {
 
 private struct PlayerControls: View {
     private static let skipSeconds = 10.0
+    private static let exitFullscreenDistance: CGFloat = 60
 
     @ObservedObject var player: MpvPlayer
     @ObservedObject var sleepTimer: SleepTimer
     let isFullscreen: Bool
-    let onDragChanged: (CGSize) -> Void
-    let onDragEnded: (_ translation: CGSize, _ predicted: CGSize) -> Void
 
     @EnvironmentObject private var router: Router
     @State private var showsControls = true
@@ -518,8 +610,11 @@ private struct PlayerControls: View {
                     player.skip(by: isLeading ? -Self.skipSeconds : Self.skipSeconds)
                     seekHint = SeekHint(isLeading: isLeading)
                 },
-                onDragChanged: onDragChanged,
-                onDragEnded: onDragEnded
+                onDragChanged: { _ in },
+                onDragEnded: { translation, _ in
+                    if translation.height > Self.exitFullscreenDistance { Orientation.setFullscreen(false) }
+                },
+                isDragEnabled: isFullscreen
             )
 
             if isLoading {
@@ -585,7 +680,7 @@ private struct PlayerControls: View {
                 }
             }
             Spacer(minLength: 0)
-            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard) { scrubbing in
+            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? []) { scrubbing in
                 if scrubbing {
                     hideTask?.cancel()
                 } else {
@@ -745,14 +840,11 @@ private struct WatchDetailsView: View {
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var downloads = DownloadStore.shared
     @State private var showsDescription = false
+    @State private var showsPlaylists = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.sectionSpacing * 1.5) {
-            if let video = router.current {
-                Text(video.title)
-                    .font(.title3.bold())
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
+            infoCard
             if let failure = router.loadError ?? router.player.errorText {
                 Label(failure, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -760,32 +852,60 @@ private struct WatchDetailsView: View {
                     .textSelection(.enabled)
             }
             if let details = router.details {
-                channelRow(details)
-                actions(details)
                 descriptionCard(details)
-                if !details.chapters.isEmpty {
-                    chapters(details.chapters)
-                }
                 if details.commentsToken != nil {
-                    commentsCard
+                    commentsCard(details)
                 }
                 if !router.queue.isEmpty {
                     Text("Queue").font(.headline)
-                    ForEach(router.queue, id: \.videoId) { video in
-                        VideoButton(video: video)
+                    LazyVStack(spacing: Layout.sectionGap) {
+                        ForEach(router.queue, id: \.videoId) { video in
+                            VideoButton(video: video)
+                        }
                     }
                 }
                 if !details.related.isEmpty {
                     Text("Up Next").font(.headline)
-                    ForEach(details.related, id: \.videoId) { video in
-                        VideoButton(video: video)
+                    // Lazy, so each card asks for its like counts only when it comes into view.
+                    LazyVStack(spacing: Layout.sectionGap) {
+                        ForEach(details.related, id: \.videoId) { video in
+                            VideoButton(video: video)
+                        }
                     }
                 }
-            } else if !router.detailsUnavailable {
-                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 32)
             }
         }
         .padding(Layout.screenPadding)
+        .sheet(isPresented: $showsPlaylists) {
+            if let video = router.current {
+                PlaylistPickerSheet(video: video)
+            }
+        }
+    }
+
+    private var infoCard: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            if let video = router.current {
+                Text(video.title)
+                    .font(.title3.bold())
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let details = router.details {
+                channelRow(details)
+                actions(details)
+            } else if !router.detailsUnavailable {
+                HStack(spacing: Layout.rowSpacing) {
+                    ShimmerBlock(width: Layout.thumbSmall, height: Layout.thumbSmall, radius: Layout.thumbSmall / 2)
+                    VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                        ShimmerBlock(width: 140, height: 14)
+                        ShimmerBlock(width: 90, height: 12)
+                    }
+                }
+                ShimmerBlock(width: 220, height: 38, radius: 19)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .materialCard()
     }
 
     private func channelLabel(_ details: WatchDetails) -> some View {
@@ -886,11 +1006,20 @@ private struct WatchDetailsView: View {
                         }
                         .accessibilityLabel("Share")
                         Button {
-                            router.run { try await PlaylistActions.add(id, to: YouTubeFeeds.watchLaterPlaylistId) }
+                            toggleWatchLater(id, isSaved: details.isInWatchLater)
                         } label: {
-                            HeaderRoundIcon(systemImage: "clock")
+                            HeaderRoundIcon(
+                                systemImage: details.isInWatchLater ? "clock.fill" : "clock",
+                                tint: details.isInWatchLater ? settings.accentColor : .primary
+                            )
                         }
-                        .accessibilityLabel("Save to Watch Later")
+                        .accessibilityLabel(details.isInWatchLater ? "Remove from Watch Later" : "Save to Watch Later")
+                        Button {
+                            showsPlaylists = true
+                        } label: {
+                            HeaderRoundIcon(systemImage: "text.badge.plus")
+                        }
+                        .accessibilityLabel("Save to Playlist")
                         if let video = router.current {
                             let isSaved = downloads.isDownloaded(id)
                             let isSaving = downloads.active.contains { $0.id == id }
@@ -912,8 +1041,12 @@ private struct WatchDetailsView: View {
                 }
                 .buttonStyle(ZoomPressStyle(scale: 0.92))
                 .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
+                .sensoryFeedback(.success, trigger: details.isInWatchLater) { _, saved in saved }
             }
         }
+        // Scrolls right up to the card's edges.
+        .contentMargins(.horizontal, Layout.rowSpacing, for: .scrollContent)
+        .padding(.horizontal, -Layout.rowSpacing)
         .scrollClipDisabled()
     }
 
@@ -929,37 +1062,6 @@ private struct WatchDetailsView: View {
         .padding(.horizontal, 14)
         .frame(height: 38)
         .contentShape(.rect)
-    }
-
-    private func chapters(_ chapters: [Chapter]) -> some View {
-        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-            Text("Chapters").font(.headline)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
-                    ForEach(chapters, id: \.self) { chapter in
-                        Button {
-                            router.player.seek(to: chapter.start)
-                        } label: {
-                            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                                CoverImage(url: chapter.thumbnail)
-                                    .frame(width: 160, height: 90)
-                                    .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
-                                Text(chapter.title)
-                                    .font(.caption.weight(.medium))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                Text(chapter.start.clockText)
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(width: 160, alignment: .leading)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(RowPressStyle())
-                    }
-                }
-            }
-        }
     }
 
     private func descriptionCard(_ details: WatchDetails) -> some View {
@@ -979,27 +1081,59 @@ private struct WatchDetailsView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(Layout.rowSpacing)
-            .background(Color(.secondarySystemFill), in: .rect(cornerRadius: Layout.tileRadius))
+            .materialCard()
         }
         .buttonStyle(.plain)
     }
 
-    private var commentsCard: some View {
+    private func commentsCard(_ details: WatchDetails) -> some View {
         Button {
             showsComments = true
         } label: {
-            HStack {
-                Text("Comments").font(.subheadline.weight(.semibold))
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                HStack(spacing: Layout.rowPadding) {
+                    Text("Comments").font(.subheadline.weight(.semibold))
+                    if let count = details.commentCount {
+                        Text(count)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if let comment = details.topComment {
+                    HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                        Avatar(url: comment.avatar, size: 24)
+                        Text(comment.text)
+                            .font(.footnote)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
             }
-            .padding(Layout.rowSpacing)
-            .background(Color(.secondarySystemFill), in: .rect(cornerRadius: Layout.tileRadius))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .materialCard()
         }
         .buttonStyle(.plain)
+    }
+
+    private func toggleWatchLater(_ id: String, isSaved: Bool) {
+        router.setDetails { $0.isInWatchLater = !isSaved }
+        Task {
+            do {
+                if isSaved {
+                    try await PlaylistActions.remove(id, from: YouTubeFeeds.watchLaterPlaylistId)
+                } else {
+                    try await PlaylistActions.add(id, to: YouTubeFeeds.watchLaterPlaylistId)
+                }
+            } catch {
+                router.setDetails { $0.isInWatchLater = isSaved }
+                router.actionMessage = error.localizedDescription
+            }
+        }
     }
 
     private func setLike(_ status: String) {
@@ -1018,6 +1152,15 @@ private struct WatchDetailsView: View {
                 router.actionMessage = error.localizedDescription
             }
         }
+    }
+}
+
+private extension View {
+    /// The cards on the video page, over the blurred thumbnail.
+    func materialCard() -> some View {
+        padding(Layout.rowSpacing)
+            .background(.regularMaterial, in: .rect(cornerRadius: Layout.sheetRadius, style: .continuous))
+            .clipShape(.rect(cornerRadius: Layout.sheetRadius, style: .continuous))
     }
 }
 
@@ -1093,7 +1236,7 @@ struct ChannelView: View {
                     FilterChips(titles: tabs.map(\.title), selected: selectedTab, onTap: select)
                 }
                 if model.items.isEmpty, model.isLoading || isLoading {
-                    ProgressView().frame(maxWidth: .infinity).padding(.vertical, 48)
+                    LoadingRows(isCompact: true)
                 }
                 FeedRows(model: model, isCompact: true)
                 if let description = page?.channel?.description, !description.isEmpty {
