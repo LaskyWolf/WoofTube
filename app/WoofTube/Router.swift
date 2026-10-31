@@ -58,14 +58,26 @@ final class Router: ObservableObject {
     @Published private(set) var detailsUnavailable = false
 
     let player = MpvPlayer()
-    let pictureInPicture = PictureInPicture()
+    private(set) lazy var pictureInPicture: PictureInPicture = {
+        let window = PictureInPicture(player: player)
+        window.onFailure = { [weak self] message in self?.actionMessage = message }
+        window.onRestore = { [weak self] in self?.isExpanded = true }
+        return window
+    }()
+    /// The window for Shorts only opens by itself, when the app leaves the screen.
+    private lazy var shortsPictureInPicture: PictureInPicture = {
+        let window = PictureInPicture(player: shortsPlayer)
+        window.onFailure = { [weak self] message in self?.actionMessage = message }
+        window.onRestore = { [weak self] in self?.expandShorts() }
+        return window
+    }()
     /// Created on the first Short, and kept because mpv isn't torn down.
     private(set) lazy var shortsPlayer: MpvPlayer = {
-        let player = MpvPlayer(surfaceAspect: 9 / 16)
+        let player = MpvPlayer()
         player.setProperty("loop-file", "inf")
         return player
     }()
-    private(set) lazy var sleepTimer = SleepTimer { [weak self] in self?.setPaused(true) }
+    private(set) lazy var sleepTimer = SleepTimer { [weak self] in self?.player.setPaused(true) }
     static let qualities = [2160, 1440, 1080, 720, 480, 360]
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
@@ -73,11 +85,14 @@ final class Router: ObservableObject {
     private static let skipsSponsorsKey = "skipsSponsors"
     private static let captionLanguageKey = "captionLanguage"
     private var loadTask: Task<Void, Never>?
+    private var didCreateShortsWindow = false
     private var nowPlayingSubscriptions: [Any] = []
     private var sponsorSegments: [ClosedRange<Double>] = []
     private var currentStream: LoadedStream?
     private var playlistModel: FeedModel?
-    private var pictureInPictureVideoId: String?
+    private var backgroundTask: Task<Void, Never>?
+    /// Long enough for iOS to open the window by itself when the app leaves the screen.
+    private static let windowStartDelay = Duration.seconds(1)
     /// Fewer videos than this left in the queue fetches the playlist's next page.
     private static let playlistRefill = 5
 
@@ -89,13 +104,6 @@ final class Router: ObservableObject {
         skipsSponsors = defaults.bool(forKey: Self.skipsSponsorsKey)
         setUpRemoteCommands()
         player.onEnded = { [weak self] in self?.playNextAfterEnd() }
-        pictureInPicture.onStop = { [weak self] time, keepsPlaying in
-            guard let self, current?.videoId == pictureInPictureVideoId else { return }
-            player.seek(to: time)
-            player.setPaused(!keepsPlaying)
-        }
-        pictureInPicture.onFailure = { [weak self] message in self?.actionMessage = message }
-        pictureInPicture.onRestore = { [weak self] in self?.isExpanded = true }
     }
 
     func play(_ video: YouTubeVideo, expand: Bool = true) {
@@ -104,10 +112,10 @@ final class Router: ObservableObject {
             return
         }
         closeShorts()
-        pictureInPicture.stop()
         current = video
         channelRoute = nil
         if expand { isExpanded = true }
+        updateAutomaticWindow()
         details = nil
         detailsUnavailable = false
         audioTracks = []
@@ -171,6 +179,7 @@ final class Router: ObservableObject {
         let model = ShortsModel(shorts: videos, startId: start.videoId, player: shortsPlayer)
         shortsModel = model
         shortsRoute = ShortsRoute(model: model)
+        updateAutomaticWindow()
     }
 
     /// The Short keeps playing in the floating card.
@@ -184,28 +193,39 @@ final class Router: ObservableObject {
 
     func closeShorts() {
         shortsRoute = nil
-        shortsModel?.player.stop()
+        guard let model = shortsModel else { return }
+        shortsPictureInPicture.stop()
+        model.player.stop()
         shortsModel = nil
+        updateAutomaticWindow()
     }
 
-    /// Only the video page offers this, on the video playing now.
-    func startPictureInPicture() {
-        guard let videoId = current?.videoId else { return }
-        pictureInPictureVideoId = videoId
-        Task {
-            do {
-                try await pictureInPicture.start(videoId: videoId, at: player.time) { player.setPaused(true) }
-            } catch {
-                actionMessage = error.localizedDescription
-            }
+    private func updateAutomaticWindow() {
+        // The one losing the right goes first, because iOS allows one at a time.
+        if shortsModel == nil {
+            if didCreateShortsWindow { shortsPictureInPicture.startsAutomatically = false }
+            pictureInPicture.startsAutomatically = current != nil
+        } else {
+            pictureInPicture.startsAutomatically = false
+            didCreateShortsWindow = true
+            shortsPictureInPicture.startsAutomatically = true
         }
     }
 
-    private func setPaused(_ paused: Bool) {
-        if pictureInPicture.isActive {
-            pictureInPicture.setPaused(paused)
-        } else {
-            player.setPaused(paused)
+    /// iOS takes the video decoder away in the background unless the window is open.
+    func sceneChanged(isBackground: Bool) {
+        backgroundTask?.cancel()
+        let shorts = shortsModel == nil ? nil : shortsPictureInPicture
+        guard isBackground else {
+            player.setVideoEnabled(true)
+            shortsModel?.player.setVideoEnabled(true)
+            return
+        }
+        backgroundTask = Task {
+            try? await Task.sleep(for: Self.windowStartDelay)
+            guard !Task.isCancelled else { return }
+            if !pictureInPicture.isActive { player.setVideoEnabled(false) }
+            if shorts?.isActive == false { shortsModel?.player.setVideoEnabled(false) }
         }
     }
 
@@ -252,6 +272,7 @@ final class Router: ObservableObject {
         closeShorts()
         pictureInPicture.stop()
         current = nil
+        updateAutomaticWindow()
         queue = []
         playlistTitle = nil
         playlistModel = nil
@@ -383,30 +404,21 @@ final class Router: ObservableObject {
 
     private func setUpRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
-        center.playCommand.addTarget { [weak self] _ in
-            self?.setPaused(false)
+        center.playCommand.addTarget { [player] _ in
+            player.setPaused(false)
             return .success
         }
-        center.pauseCommand.addTarget { [weak self] _ in
-            self?.setPaused(true)
+        center.pauseCommand.addTarget { [player] _ in
+            player.setPaused(true)
             return .success
         }
-        center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            if pictureInPicture.isActive {
-                pictureInPicture.togglePause()
-            } else {
-                player.togglePause()
-            }
+        center.togglePlayPauseCommand.addTarget { [player] _ in
+            player.togglePause()
             return .success
         }
-        center.changePlaybackPositionCommand.addTarget { [weak self] event in
-            guard let self, let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            if pictureInPicture.isActive {
-                pictureInPicture.seek(to: event.positionTime)
-            } else {
-                player.seek(to: event.positionTime)
-            }
+        center.changePlaybackPositionCommand.addTarget { [player] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            player.seek(to: event.positionTime)
             return .success
         }
         nowPlayingSubscriptions = [

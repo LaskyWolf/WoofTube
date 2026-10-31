@@ -13,7 +13,6 @@ All phases have a first version. Each one still needs testing and fixes on a dev
 
 ## Known gaps
 
-- [ ] Picture-in-picture: starts from the player's button only, on YouTube's HLS stream through AVPlayer. Starting automatically when the app leaves the screen is missing.
 - [ ] AirPlay video: the route button moves audio only.
 - [ ] Verify signed-in comment posting, comment likes, notifications and the mixed Home feed. Their response shapes were only checked signed out.
 - [ ] Verify signed-in post likes and poll votes.

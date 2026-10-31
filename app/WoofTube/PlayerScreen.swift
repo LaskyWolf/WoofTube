@@ -1001,18 +1001,12 @@ private struct PlayerControls: View {
     }
 }
 
-/// Downloaded videos have no stream on YouTube's side for Apple's window to play.
 private struct PictureInPictureButton: View {
     @ObservedObject var model: PictureInPicture
-    @EnvironmentObject private var router: Router
 
     var body: some View {
-        if router.streamSummary != nil, router.streamSummary != "Downloaded" {
-            if model.isLoading {
-                ProgressView().tint(.white).frame(width: 44, height: 44)
-            } else {
-                Button("Picture in Picture", systemImage: "pip.enter") { router.startPictureInPicture() }
-            }
+        if model.isPossible || model.isActive {
+            Button("Picture in Picture", systemImage: model.isActive ? "pip.exit" : "pip.enter", action: model.toggle)
         }
     }
 }

@@ -1,6 +1,5 @@
 import AVFoundation
-import Libmpv
-import Metal
+import MPVKit
 import SwiftUI
 
 /// mpv's option order comes from Woof Music's PlayerController.
@@ -21,48 +20,47 @@ final class MpvPlayer: ObservableObject {
     @Published private(set) var errorText: String?
     @Published private(set) var recentLog: [String] = []
 
-    let videoLayer: CAMetalLayer = {
-        let layer = CAMetalLayer()
-        layer.device = MTLCreateSystemDefaultDevice()
-        layer.framebufferOnly = true
+    /// mpv puts its frames here. It's the kind of layer Apple's Picture in Picture window can show.
+    let videoLayer: AVSampleBufferDisplayLayer = {
+        let layer = AVSampleBufferDisplayLayer()
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = UIColor.black.cgColor
         return layer
     }()
-    /// The shape of the surface mpv draws on. It never changes after mpv starts,
-    /// so rotating only moves the layer and doesn't restart the video output.
-    let surfaceAspect: CGFloat
     /// Called on the main thread when a video plays to its end.
     var onEnded: (() -> Void)?
 
     private let queue = DispatchQueue(label: "com.laskywolf.wooftube.mpv")
     private var mpv: OpaquePointer?
-    private var pendingLoad: (url: String, start: Double)?
-    private var hasSurface = false
     private var videoEnabled = true
+    private var decoderResets = 0
     private var wasPlayingBeforeInterruption = false
     private var observers: [Any] = []
 
     private static let logLimit = 100
     private static let ticksPerSecond = 4.0
+    /// Tries per video before leaving a failed picture alone, so it can't loop forever.
+    private static let maxDecoderResets = 3
 
-    init(surfaceAspect: CGFloat = 16 / 9) {
-        self.surfaceAspect = surfaceAspect
+    init() {
         observeAudioSession()
         queue.async { [weak self] in self?.startMpv() }
     }
 
-    /// Starts once the video view has a size, because mpv sizes its surface from the layer.
     func load(url: String, start: Double = 0) {
         errorText = nil
         isBuffering = true
-        pendingLoad = (url, start)
-        startIfReady()
-    }
-
-    func surfaceIsReady() {
-        guard !hasSurface else { return }
-        hasSurface = true
-        queue.async { [weak self] in self?.startVideoOutput() }
-        startIfReady()
+        isPaused = false
+        queue.async { [self] in
+            decoderResets = 0
+            activateAudioSession()
+            guard let mpv else { return }
+            mpv_set_property_string(mpv, "pause", "no")
+            let arguments = start > 0
+                ? ["loadfile", url, "replace", "-1", "start=\(start)"]
+                : ["loadfile", url, "replace"]
+            _ = arguments.withUnsafeCArg { mpv_command(mpv, $0) }
+        }
     }
 
     /// Off while nothing shows the video, such as in the background or the mini player.
@@ -94,7 +92,6 @@ final class MpvPlayer: ObservableObject {
     }
 
     func stop() {
-        pendingLoad = nil
         clock.time = 0
         duration = 0
         isBuffering = false
@@ -132,12 +129,14 @@ final class MpvPlayer: ObservableObject {
             publish { $0.errorText = "mpv could not start" }
             return
         }
-        setenv("MVK_CONFIG_LOG_LEVEL", "1", 1)
         mpv_request_log_messages(mpv, "warn")
-        mpv_set_option_string(mpv, "vo", "null")
-        mpv_set_option_string(mpv, "vid", "no")
-        mpv_set_option_string(mpv, "force-window", "no")
+        var layerAddress = Int64(Int(bitPattern: Unmanaged.passUnretained(videoLayer).toOpaque()))
+        mpv_set_option(mpv, "wid", MPV_FORMAT_INT64, &layerAddress)
+        mpv_set_option_string(mpv, "vo", "avfoundation")
+        mpv_set_option_string(mpv, "avfoundation-composite-osd", "yes")
         mpv_set_option_string(mpv, "hwdec", "videotoolbox")
+        mpv_set_option_string(mpv, "hwdec-codecs", "all")
+        mpv_set_option_string(mpv, "hwdec-software-fallback", "yes")
         mpv_set_option_string(mpv, "audio-exclusive", "yes")
         mpv_set_option_string(mpv, "cache", "yes")
         mpv_set_option_string(mpv, "cache-secs", "120")
@@ -166,34 +165,6 @@ final class MpvPlayer: ObservableObject {
         }.start()
     }
 
-    private func startVideoOutput() {
-        guard let mpv else { return }
-        mpv_set_property_string(mpv, "vo", "null")
-        mpv_set_property_string(mpv, "vo", "gpu-next")
-        mpv_set_property_string(mpv, "gpu-api", "vulkan")
-        mpv_set_property_string(mpv, "gpu-context", "moltenvk")
-        var window = unsafeBitCast(videoLayer, to: Int64.self)
-        mpv_set_property(mpv, "wid", MPV_FORMAT_INT64, &window)
-        if videoEnabled {
-            mpv_set_property_string(mpv, "vid", "auto")
-        }
-    }
-
-    private func startIfReady() {
-        guard hasSurface, let load = pendingLoad else { return }
-        pendingLoad = nil
-        isPaused = false
-        queue.async { [self] in
-            activateAudioSession()
-            guard let mpv else { return }
-            mpv_set_property_string(mpv, "pause", "no")
-            let arguments = load.start > 0
-                ? ["loadfile", load.url, "replace", "-1", "start=\(load.start)"]
-                : ["loadfile", load.url, "replace"]
-            _ = arguments.withUnsafeCArg { mpv_command(mpv, $0) }
-        }
-    }
-
     func setProperty(_ name: String, _ value: String) {
         queue.async { [self] in
             guard let mpv else { return }
@@ -218,7 +189,7 @@ final class MpvPlayer: ObservableObject {
 
     private func activateAudioSession() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, policy: .longFormAudio)
+        try? session.setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio)
         try? session.setActive(true)
     }
 
@@ -238,8 +209,21 @@ final class MpvPlayer: ObservableObject {
             },
             center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                 self?.queue.async { self?.activateAudioSession() }
+            },
+            // iOS can take the video decoder away in the background, which leaves the picture black.
+            videoLayer.observe(\.status, options: [.new]) { [weak self] layer, _ in
+                if layer.status == .failed { self?.resetDecoder() }
             }
         ]
+    }
+
+    private func resetDecoder() {
+        queue.async { [self] in
+            guard let mpv, decoderResets < Self.maxDecoderResets else { return }
+            decoderResets += 1
+            mpv_set_property_string(mpv, "hwdec", "no")
+            mpv_set_property_string(mpv, "hwdec", "videotoolbox")
+        }
     }
 
     private func handleInterruption(_ note: Notification) {
@@ -386,32 +370,17 @@ final class MpvVideoUIView: UIView {
         fatalError("init(coder:) is not used")
     }
 
-    /// The drawable keeps the screen's full resolution, and `contentsScale` keeps
-    /// bounds × scale equal to it, so MoltenVK never sees a size change.
     override func layoutSubviews() {
         super.layoutSubviews()
         guard isActive, bounds.width > 0, bounds.height > 0 else { return }
-        let aspect = player.surfaceAspect
         let videoLayer = player.videoLayer
-        let longSide = max(UIScreen.main.nativeBounds.width, UIScreen.main.nativeBounds.height)
-        let drawable = aspect >= 1
-            ? CGSize(width: longSide, height: longSide / aspect)
-            : CGSize(width: longSide * aspect, height: longSide)
-        let fitted = AVMakeRect(aspectRatio: drawable, insideRect: bounds)
-        let scale = fills ? max(bounds.width / fitted.width, bounds.height / fitted.height) : 1
-        let frame = fitted.insetBy(dx: fitted.width * (1 - scale) / 2, dy: fitted.height * (1 - scale) / 2)
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if videoLayer.superlayer !== layer {
             layer.addSublayer(videoLayer)
         }
-        videoLayer.frame = frame
-        videoLayer.contentsScale = drawable.width / frame.width
-        if videoLayer.drawableSize != drawable {
-            videoLayer.drawableSize = drawable
-        }
+        videoLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
+        videoLayer.frame = bounds
         CATransaction.commit()
-        player.surfaceIsReady()
     }
 }
