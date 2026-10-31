@@ -116,6 +116,7 @@ struct WatchDetails {
     var commentsToken: String?
     var collaborators: [Collaborator] = []
     var commentCount: String?
+    var dislikeCount: Int?
     var chapters: [Chapter] = []
 
     init(json: [String: Any], videoId: String) {

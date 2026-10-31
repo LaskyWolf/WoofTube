@@ -7,6 +7,8 @@ import SwiftUI
 /// mpv calls can block for seconds while a stream opens, so they all run on `queue`.
 /// The UI only ever touches the published values, which change on the main thread.
 final class MpvPlayer: ObservableObject {
+    static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
     /// The playback position, apart from the player: only the views that show it redraw as it ticks.
     let clock = PlayerClock()
     var time: Double { clock.time }
@@ -155,7 +157,7 @@ final class MpvPlayer: ObservableObject {
         if let certificates = Bundle.main.path(forResource: "cacert", ofType: "pem") {
             mpv_set_property_string(mpv, "tls-ca-file", certificates)
         }
-        mpv_set_property_string(mpv, "user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+        mpv_set_property_string(mpv, "user-agent", Self.userAgent)
         mpv_observe_property(mpv, 0, "time-pos", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 1, "duration", MPV_FORMAT_DOUBLE)
         mpv_observe_property(mpv, 2, "pause", MPV_FORMAT_FLAG)

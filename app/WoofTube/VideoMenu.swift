@@ -3,8 +3,8 @@ import SwiftyTube
 
 extension View {
     /// The long press menu. Same layout as Woof Music: actions row, queue, then the rest.
-    func videoMenu(_ video: YouTubeVideo, feedback: [FeedbackAction] = [], collaborators: [Collaborator] = [], onRemove: (() -> Void)? = nil) -> some View {
-        modifier(VideoMenuModifier(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove))
+    func videoMenu(_ video: YouTubeVideo, feedback: [FeedbackAction] = [], collaborators: [Collaborator] = [], onRemove: (() -> Void)? = nil, onRemoveFromPlaylist: (() -> Void)? = nil) -> some View {
+        modifier(VideoMenuModifier(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist))
     }
 }
 
@@ -13,13 +13,14 @@ private struct VideoMenuModifier: ViewModifier {
     let feedback: [FeedbackAction]
     let collaborators: [Collaborator]
     let onRemove: (() -> Void)?
+    let onRemoveFromPlaylist: (() -> Void)?
     @EnvironmentObject private var router: Router
     @State private var showsPlaylists = false
 
     func body(content: Content) -> some View {
         content
             .contextMenu {
-                VideoMenuItems(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove, router: router, showsPlaylists: $showsPlaylists)
+                VideoMenuItems(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist, router: router, showsPlaylists: $showsPlaylists)
             }
             .sheet(isPresented: $showsPlaylists) {
                 PlaylistPickerSheet(video: video)
@@ -32,6 +33,7 @@ struct VideoMenuItems: View {
     var feedback: [FeedbackAction] = []
     var collaborators: [Collaborator] = []
     var onRemove: (() -> Void)?
+    var onRemoveFromPlaylist: (() -> Void)?
     let router: Router
     @Binding var showsPlaylists: Bool
 
@@ -57,6 +59,14 @@ struct VideoMenuItems: View {
         Section {
             Button("Save to Watch Later", systemImage: "clock") {
                 router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
+            }
+            if !DownloadStore.shared.isDownloaded(video.videoId) {
+                Button("Download", systemImage: "arrow.down.circle") {
+                    router.run { try await DownloadStore.shared.download(video, maxHeight: router.maxHeight) }
+                }
+            }
+            if let onRemoveFromPlaylist {
+                Button("Remove from Playlist", systemImage: "minus.circle", role: .destructive, action: onRemoveFromPlaylist)
             }
             if !feedback.isEmpty {
                 Menu("More", systemImage: "ellipsis.circle") {

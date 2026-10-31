@@ -43,6 +43,11 @@ final class Router: ObservableObject {
         didSet { UserDefaults.standard.set(skipsSponsors, forKey: Self.skipsSponsorsKey) }
     }
     @Published private(set) var isCaptionTranslated = false
+    @Published private(set) var audioTracks: [AudioTrack] = []
+    @Published private(set) var selectedAudioTrack: String?
+    @Published private(set) var storyboard: Storyboard?
+    /// The details request failed, as it does for a download with no connection.
+    @Published private(set) var detailsUnavailable = false
 
     let player = MpvPlayer()
     /// Created on the first Short, and kept because mpv isn't torn down.
@@ -61,6 +66,7 @@ final class Router: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var nowPlayingSubscriptions: [Any] = []
     private var sponsorSegments: [ClosedRange<Double>] = []
+    private var currentStream: LoadedStream?
 
     init() {
         let defaults = UserDefaults.standard
@@ -81,6 +87,10 @@ final class Router: ObservableObject {
         channelRoute = nil
         if expand { isExpanded = true }
         details = nil
+        detailsUnavailable = false
+        audioTracks = []
+        selectedAudioTrack = nil
+        storyboard = nil
         selectedCaption = nil
         captionCues = []
         sponsorSegments = []
@@ -177,6 +187,13 @@ final class Router: ObservableObject {
         }
     }
 
+    func selectAudioTrack(_ track: AudioTrack) {
+        guard let videoURL = currentStream?.videoURL else { return }
+        selectedAudioTrack = track.id
+        let url = StreamFallback.combineVideoAndAudio(videoURL: videoURL, audioURL: track.url, duration: currentStream?.duration)
+        player.load(url: url, start: player.time)
+    }
+
     func setDetails(_ update: (inout WatchDetails) -> Void) {
         guard var value = details else { return }
         update(&value)
@@ -211,14 +228,28 @@ final class Router: ObservableObject {
         loadError = nil
         captions = []
         loadTask = Task {
+            if let local = DownloadStore.shared.stream(videoId: videoId) {
+                streamSummary = "Downloaded"
+                player.load(url: local, start: start)
+                updateNowPlaying()
+                return
+            }
             do {
                 let stream = try await StreamLoader.load(videoId: videoId, maxHeight: maxHeight)
                 guard !Task.isCancelled else { return }
+                currentStream = stream
+                selectedAudioTrack = nil
                 streamSummary = stream.summary
                 captions = stream.captions
                 restoreCaption()
                 player.load(url: stream.url, start: start)
                 updateNowPlaying()
+                if let client = stream.client {
+                    let extras = await StreamLoader.extras(videoId: videoId, client: client)
+                    guard !Task.isCancelled else { return }
+                    audioTracks = extras.tracks
+                    storyboard = extras.storyboard
+                }
                 if isNewPlayback, let tracking = stream.trackingURL {
                     try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: tracking, client: .web)
                 }
@@ -238,9 +269,14 @@ final class Router: ObservableObject {
     }
 
     private func loadDetails(videoId: String) async {
-        guard let json = try? await InnerTubeClient.wooftube.next(videoId: videoId),
-              current?.videoId == videoId else { return }
+        guard let json = try? await InnerTubeClient.wooftube.next(videoId: videoId) else {
+            if current?.videoId == videoId { detailsUnavailable = true }
+            return
+        }
+        guard current?.videoId == videoId else { return }
         details = WatchDetails(json: json, videoId: videoId)
+        let dislikes = await DislikeCounts.fetch(videoId: videoId)
+        if current?.videoId == videoId { setDetails { $0.dislikeCount = dislikes } }
     }
 
     private func setUpRemoteCommands() {
@@ -309,6 +345,26 @@ enum WatchPositions {
             return
         }
         UserDefaults.standard.set(positions, forKey: key)
+    }
+}
+
+/// YouTube hides dislike counts, so this is Return YouTube Dislike's community estimate.
+enum DislikeCounts {
+    static let enabledKey = "showsDislikeCounts"
+
+    static func fetch(videoId: String) async -> Int? {
+        guard UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true,
+              let url = URL(string: "https://returnyoutubedislikeapi.com/votes?videoId=\(videoId)"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        return json["dislikes"] as? Int
+    }
+}
+
+extension Int {
+    /// "1.2K", like YouTube's like count.
+    var compactText: String {
+        formatted(.number.notation(.compactName))
     }
 }
 

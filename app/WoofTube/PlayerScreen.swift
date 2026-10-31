@@ -403,12 +403,38 @@ struct ProgressBar: View {
     }
 }
 
+/// Shows one frame by moving the whole sheet behind a small window.
+private struct StoryboardPreview: View {
+    let storyboard: Storyboard
+    let seconds: Double
+    private static let width: CGFloat = 128
+
+    var body: some View {
+        let frame = storyboard.frame(at: seconds)
+        let scale = Self.width / storyboard.frameSize.width
+        let height = storyboard.frameSize.height * scale
+        AsyncImage(url: frame.url) { image in
+            image
+                .resizable()
+                .frame(width: Self.width * CGFloat(storyboard.columns), height: height * CGFloat(storyboard.rows))
+                .offset(x: -Self.width * CGFloat(frame.column), y: -height * CGFloat(frame.row))
+                .frame(width: Self.width, height: height, alignment: .topLeading)
+        } placeholder: {
+            Color.black.opacity(0.4)
+        }
+        .frame(width: Self.width, height: height)
+        .clipShape(.rect(cornerRadius: Layout.cardRadius))
+        .allowsHitTesting(false)
+    }
+}
+
 /// The progress bar and times, as in Woof Music's player. Only this part redraws as the time ticks.
 private struct PlayerProgress: View {
     @ObservedObject var clock: PlayerClock
     let player: MpvPlayer
     let duration: Double
     let isFullscreen: Bool
+    let storyboard: Storyboard?
     let onScrubbing: (Bool) -> Void
     @State private var position = 0.0
     @State private var isEditing = false
@@ -416,6 +442,9 @@ private struct PlayerProgress: View {
     var body: some View {
         let total = max(duration, 1)
         VStack(spacing: 0) {
+            if isEditing, let storyboard {
+                StoryboardPreview(storyboard: storyboard, seconds: position * total)
+            }
             HStack {
                 Text((isEditing ? position * total : clock.time).clockText)
                 Spacer()
@@ -555,7 +584,7 @@ private struct PlayerControls: View {
                 }
             }
             Spacer(minLength: 0)
-            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen) { scrubbing in
+            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard) { scrubbing in
                 if scrubbing {
                     hideTask?.cancel()
                 } else {
@@ -655,6 +684,21 @@ private struct PlayerControls: View {
 
     private var optionsMenu: some View {
         Menu {
+            if router.audioTracks.count > 1 {
+                Menu("Audio Track") {
+                    ForEach(router.audioTracks) { track in
+                        Button {
+                            router.selectAudioTrack(track)
+                        } label: {
+                            if router.selectedAudioTrack == track.id {
+                                Label(track.name, systemImage: "checkmark")
+                            } else {
+                                Text(track.name)
+                            }
+                        }
+                    }
+                }
+            }
             Picker("Quality", selection: Binding(get: { router.maxHeight }, set: { router.changeQuality(to: $0) })) {
                 ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
             }
@@ -698,6 +742,7 @@ private struct WatchDetailsView: View {
     @Binding var showsComments: Bool
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var settings: AppSettings
+    @ObservedObject private var downloads = DownloadStore.shared
     @State private var showsDescription = false
 
     var body: some View {
@@ -735,7 +780,7 @@ private struct WatchDetailsView: View {
                         VideoButton(video: video)
                     }
                 }
-            } else {
+            } else if !router.detailsUnavailable {
                 ProgressView().frame(maxWidth: .infinity).padding(.vertical, 32)
             }
         }
@@ -768,8 +813,16 @@ private struct WatchDetailsView: View {
                 if details.collaborators.count > 1 {
                     Menu {
                         ForEach(details.collaborators) { creator in
-                            Button {
-                                router.openChannel(creator.channelId)
+                            Menu {
+                                Button("Open Channel", systemImage: "person.crop.circle") {
+                                    router.openChannel(creator.channelId)
+                                }
+                                Button("Subscribe", systemImage: "bell") {
+                                    router.run { _ = try await InnerTubeClient.wooftube.subscribe(channelId: creator.channelId) }
+                                }
+                                Button("Unsubscribe", systemImage: "bell.slash") {
+                                    router.run { _ = try await InnerTubeClient.wooftube.unsubscribe(channelId: creator.channelId) }
+                                }
                             } label: {
                                 Text(creator.name)
                                 Text(creator.subtitle)
@@ -819,7 +872,19 @@ private struct WatchDetailsView: View {
                 Button {
                     setLike(isDisliked ? "INDIFFERENT" : "DISLIKE")
                 } label: {
-                    HeaderRoundIcon(systemImage: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", tint: isDisliked ? settings.accentColor : .primary)
+                    HStack(spacing: Layout.rowPadding) {
+                        Image(systemName: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(isDisliked ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                        if let count = details.dislikeCount {
+                            Text((count + (isDisliked ? 1 : 0)).compactText)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 38)
+                    .background(Color.primary.opacity(0.1), in: .capsule)
+                    .contentShape(.capsule)
                 }
                 .accessibilityLabel("Dislike")
                 if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
@@ -833,6 +898,21 @@ private struct WatchDetailsView: View {
                         HeaderRoundIcon(systemImage: "clock")
                     }
                     .accessibilityLabel("Save to Watch Later")
+                    if let video = router.current {
+                        let isSaved = downloads.isDownloaded(id)
+                        let isSaving = downloads.active.contains { $0.id == id }
+                        Button {
+                            router.run { try await downloads.download(video, maxHeight: router.maxHeight) }
+                        } label: {
+                            if isSaving {
+                                ProgressView().frame(width: 38, height: 38)
+                            } else {
+                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down")
+                            }
+                        }
+                        .disabled(isSaved || isSaving)
+                        .accessibilityLabel(isSaved ? "Downloaded" : isSaving ? "Downloading" : "Download")
+                    }
                 }
             }
             .buttonStyle(ZoomPressStyle(scale: 0.92))

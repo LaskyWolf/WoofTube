@@ -42,6 +42,8 @@ final class ShortsModel: ObservableObject {
         }
         let json = try? await InnerTubeClient.wooftube.next(videoId: video.videoId)
         details = json.map { WatchDetails(json: $0, videoId: video.videoId) }
+        let dislikes = await DislikeCounts.fetch(videoId: video.videoId)
+        if playingId == video.videoId { details?.dislikeCount = dislikes }
         await loadMoreIfNeeded(after: video)
     }
 
@@ -261,7 +263,7 @@ struct ShortsView: View {
             Button {
                 Task { await model.setLike(isDisliked ? "INDIFFERENT" : "DISLIKE", video: video) }
             } label: {
-                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: "Dislike")
+                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike")
             }
             Button {
                 showsComments = true

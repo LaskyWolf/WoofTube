@@ -16,7 +16,6 @@ All phases have a first version. Each one still needs testing and fixes on a dev
 - [ ] Picture-in-picture: mpv draws with Metal, and Apple's API needs its own player or a sample buffer layer.
 - [ ] AirPlay video: the route button moves audio only.
 - [ ] Verify signed-in comment posting, comment likes, notifications and the mixed Home feed. Their response shapes were only checked signed out.
-- [ ] Download videos from the long press menu.
 - [ ] Verify signed-in post likes and poll votes.
 - [ ] Comment on community posts.
 
@@ -36,16 +35,15 @@ Shorts:
 
 Player:
 
-- [ ] Seek-bar previews.
-- [ ] Audio track picker.
+- [ ] Verify the audio track picker on a video with several languages.
 
 Video page:
 
-- [ ] Per-creator Subscribe on videos with several creators.
 - [ ] Live chat, playlists in the queue, clips and thanks.
 
 Account and library:
 
-- [ ] Rename and reorder playlists, remove videos from them, and search history.
+- [ ] Reorder playlists and search history.
 - [ ] Account switching.
-- [ ] Offline downloads and Cast.
+- [ ] Cast.
+- [ ] Keep downloads running in the background.

@@ -299,6 +299,8 @@ struct FeedContent<Header: View>: View {
 struct FeedRows: View {
     @ObservedObject var model: FeedModel
     var isCompact = false
+    /// Set on a playlist the user can edit, to offer removing videos.
+    var editablePlaylistId: String?
     @EnvironmentObject private var router: Router
 
     var body: some View {
@@ -308,11 +310,24 @@ struct FeedRows: View {
         }
     }
 
+    private func removal(of item: FeedItem, extras: VideoExtras) -> (() -> Void)? {
+        guard let playlistId = editablePlaylistId, let setVideoId = extras.setVideoId else { return nil }
+        return {
+            model.remove(item)
+            router.run {
+                _ = try await InnerTubeClient.wooftube.editPlaylist(
+                    playlistId: playlistId,
+                    actions: [["action": "ACTION_REMOVE_VIDEO", "setVideoId": setVideoId]]
+                )
+            }
+        }
+    }
+
     @ViewBuilder
     private func row(_ item: FeedItem) -> some View {
         switch item {
         case .video(let video, let extras):
-            VideoButton(video: video, extras: extras, isCompact: isCompact) { model.remove(item) }
+            VideoButton(video: video, extras: extras, isCompact: isCompact, onRemove: { model.remove(item) }, onRemoveFromPlaylist: removal(of: item, extras: extras))
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, isCompact ? Layout.rowPadding : Layout.rowSpacing)
         case .shorts(let title, let videos):
@@ -353,6 +368,7 @@ struct VideoButton: View {
     var extras = VideoExtras()
     var isCompact = false
     var onRemove: (() -> Void)?
+    var onRemoveFromPlaylist: (() -> Void)?
     @EnvironmentObject private var router: Router
 
     var body: some View {
@@ -366,7 +382,7 @@ struct VideoButton: View {
             }
         }
         .buttonStyle(RowPressStyle())
-        .videoMenu(video, feedback: extras.feedback, collaborators: extras.collaborators, onRemove: onRemove)
+        .videoMenu(video, feedback: extras.feedback, collaborators: extras.collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist)
     }
 }
 

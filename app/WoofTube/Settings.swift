@@ -161,6 +161,7 @@ private struct ProfileView: View {
 
 private struct PlayerSettingsView: View {
     @EnvironmentObject private var router: Router
+    @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
 
     var body: some View {
         List {
@@ -182,6 +183,13 @@ private struct PlayerSettingsView: View {
                 }
             } footer: {
                 Text("Uses SponsorBlock's community list, which receives the ID of each video you watch.")
+            }
+            Section {
+                Toggle(isOn: $showsDislikeCounts) {
+                    Label("Dislike Counts", systemImage: "hand.thumbsdown")
+                }
+            } footer: {
+                Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open.")
             }
         }
         .navigationTitle("Player")

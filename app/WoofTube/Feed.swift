@@ -58,6 +58,8 @@ struct VideoExtras {
     /// From 0 to 1. YouTube only sends this when signed in.
     var progress: Double?
     var isUpcoming = false
+    /// Identifies the video's entry in a playlist, which removing it needs.
+    var setVideoId: String?
 }
 
 struct PollChoice {
@@ -193,7 +195,8 @@ enum FeedParser {
                     feedback: feedbackActions(in: dict),
                     collaborators: Collaborator.all(in: dict),
                     progress: percent.map { $0 / 100 },
-                    isUpcoming: JSON.first("upcomingEventData", in: dict) != nil
+                    isUpcoming: JSON.first("upcomingEventData", in: dict) != nil,
+                    setVideoId: JSON.string("setVideoId", in: dict)
                 )))
             }
         } else if let playlist = YouTubeFeedParser.playlists(in: dict).first {

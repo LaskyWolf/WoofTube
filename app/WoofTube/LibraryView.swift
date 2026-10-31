@@ -45,6 +45,12 @@ struct LibraryView: View {
                         } label: {
                             MenuRowLabel(icon: "person.2", title: "Channels")
                         }
+                        Divider()
+                        NavigationLink {
+                            DownloadsView()
+                        } label: {
+                            MenuRowLabel(icon: "arrow.down.circle", title: "Downloads")
+                        }
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, Layout.screenPadding)
@@ -120,6 +126,14 @@ struct PlaylistPage: View {
     @EnvironmentObject private var router: Router
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var model = FeedModel()
+    @State private var newTitle: String?
+    @State private var isRenaming = false
+    @State private var draftTitle = ""
+
+    private var shownTitle: String { newTitle ?? title }
+    /// Liked Videos follows your likes, so it can't be edited like a playlist.
+    private var allowsRemoving: Bool { playlistId != YouTubeFeeds.likedVideosPlaylistId }
+    private var allowsRenaming: Bool { allowsRemoving && playlistId != YouTubeFeeds.watchLaterPlaylistId }
 
     private var videos: [YouTubeVideo] {
         model.items.compactMap {
@@ -146,10 +160,34 @@ struct PlaylistPage: View {
                         if let errorText = model.errorText { Text(errorText) }
                     }
                 }
-                FeedRows(model: model, isCompact: true)
+                FeedRows(model: model, isCompact: true, editablePlaylistId: allowsRemoving ? playlistId : nil)
             }
         }
-        .navigationTitle(title)
+        .toolbar {
+            if allowsRenaming {
+                Menu("Options", systemImage: "ellipsis") {
+                    Button("Rename", systemImage: "pencil") {
+                        draftTitle = shownTitle
+                        isRenaming = true
+                    }
+                }
+            }
+        }
+        .alert("Rename Playlist", isPresented: $isRenaming) {
+            TextField("Title", text: $draftTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                let name = draftTitle
+                newTitle = name
+                router.run {
+                    _ = try await InnerTubeClient.wooftube.editPlaylist(
+                        playlistId: playlistId,
+                        actions: [["action": "ACTION_SET_PLAYLIST_NAME", "playlistName": name]]
+                    )
+                }
+            }
+        }
+        .navigationTitle(shownTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .refreshable { await load() }
@@ -163,7 +201,7 @@ struct PlaylistPage: View {
     }
 
     private var header: some View {
-        DetailHeaderCard(meta: meta, title: title) {
+        DetailHeaderCard(meta: meta, title: shownTitle) {
             CoverImage(url: videos.first?.thumbnailURL)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
         } secondary: {
