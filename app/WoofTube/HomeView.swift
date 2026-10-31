@@ -265,6 +265,7 @@ struct SubsView: View {
             .tabRoot(title: "Subs")
             .task {
                 if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.subscriptions)) }
+                Subscriptions.shared.add(model.videos.compactMap(\.channelId))
             }
         }
     }
@@ -399,23 +400,27 @@ struct VideoButton: View {
     @EnvironmentObject private var router: Router
 
     var body: some View {
-        Button {
-            router.play(video)
-        } label: {
+        Group {
             if isCompact {
-                CompactVideoRow(video: video, extras: extras)
+                Button {
+                    router.play(video)
+                } label: {
+                    CompactVideoRow(video: video, extras: extras)
+                }
+                .buttonStyle(RowPressStyle())
             } else {
                 VideoRow(video: video, extras: extras)
             }
         }
-        .buttonStyle(RowPressStyle())
         .videoMenu(video, feedback: extras.feedback, collaborators: extras.collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist)
     }
 }
 
+/// Separate buttons rather than one around the whole row, so the avatar can open the channel.
 struct VideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
+    @EnvironmentObject private var router: Router
 
     private var details: String {
         [video.channelTitle, video.viewCountText, video.publishedTimeText]
@@ -425,31 +430,98 @@ struct VideoRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
-                .overlay { WatchProgressLine(video: video, extras: extras) }
-                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
-                .clipShape(.rect(cornerRadius: Layout.tileRadius))
+            Button {
+                router.play(video)
+            } label: {
+                Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
+                    .overlay { WatchProgressLine(video: video, extras: extras) }
+                    .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
+                    .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras) }
+                    .clipShape(.rect(cornerRadius: Layout.tileRadius))
+            }
+            .buttonStyle(RowPressStyle())
             HStack(alignment: .top, spacing: Layout.rowSpacing) {
-                if extras.collaborators.count > 1 {
-                    AvatarStack(urls: extras.collaborators.map(\.avatar), size: 36)
-                } else if let avatar = video.channelAvatarURL {
-                    Avatar(url: avatar, size: 36)
+                avatar
+                Button {
+                    router.play(video)
+                } label: {
+                    HStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                            Text(video.title)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Text(details)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            VoteLine(videoId: video.videoId)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(.rect)
                 }
-                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                    Text(video.title)
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(details)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    VoteLine(videoId: video.videoId)
-                }
-                Spacer(minLength: 0)
+                .buttonStyle(RowPressStyle())
             }
         }
-        .contentShape(.rect)
+    }
+
+    @ViewBuilder
+    private var avatar: some View {
+        if extras.collaborators.count > 1 {
+            Menu {
+                ForEach(extras.collaborators) { creator in
+                    Button(creator.name, systemImage: "person.crop.circle") {
+                        router.openChannel(creator.channelId)
+                    }
+                }
+            } label: {
+                AvatarStack(urls: extras.collaborators.map(\.avatar), size: 36)
+                    .contentShape(.rect)
+            }
+            .accessibilityLabel("Creators")
+        } else if let url = video.channelAvatarURL {
+            if let id = video.channelId {
+                Button {
+                    router.openChannel(id)
+                } label: {
+                    Avatar(url: url, size: 36)
+                        // Reaches 44 pt, using the gap around the avatar.
+                        .contentShape(Circle().inset(by: -4))
+                }
+                .buttonStyle(ZoomPressStyle())
+                .accessibilityLabel("Open \(video.channelTitle ?? "Channel")")
+            } else {
+                Avatar(url: url, size: 36)
+            }
+        }
+    }
+}
+
+/// Marks a video from a channel you follow, published under a day ago and not started yet.
+private struct NewBadge: View {
+    let video: YouTubeVideo
+    let extras: VideoExtras
+    var isCompact = false
+    @ObservedObject private var subscriptions = Subscriptions.shared
+
+    private var isFromFollowedChannel: Bool {
+        video.channelId.map { subscriptions.ids.contains($0) } == true
+            || extras.collaborators.contains { subscriptions.ids.contains($0.channelId) }
+    }
+
+    var body: some View {
+        if video.isRecent, !video.isLive, !extras.isUpcoming, isFromFollowedChannel,
+           extras.progress == nil, WatchPositions.progress(of: video) == nil {
+            Text("New")
+                .font((isCompact ? Font.caption2 : Font.caption).weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, isCompact ? Layout.cardSpacing : Layout.rowPadding)
+                .padding(.vertical, 2)
+                .background(.tint, in: .rect(cornerRadius: Layout.rowPadding, style: .continuous))
+                .padding(isCompact ? Layout.cardSpacing : Layout.rowPadding)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -457,6 +529,7 @@ struct VideoRow: View {
 private struct VideoBadge: View {
     let video: YouTubeVideo
     let extras: VideoExtras
+    var isCompact = false
 
     private var text: String? {
         if video.isLive { return "LIVE" }
@@ -467,12 +540,12 @@ private struct VideoBadge: View {
     var body: some View {
         if let text {
             Text(text)
-                .font(.caption.weight(.bold).monospacedDigit())
+                .font((isCompact ? Font.caption2 : Font.caption).weight(.bold).monospacedDigit())
                 .foregroundStyle(.white)
-                .padding(.horizontal, Layout.rowPadding)
+                .padding(.horizontal, isCompact ? Layout.cardSpacing : Layout.rowPadding)
                 .padding(.vertical, 2)
                 .background(video.isLive ? Color.red : Color.black.opacity(0.78), in: .rect(cornerRadius: Layout.rowPadding, style: .continuous))
-                .padding(Layout.rowPadding)
+                .padding(isCompact ? Layout.cardSpacing : Layout.rowPadding)
                 .allowsHitTesting(false)
         }
     }
@@ -548,7 +621,8 @@ struct CompactVideoRow: View {
             CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
                 .frame(width: 112, height: 63)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
-                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
+                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
+                .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras, isCompact: true) }
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(video.title)
@@ -591,7 +665,8 @@ struct LoadingRows: View {
                 }
             }
         }
-        .padding(Layout.screenPadding)
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.rowSpacing)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .shimmerClock()
@@ -804,12 +879,19 @@ struct ChannelRow: View {
     let channel: YouTubeChannel
 
     var body: some View {
-        HStack(spacing: Layout.rowSpacing) {
-            Avatar(url: channel.thumbnailURL, size: 48)
-            VStack(alignment: .leading) {
-                Text(channel.title).font(.headline)
+        HStack(spacing: Layout.menuRowSpacing) {
+            Avatar(url: channel.thumbnailURL, size: Layout.artSmall)
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                Text(channel.title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                 if let subscribers = channel.subscriberCountText {
-                    Text(subscribers).font(.subheadline).foregroundStyle(.secondary)
+                    Text(subscribers)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
         }

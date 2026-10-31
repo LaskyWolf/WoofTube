@@ -17,6 +17,7 @@ All phases have a first version. Each one still needs testing and fixes on a dev
 - [ ] AirPlay video: the route button moves audio only.
 - [ ] Verify signed-in comment posting, comment likes, notifications and the mixed Home feed. Their response shapes were only checked signed out.
 - [ ] Verify signed-in post likes and poll votes.
+- [ ] Verify the signed-in channel list, the music playlist check and pinned videos on channel pages.
 - [ ] Comment on community posts.
 
 ## Missing compared to YouTube

@@ -47,7 +47,8 @@ struct HeaderRoundIcon: View {
             .foregroundStyle(primary == nil ? tint : .white)
             .frame(width: size, height: size)
             .glassEffect(primary.map { Glass.regular.tint($0) } ?? .regular, in: .circle)
-            .contentShape(Circle())
+            // Reaches 44 pt, using the gap between neighbouring buttons.
+            .contentShape(Circle().inset(by: primary == nil ? -3 : 0))
     }
 }
 
@@ -56,6 +57,7 @@ struct HeaderRoundIcon: View {
 struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
     let meta: String
     let title: String
+    var artSize = Layout.artLarge
     @ViewBuilder var cover: () -> Cover
     @ViewBuilder var secondary: () -> Secondary
     @ViewBuilder var buttons: () -> Buttons
@@ -63,7 +65,7 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             cover()
-                .frame(width: Layout.artLarge, height: Layout.artLarge)
+                .frame(width: artSize, height: artSize)
                 .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -85,7 +87,7 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
                 }
                 .buttonStyle(ZoomPressStyle(scale: 0.92))
             }
-            .frame(maxWidth: .infinity, minHeight: Layout.artLarge, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: artSize, alignment: .leading)
         }
         .padding(.horizontal, Layout.screenPadding)
     }
@@ -106,6 +108,26 @@ struct BlurredArtworkBackdrop: View {
             .blur(radius: 40, opaque: true)
             .opacity(0.7)
             .mask(LinearGradient(stops: [.init(color: .black, location: 0.55), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .padding(.top, -Self.overflow)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A channel's banner, sharp at the top of the page and fading into what's below.
+struct ChannelBanner: View {
+    let url: String
+    /// How far the page's content starts below the banner's top, to sit on its faded part.
+    static let contentInset: CGFloat = 84
+    private static let height: CGFloat = 150
+    /// Reaches under the navigation bar.
+    private static let overflow: CGFloat = 60
+
+    var body: some View {
+        CoverImage(url: url)
+            .frame(height: Self.height + Self.overflow)
+            .frame(maxWidth: .infinity)
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0.6), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
             .padding(.top, -Self.overflow)
             .allowsHitTesting(false)
             .accessibilityHidden(true)

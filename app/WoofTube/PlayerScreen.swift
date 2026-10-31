@@ -135,6 +135,9 @@ struct WatchPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !isFullscreen {
+                handle
+            }
             video
             if !isFullscreen {
                 ScrollView {
@@ -149,7 +152,11 @@ struct WatchPage: View {
             } else {
                 ZStack(alignment: .top) {
                     Color(.systemBackground)
-                    BlurredArtworkBackdrop(url: router.current.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" })
+                    AmbientBackdrop(
+                        clock: router.player.clock,
+                        poster: router.current.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" },
+                        storyboard: router.storyboard
+                    )
                 }
                 .ignoresSafeArea()
             }
@@ -167,6 +174,23 @@ struct WatchPage: View {
         }
     }
 
+    /// Woof Music's player handle. It sits partly in the gap under the status bar.
+    private var handle: some View {
+        Button {
+            router.isExpanded = false
+        } label: {
+            Capsule()
+                .fill(Color.primary.opacity(0.3))
+                .frame(width: 36, height: 5)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, -Layout.rowSpacing)
+        .accessibilityLabel("Close Video")
+    }
+
     private var video: some View {
         ZStack {
             MpvVideoView(player: router.player, isActive: router.isWatchPageOnScreen)
@@ -179,6 +203,60 @@ struct WatchPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: isFullscreen ? .infinity : nil)
         .aspectRatio(isFullscreen ? nil : 16 / 9, contentMode: .fit)
+    }
+}
+
+/// YouTube's ambient mode in Woof Music's style: the part of the video playing now, blurred
+/// and fading into the page. The frames come from the storyboard, because reading them from
+/// the Metal video layer would cost far more.
+private struct AmbientBackdrop: View {
+    @ObservedObject var clock: PlayerClock
+    let poster: String?
+    let storyboard: Storyboard?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var frame: UIImage?
+
+    private static let height: CGFloat = 560
+    /// Reaches under the status bar and fills the pull-down overscroll.
+    private static let overflow: CGFloat = 300
+    /// Seconds between changes of light. A slow pace keeps it calm and easy on the battery.
+    private static let refresh = 8.0
+
+    private var moment: Double { (clock.time / Self.refresh).rounded(.down) * Self.refresh }
+
+    var body: some View {
+        ZStack {
+            if let frame {
+                Image(uiImage: frame).resizable().scaledToFill().transition(.opacity).id(frame)
+            } else {
+                CachedImage(url: poster)
+            }
+        }
+        .frame(height: Self.height + Self.overflow)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .blur(radius: 50, opaque: true)
+        .saturation(1.4)
+        .opacity(0.65)
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0.5), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+        .padding(.top, -Self.overflow)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onChange(of: poster) { frame = nil }
+        .task(id: "\(poster ?? "")|\(moment)|\(storyboard?.urlTemplate ?? "")") { await loadFrame() }
+    }
+
+    private func loadFrame() async {
+        guard !reduceMotion, !ProcessInfo.processInfo.isLowPowerModeEnabled, let storyboard else { return }
+        let spot = storyboard.frame(at: moment)
+        guard let url = spot.url?.absoluteString else { return }
+        var image = ImageStore.image(for: url)
+        if image == nil { image = try? await ImageStore.load(url) }
+        guard !Task.isCancelled, let sheet = image?.cgImage else { return }
+        let size = storyboard.frameSize
+        let area = CGRect(x: size.width * CGFloat(spot.column), y: size.height * CGFloat(spot.row), width: size.width, height: size.height)
+        guard let cropped = sheet.cropping(to: area) else { return }
+        withAnimation(.easeInOut(duration: 1.5)) { frame = UIImage(cgImage: cropped) }
     }
 }
 
@@ -665,7 +743,10 @@ private struct PlayerControls: View {
     private var controls: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                Button("Close", systemImage: "chevron.down") { router.isExpanded = false }
+                // The page's handle is hidden in full screen.
+                if isFullscreen {
+                    Button("Close", systemImage: "chevron.down") { router.isExpanded = false }
+                }
                 Spacer()
                 if sleepTimer.isActive {
                     Button("Sleep Timer", systemImage: "moon.zzz.fill") { showsSleepTimer = true }
@@ -854,7 +935,7 @@ private struct WatchDetailsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
-            infoCard
+            infoHeader
             if let failure = router.loadError ?? router.player.errorText {
                 Label(failure, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -867,17 +948,21 @@ private struct WatchDetailsView: View {
                     commentsCard(details)
                 }
                 if !router.queue.isEmpty {
-                    Text("Queue").font(.headline)
-                    LazyVStack(spacing: Layout.sectionGap) {
+                    Text("Queue")
+                        .font(.title3.bold())
+                        .padding(.top, Layout.chipSpacing)
+                    LazyVStack(spacing: Layout.rowSpacing * 2) {
                         ForEach(router.queue, id: \.videoId) { video in
                             VideoButton(video: video)
                         }
                     }
                 }
                 if !details.related.isEmpty {
-                    Text("Up Next").font(.headline)
+                    Text("Up Next")
+                        .font(.title3.bold())
+                        .padding(.top, Layout.chipSpacing)
                     // Lazy, so each card asks for its like counts only when it comes into view.
-                    LazyVStack(spacing: Layout.sectionGap) {
+                    LazyVStack(spacing: Layout.rowSpacing * 2) {
                         ForEach(details.related, id: \.videoId) { video in
                             VideoButton(video: video)
                         }
@@ -893,7 +978,7 @@ private struct WatchDetailsView: View {
         }
     }
 
-    private var infoCard: some View {
+    private var infoHeader: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             if let video = router.current {
                 Text(video.title)
@@ -915,7 +1000,6 @@ private struct WatchDetailsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .materialCard()
     }
 
     private func channelLabel(_ details: WatchDetails) -> some View {
@@ -1054,9 +1138,9 @@ private struct WatchDetailsView: View {
                 .sensoryFeedback(.success, trigger: details.isInWatchLater) { _, saved in saved }
             }
         }
-        // Scrolls right up to the card's edges.
-        .contentMargins(.horizontal, Layout.rowSpacing, for: .scrollContent)
-        .padding(.horizontal, -Layout.rowSpacing)
+        // Scrolls right up to the screen's edges.
+        .contentMargins(.horizontal, Layout.screenPadding, for: .scrollContent)
+        .padding(.horizontal, -Layout.screenPadding)
         .scrollClipDisabled()
     }
 
@@ -1071,7 +1155,8 @@ private struct WatchDetailsView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 38)
-        .contentShape(.rect)
+        // Reaches 44 pt, using the space around the capsule.
+        .contentShape(Rectangle().inset(by: -3))
     }
 
     private func descriptionCard(_ details: WatchDetails) -> some View {
@@ -1177,45 +1262,59 @@ private extension View {
 struct SubscribeButton: View {
     let channelId: String
     let isSubscribed: Bool
+    /// Woof Music's round icon, for the channel page's header.
+    var isCompact = false
     let onChange: (Bool) -> Void
+    @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
         Button {
             toggle()
         } label: {
-            Text(isSubscribed ? "Subscribed" : "Subscribe")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isSubscribed ? Color.primary : Color.white)
-                .padding(.horizontal, Layout.screenPadding)
-                .frame(height: 38)
-                .background {
-                    if isSubscribed {
-                        Capsule().fill(Color.primary.opacity(0.1))
-                    } else {
-                        Capsule().fill(.tint)
+            if isCompact {
+                HeaderRoundIcon(
+                    systemImage: isSubscribed ? "person.fill.checkmark" : "person.badge.plus",
+                    tint: isSubscribed ? settings.accentColor : .primary
+                )
+            } else {
+                Text(isSubscribed ? "Subscribed" : "Subscribe")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSubscribed ? Color.primary : Color.white)
+                    .padding(.horizontal, Layout.screenPadding)
+                    .frame(height: 38)
+                    .background {
+                        if isSubscribed {
+                            Capsule().fill(Color.primary.opacity(0.1))
+                        } else {
+                            Capsule().fill(.tint)
+                        }
                     }
-                }
-                .contentShape(.capsule)
+                    .contentShape(.capsule)
+            }
         }
         .buttonStyle(ZoomPressStyle(scale: 0.92))
+        .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
         .sensoryFeedback(.selection, trigger: isSubscribed)
     }
 
     private func toggle() {
         let target = !isSubscribed
         onChange(target)
+        Subscriptions.shared.setSubscribed(channelId, target)
         Task {
             let tube = InnerTubeClient.wooftube
             do {
                 _ = target ? try await tube.subscribe(channelId: channelId) : try await tube.unsubscribe(channelId: channelId)
             } catch {
                 onChange(!target)
+                Subscriptions.shared.setSubscribed(channelId, !target)
             }
         }
     }
 }
 
-/// Woof Music's artist page: header card over the blurred avatar, then the channel's tabs as filters.
+/// Woof Music's artist page over the channel's banner, then the pinned or latest video,
+/// then the channel's tabs as filters.
 struct ChannelView: View {
     let channelId: String
 
@@ -1226,9 +1325,16 @@ struct ChannelView: View {
     @State private var isSubscribed = false
     @State private var selectedTab: String?
     @State private var isLoading = true
+    @State private var featured: YouTubeVideo?
+    @State private var isFeaturedPinned = false
+
+    private static let shownTabs: Set<String> = ["videos", "playlists", "posts", "community"]
+    private static let avatarSize: CGFloat = 104
 
     private var tabs: [YouTubeChannelTab] {
-        page?.tabs.filter { $0.browseId != nil && $0.params != nil } ?? []
+        page?.tabs.filter { tab in
+            tab.browseId != nil && Self.tabName(tab).map { Self.shownTabs.contains($0) } == true
+        } ?? []
     }
 
     private var videos: [YouTubeVideo] {
@@ -1238,10 +1344,25 @@ struct ChannelView: View {
         }
     }
 
+    /// A tab's params hold its English name in any app language: a field tag, the length, then the name.
+    private static func tabName(_ tab: YouTubeChannelTab) -> String? {
+        guard var text = tab.params?.removingPercentEncoding else { return nil }
+        text = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        text += String(repeating: "=", count: (4 - text.count % 4) % 4)
+        guard let bytes = Data(base64Encoded: text).map({ [UInt8]($0) }), bytes.count > 2, bytes.count >= 2 + Int(bytes[1]) else { return nil }
+        return String(decoding: bytes[2..<(2 + Int(bytes[1]))], as: UTF8.self)
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
+                if let featured {
+                    SectionTitle(title: isFeaturedPinned ? "Pinned Video" : "Latest Video")
+                    VideoButton(video: featured)
+                        .padding(.horizontal, Layout.screenPadding)
+                        .padding(.bottom, Layout.rowPadding)
+                }
                 if tabs.count > 1 {
                     FilterChips(titles: tabs.map(\.title), selected: selectedTab, onTap: select)
                 }
@@ -1267,8 +1388,11 @@ struct ChannelView: View {
 
     private var header: some View {
         let channel = page?.channel
-        return DetailHeaderCard(meta: channel?.handle ?? "Channel", title: channel?.title ?? "") {
-            CoverImage(url: channel?.thumbnailURL).clipShape(.circle)
+        let banner = page?.bannerURL
+        return DetailHeaderCard(meta: channel?.handle ?? "Channel", title: channel?.title ?? "", artSize: Self.avatarSize) {
+            CoverImage(url: channel?.thumbnailURL)
+                .clipShape(.circle)
+                .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 3))
         } secondary: {
             if let subscribers = channel?.subscriberCountText {
                 Text(subscribers)
@@ -1277,29 +1401,49 @@ struct ChannelView: View {
                     .lineLimit(1)
             }
         } buttons: {
-            SubscribeButton(channelId: channelId, isSubscribed: isSubscribed) { isSubscribed = $0 }
-            if !videos.isEmpty {
-                Button { router.playAll(videos, shuffled: true) } label: {
+            SubscribeButton(channelId: channelId, isSubscribed: isSubscribed, isCompact: true) { isSubscribed = $0 }
+            let all = (featured.map { [$0] } ?? []) + videos
+            if !all.isEmpty {
+                Button { router.playAll(all, shuffled: true) } label: {
                     HeaderRoundIcon(systemImage: "shuffle")
                 }
                 .accessibilityLabel("Shuffle")
-                Button { router.playAll(videos) } label: {
+                Button { router.playAll(all) } label: {
                     HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
                 }
                 .accessibilityLabel("Play All")
             }
         }
-        .padding(.vertical, Layout.screenPadding)
+        .padding(.top, banner == nil ? Layout.screenPadding : ChannelBanner.contentInset)
+        .padding(.bottom, Layout.screenPadding)
         .frame(maxWidth: .infinity)
         .background(alignment: .top) {
-            BlurredArtworkBackdrop(url: channel?.thumbnailURL)
+            ZStack(alignment: .top) {
+                BlurredArtworkBackdrop(url: banner ?? channel?.thumbnailURL)
+                if let banner {
+                    ChannelBanner(url: banner)
+                }
+            }
         }
     }
 
     private func select(_ title: String) {
-        guard let tab = tabs.first(where: { $0.title == title }), let id = tab.browseId else { return }
-        selectedTab = title
-        Task { await model.load(.browse(id, params: tab.params), keepChips: true) }
+        guard let tab = tabs.first(where: { $0.title == title }) else { return }
+        Task { await show(tab) }
+    }
+
+    /// The card above the filters already shows one video, so the list leaves it out.
+    private func show(_ tab: YouTubeChannelTab) async {
+        guard let id = tab.browseId else { return }
+        selectedTab = tab.title
+        await model.load(.browse(id, params: tab.params), keepChips: true)
+        if featured == nil, var latest = videos.first {
+            latest.channelAvatarURL = nil
+            featured = latest
+        }
+        if let featuredId = featured?.videoId, let item = model.items.first(where: { $0.id == featuredId }) {
+            model.remove(item)
+        }
     }
 
     /// Opens on Videos, because a channel's Home tab repeats the other tabs in rows.
@@ -1307,9 +1451,20 @@ struct ChannelView: View {
         defer { isLoading = false }
         guard page == nil, let json = try? await InnerTubeClient.wooftube.browse(browseId: channelId) else { return }
         page = YouTubeChannelParser.channelPage(in: json)
-        isSubscribed = JSON.first("subscribed", in: json) as? Bool ?? false
-        if let tab = tabs.first(where: { $0.title.localizedCaseInsensitiveContains("video") }) ?? tabs.first {
-            select(tab.title)
+        isSubscribed = JSON.first("subscribed", in: json) as? Bool == true || Subscriptions.shared.ids.contains(channelId)
+        if let player = JSON.first("channelVideoPlayerRenderer", in: json) as? [String: Any], let id = player["videoId"] as? String {
+            featured = YouTubeVideo(
+                videoId: id,
+                title: JSON.text(player["title"]) ?? "",
+                channelTitle: page?.channel?.title,
+                channelId: channelId,
+                viewCountText: JSON.text(player["viewCountText"]),
+                publishedTimeText: JSON.text(player["publishedTimeText"])
+            )
+            isFeaturedPinned = true
+        }
+        if let tab = tabs.first(where: { Self.tabName($0) == "videos" }) ?? tabs.first {
+            await show(tab)
         }
     }
 }

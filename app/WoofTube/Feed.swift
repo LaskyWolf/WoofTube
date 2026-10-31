@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftyTube
 
@@ -105,6 +106,69 @@ enum FeedItem: Identifiable {
     }
 }
 
+/// The channels you follow, for the Library and the New badge.
+@MainActor
+final class Subscriptions: ObservableObject {
+    static let shared = Subscriptions()
+
+    @Published private(set) var channels: [YouTubeChannel] = []
+    @Published private(set) var ids: Set<String> = []
+    @Published private(set) var isLoading = true
+
+    /// The side menu's list comes whole, while the channels page arrives in parts.
+    func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        var found: [YouTubeChannel] = []
+        if let json = try? await YouTubeAPI.post("guide", body: [:]) {
+            found = Self.guideChannels(in: JSON.first("guideSubscriptionsSectionRenderer", in: json) ?? [String: Any]())
+        }
+        if found.isEmpty, let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEchannels") {
+            found = FeedParser.items(in: json).compactMap {
+                if case .channel(let channel) = $0 { return channel }
+                return nil
+            }
+        }
+        guard !found.isEmpty else { return }
+        channels = found.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        ids.formUnion(found.compactMap(\.channelId))
+    }
+
+    func add(_ newIds: [String]) {
+        ids.formUnion(newIds)
+    }
+
+    func setSubscribed(_ channelId: String, _ isSubscribed: Bool) {
+        if isSubscribed {
+            ids.insert(channelId)
+        } else {
+            ids.remove(channelId)
+        }
+    }
+
+    private static func guideChannels(in node: Any) -> [YouTubeChannel] {
+        if let array = node as? [Any] {
+            return array.flatMap { guideChannels(in: $0) }
+        }
+        guard let dict = node as? [String: Any] else { return [] }
+        if let entry = dict["guideEntryRenderer"] as? [String: Any] {
+            guard let id = JSON.string("browseId", in: entry["navigationEndpoint"]), id.hasPrefix("UC"),
+                  let title = JSON.text(entry["formattedTitle"]) else { return [] }
+            return [YouTubeChannel(channelId: id, title: title, thumbnailURL: JSON.lastThumbnail(entry["thumbnail"]))]
+        }
+        return dict.values.flatMap { guideChannels(in: $0) }
+    }
+}
+
+extension YouTubeVideo {
+    /// True when YouTube's "3 hours ago" counts in seconds, minutes or hours, so under a day.
+    // ponytail: reads English and Italian, the languages in use. Other languages show no New badge.
+    var isRecent: Bool {
+        let units: Set<String> = ["second", "seconds", "minute", "minutes", "hour", "hours", "secondo", "secondi", "minuto", "minuti", "ora", "ore"]
+        return (publishedTimeText ?? "").lowercased().split { !$0.isLetter }.contains { units.contains(String($0)) }
+    }
+}
+
 /// Reads a page in display order and keeps each kind of content.
 /// SwiftyTube's parser only returns a flat list of videos.
 enum FeedParser {
@@ -156,7 +220,7 @@ enum FeedParser {
             if let post = post(in: dict) { items.append(.post(post)) }
         } else if dict.keys.contains(where: videoKeys.contains) {
             appendVideoOrPlaylist(dict, into: &items)
-        } else if dict["channelRenderer"] != nil {
+        } else if dict["channelRenderer"] != nil || dict["gridChannelRenderer"] != nil {
             items += YouTubeFeedParser.channels(in: dict).map { .channel($0) }
         } else {
             for (key, value) in dict where !skippedKeys.contains(key) {
@@ -173,9 +237,12 @@ enum FeedParser {
         }
         let title = JSON.text(shelf["title"]) ?? JSON.text(shelf["header"])
         let videos = YouTubeFeedParser.videos(in: shelf)
+        // YouTube's own list of your channels is a shelf with no videos.
         items += inner.filter {
-            if case .post = $0 { return true }
-            return false
+            switch $0 {
+            case .post, .channel: return true
+            default: return false
+            }
         }
         guard !videos.isEmpty else { return }
         if videos.allSatisfy(\.isShort) {

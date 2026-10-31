@@ -11,10 +11,10 @@ struct LibraryView: View {
 
     @EnvironmentObject private var router: Router
     @ObservedObject private var downloads = DownloadStore.shared
+    @ObservedObject private var subscriptions = Subscriptions.shared
     @StateObject private var history = FeedModel()
     @StateObject private var liked = FeedModel()
     @StateObject private var watchLater = FeedModel()
-    @StateObject private var channels = FeedModel()
     @State private var playlists: [YouTubePlaylist] = []
     @State private var isLoadingPlaylists = true
     @State private var musicPlaylistIds: Set<String> = []
@@ -93,7 +93,7 @@ struct LibraryView: View {
         async let historyLoad: Void = history.load(.browse(YouTubeFeeds.history))
         async let likedLoad: Void = liked.load(.browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.likedVideosPlaylistId)))
         async let laterLoad: Void = watchLater.load(.browse(YouTubeFeeds.playlistBrowseId(YouTubeFeeds.watchLaterPlaylistId)))
-        async let channelsLoad: Void = channels.load(.browse("FEchannels"))
+        async let channelsLoad: Void = subscriptions.load()
         await loadPlaylists()
         _ = await (historyLoad, likedLoad, laterLoad, channelsLoad)
     }
@@ -181,17 +181,31 @@ struct LibraryView: View {
     }
 
     private var channelsSection: some View {
-        let count = channels.items.reduce(0) { total, item in
-            if case .channel = item { return total + 1 }
-            return total
-        }
-        return VStack(alignment: .leading, spacing: 0) {
-            SectionTitle(title: "Channels", count: count)
-            if channels.isLoading, channels.items.isEmpty {
-                loadingRows(isCircular: true)
+        VStack(alignment: .leading, spacing: 0) {
+            SectionTitle(title: "Channels", count: subscriptions.channels.count)
+            if subscriptions.channels.isEmpty {
+                if subscriptions.isLoading {
+                    loadingRows(isCircular: true)
+                } else {
+                    Text("YouTube didn't send your channels. Pull down to try again.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, Layout.screenPadding)
+                }
             }
             LazyVStack(alignment: .leading, spacing: 0) {
-                FeedRows(model: channels)
+                ForEach(subscriptions.channels, id: \.self) { channel in
+                    Button {
+                        if let id = channel.channelId { router.openChannel(id) }
+                    } label: {
+                        ChannelRow(channel: channel)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(RowPressStyle())
+                    .padding(.horizontal, Layout.screenPadding)
+                    .padding(.vertical, Layout.rowPadding)
+                }
             }
         }
         .padding(.bottom, Layout.sectionGap)
@@ -219,17 +233,18 @@ struct LibraryView: View {
 enum LibraryPlaylists {
     private static let hiddenIds: Set<String> = ["WL", "LL", "LM"]
     private static let musicPrefixes = ["OLAK5uy_", "RDCLAK"]
-    private static let checksKey = "musicPlaylistChecks"
+    private static let checksKey = "musicPlaylistChecks2"
+    private static let sampleSize = 6
 
     static func isHidden(_ playlistId: String) -> Bool {
         let id = playlistId.hasPrefix("VL") ? String(playlistId.dropFirst(2)) : playlistId
         return hiddenIds.contains(id)
     }
 
-    /// YouTube doesn't mark music playlists, so this reads the first page: every video must
-    /// come from an auto-generated "Artist - Topic" channel or a VEVO channel.
-    /// A music playlist with ordinary uploads stays visible. The answer is kept until the
-    /// playlist's video count changes.
+    /// YouTube doesn't mark music playlists, and official artist channels carry no marker in
+    /// their name, so this asks for the category of a few videos spread across the first page.
+    /// One video in five may differ, because music videos are sometimes filed under other
+    /// categories. The answer is kept until the playlist's video count changes.
     @MainActor
     static func isMusicOnly(_ playlist: YouTubePlaylist) async -> Bool {
         let id = playlist.playlistId
@@ -238,18 +253,31 @@ enum LibraryPlaylists {
         var checks = UserDefaults.standard.dictionary(forKey: checksKey) as? [String: Bool] ?? [:]
         if let known = checks[key] { return known }
         guard let json = try? await FeedSource.browse(YouTubeFeeds.playlistBrowseId(id)).fetch() else { return false }
-        let videos = FeedParser.items(in: json).compactMap { item -> YouTubeVideo? in
-            if case .video(let video, _) = item { return video }
-            return nil
+        let videos = YouTubeFeedParser.videos(in: json)
+        let step = max(videos.count / sampleSize, 1)
+        let sample = stride(from: 0, to: videos.count, by: step).prefix(sampleSize).map { videos[$0] }
+        let answers = await withTaskGroup(of: Bool?.self) { group in
+            for video in sample {
+                group.addTask { await isMusic(video) }
+            }
+            return await group.reduce(into: [Bool]()) { answers, answer in
+                if let answer { answers.append(answer) }
+            }
         }
-        let isMusic = !videos.isEmpty && videos.allSatisfy { video in
-            let channel = video.channelTitle ?? ""
-            return channel.hasSuffix(" - Topic") || channel.hasSuffix("VEVO")
-        }
+        guard !answers.isEmpty, !Task.isCancelled else { return false }
+        let result = answers.filter { !$0 }.count * 5 <= answers.count
         checks = UserDefaults.standard.dictionary(forKey: checksKey) as? [String: Bool] ?? [:]
-        checks[key] = isMusic
+        checks[key] = result
         UserDefaults.standard.set(checks, forKey: checksKey)
-        return isMusic
+        return result
+    }
+
+    private static func isMusic(_ video: YouTubeVideo) async -> Bool? {
+        let channel = video.channelTitle ?? ""
+        if channel.hasSuffix(" - Topic") || channel.hasSuffix("VEVO") { return true }
+        guard let json = try? await YouTubeAPI.post("player", body: ["videoId": video.videoId]),
+              let category = JSON.string("category", in: json["microformat"]) else { return nil }
+        return category == "Music"
     }
 }
 

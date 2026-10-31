@@ -129,8 +129,8 @@ struct WatchDetails {
         // The like and dislike buttons have the same shape, so this names the like side.
         let toggle = JSON.first("toggleButtonViewModel", in: JSON.first("likeButtonViewModel", in: likeButton))
 
-        description = JSON.text(JSON.first("attributedDescription", in: secondary))
-        metadata = [JSON.text(JSON.first("viewCount", in: primary)), JSON.text(JSON.first("dateText", in: primary))]
+        description = JSON.text(JSON.first("attributedDescription", in: secondary))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        metadata = [JSON.text(JSON.first("viewCount", in: JSON.first("videoViewCountRenderer", in: primary))), JSON.text(JSON.first("dateText", in: primary))]
             .compactMap { $0 }
             .joined(separator: " · ")
         collaborators = Collaborator.all(in: owner)

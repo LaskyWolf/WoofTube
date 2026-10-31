@@ -120,6 +120,7 @@ struct RootTabs: View {
                 .onDisappear { router.isWatchPageOnScreen = false }
         }
         .routerPresentations(router, isActive: !router.isExpanded)
+        .task { await Subscriptions.shared.load() }
         // Metal may not draw in the background. Otherwise the video is always on screen.
         .onChange(of: scenePhase) { router.player.setVideoEnabled(scenePhase != .background) }
     }
