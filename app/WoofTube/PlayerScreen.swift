@@ -407,13 +407,13 @@ struct ProgressBar: View {
         GeometryReader { geometry in
             let inset: CGFloat = isScrubbing ? 0 : Layout.chipSpacing
             let trackWidth = max(0, geometry.size.width - inset * 2)
-            let height: CGFloat = isScrubbing ? 12 : 5
+            let height: CGFloat = isScrubbing ? 12 : (marks.isEmpty ? 5 : 7)
             ZStack(alignment: .leading) {
                 Rectangle().fill(.white.opacity(0.3)).frame(height: height)
                 Rectangle().fill(.tint).frame(width: trackWidth * min(max(progress, 0), 1), height: height)
             }
             .frame(height: height)
-            .clipShape(BarSegments(marks: marks))
+            .clipShape(BarSegments(marks: marks, position: progress, otherHeight: isScrubbing ? 6 : 3))
             .padding(.horizontal, inset)
             .animation(.easeInOut(duration: 0.2), value: isScrubbing)
             .frame(maxHeight: .infinity)
@@ -446,17 +446,27 @@ struct ProgressBar: View {
 }
 
 /// One rounded piece per chapter, with a small gap between them.
+/// The chapter at `position` fills the height, and the others are thinner, as on YouTube.
 private struct BarSegments: Shape {
     let marks: [Double]
+    let position: Double
+    var otherHeight: CGFloat
     private static let gap: CGFloat = 2
+
+    var animatableData: CGFloat {
+        get { otherHeight }
+        set { otherHeight = newValue }
+    }
 
     func path(in rect: CGRect) -> Path {
         let edges = [0] + marks + [1]
         var path = Path()
         for (start, end) in zip(edges, edges.dropFirst()) {
+            let isCurrent = start <= position && (position < end || end == 1)
+            let height = isCurrent ? rect.height : min(otherHeight, rect.height)
             let x = rect.minX + rect.width * start + (start > 0 ? Self.gap / 2 : 0)
             let width = rect.width * (end - start) - (start > 0 ? Self.gap / 2 : 0) - (end < 1 ? Self.gap / 2 : 0)
-            path.addRoundedRect(in: CGRect(x: x, y: rect.minY, width: max(width, 1), height: rect.height), cornerSize: CGSize(width: rect.height / 2, height: rect.height / 2))
+            path.addRoundedRect(in: CGRect(x: x, y: rect.midY - height / 2, width: max(width, 1), height: height), cornerSize: CGSize(width: height / 2, height: height / 2))
         }
         return path
     }
