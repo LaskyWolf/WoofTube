@@ -14,8 +14,11 @@ struct PlayerOverlay: View {
 
     private static let miniSize = CGSize(width: 192, height: 108)
     /// The title, pause and close strip under the mini video.
-    private static let miniStripHeight: CGFloat = 40
-    private static var miniCardHeight: CGFloat { miniSize.height + miniStripHeight }
+    private static let miniStripHeight: CGFloat = 44
+    /// The card's material shows this far around the video.
+    private static let miniInset = Layout.rowPadding
+    private static var miniCardWidth: CGFloat { miniSize.width + miniInset * 2 }
+    private static var miniCardHeight: CGFloat { miniInset + miniSize.height + miniStripHeight }
     private static let miniMargin: CGFloat = 12
     /// Keeps the miniplayer above the tab bar, which sits outside this view's safe area.
     private static let tabBarHeight: CGFloat = 64
@@ -52,39 +55,36 @@ struct PlayerOverlay: View {
         let videoSize = isFullscreen ? screen : CGSize(width: screen.width, height: screen.width * 9 / 16)
         let expanded = isFullscreen ? CGPoint.zero : CGPoint(x: 0, y: insets.top)
         let mini = CGPoint(
-            x: isMiniLeading ? Self.miniMargin : screen.width - Self.miniSize.width - Self.miniMargin,
+            x: isMiniLeading ? Self.miniMargin : screen.width - Self.miniCardWidth - Self.miniMargin,
             y: isMiniTop ? insets.top + Self.miniMargin : screen.height - Self.miniCardHeight - insets.bottom - Self.tabBarHeight - Self.miniMargin
         )
         // 0 is the full video page, 1 is the miniplayer.
         let progress = router.isExpanded ? min(max(dragOffset.height, 0) / (screen.height * 0.6), 1) : 1
+        let miniVideo = CGPoint(x: mini.x + Self.miniInset, y: mini.y + Self.miniInset)
         let origin = router.isExpanded
-            ? CGPoint(x: expanded.x + (mini.x - expanded.x) * progress, y: expanded.y + (mini.y - expanded.y) * progress)
-            : CGPoint(x: mini.x + dragOffset.width, y: mini.y + dragOffset.height)
+            ? CGPoint(x: expanded.x + (miniVideo.x - expanded.x) * progress, y: expanded.y + (miniVideo.y - expanded.y) * progress)
+            : CGPoint(x: miniVideo.x + dragOffset.width, y: miniVideo.y + dragOffset.height)
         let width = videoSize.width + (Self.miniSize.width - videoSize.width) * progress
         let scale = width / videoSize.width
+        // The video's corners follow the card's, so the material stays the same width around them.
         let radius = progress * Layout.tileRadius / scale
 
         return ZStack(alignment: .topLeading) {
             page(topInset: insets.top, bottomInset: insets.bottom, videoHeight: videoSize.height, progress: progress)
 
             if !router.isExpanded {
-                RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-                    .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
-                    .frame(width: Self.miniSize.width, height: Self.miniCardHeight)
-                    .offset(x: origin.x, y: origin.y)
+                RoundedRectangle(cornerRadius: Layout.tileRadius + Self.miniInset, style: .continuous)
+                    .fill(.regularMaterial)
+                    .shadow(color: .black.opacity(0.25), radius: 16, y: 6)
+                    .frame(width: Self.miniCardWidth, height: Self.miniCardHeight)
+                    .offset(x: origin.x - Self.miniInset, y: origin.y - Self.miniInset)
             }
 
             MpvVideoView(player: router.player)
                 .overlay { VideoPoster(player: router.player, video: router.current) }
                 .frame(width: videoSize.width, height: videoSize.height)
                 .background(.black)
-                .clipShape(UnevenRoundedRectangle(
-                    topLeadingRadius: radius,
-                    bottomLeadingRadius: router.isExpanded ? radius : 0,
-                    bottomTrailingRadius: router.isExpanded ? radius : 0,
-                    topTrailingRadius: radius
-                ))
+                .clipShape(.rect(cornerRadius: radius, style: .continuous))
                 .scaleEffect(scale, anchor: .topLeading)
                 .offset(x: origin.x, y: origin.y)
                 .allowsHitTesting(false)
@@ -108,12 +108,12 @@ struct PlayerOverlay: View {
             } else {
                 MiniControls(
                     player: router.player,
-                    videoHeight: Self.miniSize.height,
+                    videoAreaHeight: Self.miniInset + Self.miniSize.height,
                     onDragChanged: { value in dragOffset = value.translation },
                     onDragEnded: { value in finishMiniDrag(value, origin: mini, screen: screen) }
                 )
-                .frame(width: Self.miniSize.width, height: Self.miniCardHeight)
-                .offset(x: origin.x, y: origin.y)
+                .frame(width: Self.miniCardWidth, height: Self.miniCardHeight)
+                .offset(x: origin.x - Self.miniInset, y: origin.y - Self.miniInset)
             }
         }
         .frame(width: screen.width, height: screen.height, alignment: .topLeading)
@@ -151,7 +151,7 @@ struct PlayerOverlay: View {
 
     /// Snaps to the corner the flick is heading for.
     private func finishMiniDrag(_ value: DragGesture.Value, origin: CGPoint, screen: CGSize) {
-        let endX = origin.x + value.predictedEndTranslation.width + Self.miniSize.width / 2
+        let endX = origin.x + value.predictedEndTranslation.width + Self.miniCardWidth / 2
         let endY = origin.y + value.predictedEndTranslation.height + Self.miniCardHeight / 2
         withAnimation(.snappy) {
             isMiniLeading = endX < screen.width / 2
@@ -287,24 +287,24 @@ struct PlayerTouchSurface: UIViewRepresentable {
     }
 }
 
-/// The floating card: the video above, and its title, pause and close below.
+/// The controls on the floating card: the video shows above, then its title, pause and close.
 private struct MiniControls: View {
     @ObservedObject var player: MpvPlayer
-    let videoHeight: CGFloat
+    let videoAreaHeight: CGFloat
     let onDragChanged: (DragGesture.Value) -> Void
     let onDragEnded: (DragGesture.Value) -> Void
     @EnvironmentObject private var router: Router
 
-    private static let shape = RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous)
+    private static let shape = RoundedRectangle(cornerRadius: Layout.tileRadius + Layout.rowPadding, style: .continuous)
 
     var body: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: videoHeight)
+            Color.clear.frame(height: videoAreaHeight)
             HStack(spacing: 0) {
                 Text(router.current?.title ?? "")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
-                    .padding(.leading, Layout.chipSpacing)
+                    .padding(.leading, Layout.rowPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button(player.isPaused ? "Play" : "Pause", systemImage: player.isPaused ? "play.fill" : "pause.fill") {
                     player.togglePause()
@@ -314,9 +314,10 @@ private struct MiniControls: View {
             .labelStyle(MiniGlyphLabelStyle())
             .buttonStyle(.plain)
             .frame(maxHeight: .infinity)
-            .background(Color(.secondarySystemBackground))
             .overlay(alignment: .bottom) {
                 ProgressLine(clock: player.clock, duration: player.duration)
+                    .clipShape(.capsule)
+                    .padding([.horizontal, .bottom], Layout.rowPadding)
             }
         }
         .contentShape(Self.shape)
@@ -335,7 +336,7 @@ private struct MiniGlyphLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.icon
             .font(.system(size: 15, weight: .semibold))
-            .frame(width: 40, height: 40)
+            .frame(width: 40, height: 44)
             .contentShape(.rect)
     }
 }
@@ -852,73 +853,82 @@ private struct WatchDetailsView: View {
         let isLiked = details.likeStatus == "LIKE"
         let isDisliked = details.likeStatus == "DISLIKE"
         return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                Button {
-                    setLike(isLiked ? "INDIFFERENT" : "LIKE")
-                } label: {
-                    HStack(spacing: Layout.rowPadding) {
-                        Image(systemName: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(isLiked ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        Text((isLiked ? details.likeCountLiked : details.likeCount) ?? "Like")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(height: 38)
-                    .background(Color.primary.opacity(0.1), in: .capsule)
-                    .contentShape(.capsule)
-                }
-                .accessibilityLabel("Like")
-                Button {
-                    setLike(isDisliked ? "INDIFFERENT" : "DISLIKE")
-                } label: {
-                    HStack(spacing: Layout.rowPadding) {
-                        Image(systemName: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(isDisliked ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        if let count = details.dislikeCount {
-                            Text((count + (isDisliked ? 1 : 0)).compactText)
-                                .font(.subheadline.weight(.semibold))
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .frame(height: 38)
-                    .background(Color.primary.opacity(0.1), in: .capsule)
-                    .contentShape(.capsule)
-                }
-                .accessibilityLabel("Dislike")
-                if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
-                    ShareLink(item: url) {
-                        HeaderRoundIcon(systemImage: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Share")
-                    Button {
-                        router.run { try await PlaylistActions.add(id, to: YouTubeFeeds.watchLaterPlaylistId) }
-                    } label: {
-                        HeaderRoundIcon(systemImage: "clock")
-                    }
-                    .accessibilityLabel("Save to Watch Later")
-                    if let video = router.current {
-                        let isSaved = downloads.isDownloaded(id)
-                        let isSaving = downloads.active.contains { $0.id == id }
+            // Spacing 0 keeps the shapes apart instead of letting nearby glass merge.
+            GlassEffectContainer(spacing: 0) {
+                HStack(spacing: 10) {
+                    HStack(spacing: 0) {
                         Button {
-                            router.run { try await downloads.download(video, maxHeight: router.maxHeight) }
+                            setLike(isLiked ? "INDIFFERENT" : "LIKE")
                         } label: {
-                            if isSaving {
-                                ProgressView().frame(width: 38, height: 38)
-                            } else {
-                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down")
-                            }
+                            likeLabel(
+                                icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup",
+                                text: (isLiked ? details.likeCountLiked : details.likeCount) ?? "Like",
+                                isActive: isLiked
+                            )
                         }
-                        .disabled(isSaved || isSaving)
-                        .accessibilityLabel(isSaved ? "Downloaded" : isSaving ? "Downloading" : "Download")
+                        .accessibilityLabel("Like")
+                        Divider().frame(height: 18)
+                        Button {
+                            setLike(isDisliked ? "INDIFFERENT" : "DISLIKE")
+                        } label: {
+                            likeLabel(
+                                icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
+                                text: details.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText },
+                                isActive: isDisliked
+                            )
+                        }
+                        .accessibilityLabel("Dislike")
+                    }
+                    .glassEffect(.regular, in: .capsule)
+                    if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
+                        ShareLink(item: url) {
+                            HeaderRoundIcon(systemImage: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share")
+                        Button {
+                            router.run { try await PlaylistActions.add(id, to: YouTubeFeeds.watchLaterPlaylistId) }
+                        } label: {
+                            HeaderRoundIcon(systemImage: "clock")
+                        }
+                        .accessibilityLabel("Save to Watch Later")
+                        if let video = router.current {
+                            let isSaved = downloads.isDownloaded(id)
+                            let isSaving = downloads.active.contains { $0.id == id }
+                            Button {
+                                router.run { try await downloads.download(video, maxHeight: router.maxHeight) }
+                            } label: {
+                                if isSaving {
+                                    ProgressView()
+                                        .frame(width: 38, height: 38)
+                                        .glassEffect(.regular, in: .circle)
+                                } else {
+                                    HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down")
+                                }
+                            }
+                            .disabled(isSaved || isSaving)
+                            .accessibilityLabel(isSaved ? "Downloaded" : isSaving ? "Downloading" : "Download")
+                        }
                     }
                 }
+                .buttonStyle(ZoomPressStyle(scale: 0.92))
+                .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
             }
-            .buttonStyle(ZoomPressStyle(scale: 0.92))
-            .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
         }
         .scrollClipDisabled()
+    }
+
+    private func likeLabel(icon: String, text: String?, isActive: Bool) -> some View {
+        HStack(spacing: Layout.rowPadding) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+            if let text {
+                Text(text).font(.subheadline.weight(.semibold))
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .contentShape(.rect)
     }
 
     private func chapters(_ chapters: [Chapter]) -> some View {

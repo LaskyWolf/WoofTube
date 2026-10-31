@@ -46,7 +46,7 @@ struct HeaderRoundIcon: View {
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(primary == nil ? tint : .white)
             .frame(width: size, height: size)
-            .background(Circle().fill(primary ?? Color.primary.opacity(0.1)))
+            .glassEffect(primary.map { Glass.regular.tint($0) } ?? .regular, in: .circle)
             .contentShape(Circle())
     }
 }
