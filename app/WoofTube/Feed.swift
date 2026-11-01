@@ -113,6 +113,14 @@ enum FeedItem: Identifiable {
     }
 }
 
+extension FeedItem {
+    /// From 0 to 1, by YouTube's count or this phone's.
+    var watchedFraction: Double? {
+        guard case .video(let video, let extras) = self else { return nil }
+        return extras.progress ?? WatchPositions.progress(of: video)
+    }
+}
+
 /// The channels you follow, for the Library and the New badge.
 @MainActor
 @Observable
@@ -286,16 +294,68 @@ enum FeedParser {
         collect(json, into: &found)
 
         var seen = Set<String>()
-        var merged: [FeedItem] = []
-        for item in found where seen.insert(item.id).inserted {
-            // Single Shorts in a row read better as one shelf.
-            if case .shorts(nil, let next) = item, case .shorts(nil, let previous)? = merged.last {
-                merged[merged.count - 1] = .shorts(title: nil, previous + next)
+        return found.filter { seen.insert($0.id).inserted }
+    }
+
+    /// On one page, loose Shorts join the first Shorts shelf, and a lone Short becomes an ordinary row.
+    /// A playlist keeps its order, so there every Short is a row.
+    static func arrangingShorts(_ items: [FeedItem], keepsOrder: Bool = false) -> [FeedItem] {
+        var result: [FeedItem] = []
+        var shelfIndex: Int?
+        var loose: [YouTubeVideo] = []
+        for item in items {
+            guard case .shorts(let title, let videos) = item else {
+                result.append(item)
+                continue
+            }
+            if keepsOrder {
+                result += videos.map { FeedItem.video($0, VideoExtras()) }
+            } else if shelfIndex == nil {
+                shelfIndex = result.count
+                result.append(item)
+            } else if title == nil || videos.count < 2 {
+                loose += videos
             } else {
-                merged.append(item)
+                result.append(item)
             }
         }
-        return merged
+        guard let shelfIndex, case .shorts(let title, let first) = result[shelfIndex] else { return result }
+        var seen = Set<String>()
+        let videos = (first + loose).filter { seen.insert($0.videoId).inserted }
+        if videos.count > 1 {
+            result[shelfIndex] = .shorts(title: title, videos)
+        } else if let video = videos.first {
+            result[shelfIndex] = .video(video, VideoExtras())
+        }
+        return result
+    }
+
+    /// SwiftyTube only reads `continuationItemRenderer`, and playlists now end in `continuationItemViewModel`.
+    static func continuation(in json: [String: Any]) -> String? {
+        YouTubeFeedParser.continuation(in: json)
+            ?? JSON.string("token", in: JSON.first("continuationItemViewModel", in: json))
+    }
+
+    static func selfCheck() {
+        func video(_ id: String) -> FeedItem {
+            .video(YouTubeVideo(videoId: id, title: "", isLive: false, isShort: false), VideoExtras())
+        }
+        func shorts(_ title: String?, _ ids: String...) -> FeedItem {
+            .shorts(title: title, ids.map { YouTubeVideo(videoId: $0, title: "", isLive: false, isShort: true) })
+        }
+        func rows(_ items: [FeedItem], keepsOrder: Bool = false) -> [String] {
+            arrangingShorts(items, keepsOrder: keepsOrder).map(\.id)
+        }
+        assert(rows([shorts(nil, "a"), video("v"), shorts(nil, "b")]) == ["shorts-a", "v"])
+        assert(rows([shorts(nil, "a")]) == ["a"])
+        assert(rows([shorts(nil, "a"), shorts(nil, "a")]) == ["a"])
+        assert(rows([shorts("S", "a", "b"), shorts("T", "c", "d")]) == ["shorts-a", "shorts-c"])
+        assert(rows([video("v"), shorts(nil, "a"), video("w")], keepsOrder: true) == ["v", "a", "w"])
+
+        let command: [String: Any] = ["innertubeCommand": ["continuationCommand": ["token": "t"]]]
+        let page: [String: Any] = ["items": [["continuationItemViewModel": ["continuationCommand": command]]]]
+        assert(continuation(in: page) == "t")
+        assert(continuation(in: ["items": [Any]()]) == nil)
     }
 
     private static func collect(_ node: Any, into items: inout [FeedItem]) {

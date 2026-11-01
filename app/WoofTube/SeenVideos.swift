@@ -6,7 +6,7 @@ enum SeenVideos {
     private static let key = "seenVideos"
     /// After this long a video may come back.
     private static let keepSeconds: TimeInterval = 14 * 24 * 60 * 60
-    private static let marksBetweenSaves = 20
+    private static let marksBetweenSaves = 100
     private static var marksSinceSave = 0
     private static var seen = stored()
 
@@ -32,8 +32,7 @@ enum SeenVideos {
 
     static func mark(_ videoId: String) {
         guard !SearchSettings.isIncognito else { return }
-        seen[videoId] = Date().timeIntervalSince1970
-        marksSinceSave += 1
+        if seen.updateValue(Date().timeIntervalSince1970, forKey: videoId) == nil { marksSinceSave += 1 }
         if marksSinceSave >= marksBetweenSaves { save() }
     }
 
@@ -80,8 +79,11 @@ enum WatchedChannels {
         ProfileStorage.defaults.set(updated, forKey: key)
     }
 
-    static func isStale(_ channelId: String) -> Bool {
-        isStale(lastWatched: dates[channelId], now: Date().timeIntervalSince1970)
+    /// Reads the dates once, because a filter asks about every row of a list.
+    static func staleCheck() -> (String) -> Bool {
+        let saved = dates
+        let now = Date().timeIntervalSince1970
+        return { isStale(lastWatched: saved[$0], now: now) }
     }
 
     private static func isStale(lastWatched: Double?, now: Double) -> Bool {

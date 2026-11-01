@@ -45,6 +45,7 @@ struct WoofTubeApp: App {
                 YouTubeAPI.selfCheck()
                 SponsorBlock.selfCheck()
                 LockupDetails.selfCheck()
+                FeedParser.selfCheck()
                 DiagnosticsSection.selfCheck()
                 CommentsPage.selfCheck()
                 VideoFlavor.selfCheck()

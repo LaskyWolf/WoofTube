@@ -73,9 +73,11 @@ final class WatchReporter {
     private var historySeconds: Double?
     private var historyProgress: Double?
 
-    init(videoId: String) {
+    /// Shorts always start from the beginning, so they don't ask where to start.
+    init(videoId: String, asksPosition: Bool = true) {
         guard !SearchSettings.isIncognito else { return }
         Task { await start(videoId: videoId) }
+        guard asksPosition else { return }
         Task { await askNext(videoId: videoId) }
         Task { await askHistory(videoId: videoId) }
     }
@@ -83,7 +85,8 @@ final class WatchReporter {
     /// Waits for the account's answers, for at most this many steps of 100 ms.
     func waitForAccount(steps: Int) async {
         // ponytail: polls, because waiting on three requests can't be given a time limit as simply.
-        for _ in 0..<steps where unanswered > 0 {
+        // `next` outranks the others, so its answer ends the wait.
+        for _ in 0..<steps where unanswered > 0 && nextSeconds == nil {
             try? await Task.sleep(for: .milliseconds(100))
         }
     }

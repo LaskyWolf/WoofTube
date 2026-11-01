@@ -15,6 +15,9 @@ struct LibraryView: View {
     private var subscriptions: Subscriptions { .shared }
     @State private var history = FeedModel()
     @State private var liked = FeedModel()
+    /// Coming back from a pushed page or another tab shows what's already here.
+    @State private var lastLoad = Date.distantPast
+    private static let reloadAfter: TimeInterval = 60
     @State private var watchLater = FeedModel()
     @State private var playlists: [YouTubePlaylist] = []
     @State private var isLoadingPlaylists = true
@@ -74,7 +77,11 @@ struct LibraryView: View {
                 isCreating = true
             }
             .refreshable { await load() }
-            .task { await load() }
+            .task {
+                guard Date().timeIntervalSince(lastLoad) > Self.reloadAfter else { return }
+                lastLoad = Date()
+                await load()
+            }
             .alert("New Playlist", isPresented: $isCreating) {
                 TextField("Title", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
@@ -133,7 +140,7 @@ struct LibraryView: View {
             ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
             } label: {
-                ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .lime, covers: likedCovers)
+                ShortcutTile(title: "Liked Videos", subtitle: "Synced", icon: "hand.thumbsup.fill", tint: .lime, covers: likedCovers)
             }
             ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
@@ -509,7 +516,7 @@ struct PlaylistPage: View {
     private var meta: String {
         guard !videos.isEmpty else { return "Playlist" }
         let total = videos.compactMap(\.durationSeconds).reduce(0, +)
-        let count = "\(videos.count) \(videos.count == 1 ? "video" : "videos")"
+        let count = "\(videos.count)\(model.hasMore ? "+" : "") \(videos.count == 1 ? "video" : "videos")"
         return total > 0 ? count + " · " + Double(total).clockText : count
     }
 

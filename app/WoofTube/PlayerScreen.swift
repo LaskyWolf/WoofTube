@@ -406,7 +406,8 @@ struct AmbientImage: View {
     let isPaused: Bool
 
     /// Seconds between frames. The clock ticks far more often, so only this view redraws with it.
-    private static let refresh = 1.0
+    private static let refresh = 3.0
+    @Environment(\.scenePhase) private var scenePhase
 
     init(player: MpvPlayer, poster: String?, storyboard: Storyboard?, isPaused: Bool) {
         clock = player.clock
@@ -417,7 +418,7 @@ struct AmbientImage: View {
     }
 
     var body: some View {
-        AmbientFrame(player: player, moment: isPaused ? nil : (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
+        AmbientFrame(player: player, moment: isPaused || scenePhase != .active ? nil : (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
     }
 }
 
@@ -430,7 +431,7 @@ private struct AmbientFrame: View {
     @State private var frame: UIImage?
 
     private static let liveFrameWidth: CGFloat = 160
-    private static let fade = 0.8
+    private static let fade = 0.6
 
     var body: some View {
         ZStack {
@@ -2023,8 +2024,11 @@ struct ChannelView: View {
         guard page == nil, let json = try? await InnerTubeClient.wooftube.browse(browseId: channelId) else { return }
         page = await offMain { YouTubeChannelParser.channelPage(in: json) }
         avatar = Self.avatarURL(in: json)
-        isSubscribed = JSON.first("subscribed", in: json) as? Bool == true || Subscriptions.shared.ids.contains(channelId)
-        if let player = JSON.first("channelVideoPlayerRenderer", in: json) as? [String: Any], let id = player["videoId"] as? String {
+        let (subscribed, trailer) = await offMain {
+            (JSON.first("subscribed", in: json) as? Bool == true, JSON.first("channelVideoPlayerRenderer", in: json) as? [String: Any])
+        }
+        isSubscribed = subscribed || Subscriptions.shared.ids.contains(channelId)
+        if let player = trailer, let id = player["videoId"] as? String {
             featured = YouTubeVideo(
                 videoId: id,
                 title: JSON.text(player["title"]) ?? "",

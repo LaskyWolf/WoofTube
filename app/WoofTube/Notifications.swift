@@ -13,7 +13,7 @@ private struct NotificationItem: Identifiable {
     let clickRequest: String?
     var isRead: Bool
 
-    init(renderer: [String: Any]) {
+    init(renderer: [String: Any], seen: Set<String>) {
         let full = JSON.text(renderer["shortMessage"]) ?? ""
         // "Name uploaded: Title" becomes the name on its own line, as in YouTube's app.
         if let range = full.range(of: " uploaded: ") ?? full.range(of: " ha caricato: ") {
@@ -31,7 +31,7 @@ private struct NotificationItem: Identifiable {
         thumbnail = JSON.lastThumbnail(renderer["videoThumbnail"])
         videoId = JSON.string("videoId", in: renderer["navigationEndpoint"])
         clickRequest = JSON.string("serializedInteractionsRequest", in: renderer["recordClickEndpoint"])
-        isRead = renderer["read"] as? Bool ?? false
+        isRead = renderer["read"] as? Bool ?? false || seen.contains(id)
     }
 }
 
@@ -41,12 +41,30 @@ private struct NotificationSection: Identifiable {
     var id: String { title }
 }
 
+/// YouTube's `read` only follows clicks, so rows seen on the page are remembered here, per account.
+private enum SeenNotifications {
+    private static let key = "seenNotifications"
+    private static let limit = 500
+
+    static var all: Set<String> {
+        Set(ProfileStorage.defaults.stringArray(forKey: key) ?? [])
+    }
+
+    static func add(_ ids: Set<String>) {
+        guard !ids.isEmpty, !SearchSettings.isIncognito else { return }
+        let saved = ProfileStorage.defaults.stringArray(forKey: key) ?? []
+        let updated = saved.filter { !ids.contains($0) } + ids
+        ProfileStorage.defaults.set(Array(updated.suffix(limit)), forKey: key)
+    }
+}
+
 struct NotificationsView: View {
     @EnvironmentObject private var session: Session
     @Environment(Router.self) private var router
     @State private var sections: [NotificationSection] = []
     @State private var isLoading = true
     @State private var errorText: String?
+    @State private var seenOnPage: Set<String> = []
 
     var body: some View {
         List {
@@ -54,8 +72,11 @@ struct NotificationsView: View {
                 Section {
                     ForEach(section.items) { item in
                         NotificationRow(item: item) {
-                            markRead(item)
+                            markRead([item.id])
                             open(item)
+                        }
+                        .onAppear {
+                            if !item.isRead { seenOnPage.insert(item.id) }
                         }
                         .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.screenPadding, bottom: Layout.rowPadding, trailing: Layout.screenPadding))
                         .listRowSeparator(.hidden)
@@ -101,12 +122,17 @@ struct NotificationsView: View {
             await load()
         }
         .refreshable { await load() }
+        .onDisappear {
+            SeenNotifications.add(seenOnPage)
+            markRead(seenOnPage)
+            seenOnPage = []
+        }
     }
 
     /// By ID, because a refresh can replace the list while a row still holds its place in it.
-    private func markRead(_ item: NotificationItem) {
+    private func markRead(_ ids: Set<String>) {
         for section in sections.indices {
-            if let row = sections[section].items.firstIndex(where: { $0.id == item.id }) {
+            for row in sections[section].items.indices where ids.contains(sections[section].items[row].id) {
                 sections[section].items[row].isRead = true
             }
         }
@@ -143,6 +169,7 @@ struct NotificationsView: View {
     /// Keeps YouTube's own section titles. Items it leaves untitled are grouped by age.
     private static func sections(in json: [String: Any]) -> [NotificationSection] {
         var result: [NotificationSection] = []
+        let seen = SeenNotifications.all
         func add(_ item: NotificationItem, to title: String) {
             if let index = result.firstIndex(where: { $0.title == title }) {
                 result[index].items.append(item)
@@ -153,13 +180,13 @@ struct NotificationsView: View {
         for section in nodes("multiPageMenuNotificationSectionRenderer", in: json) {
             let title = JSON.text(section["notificationSectionTitle"]) ?? JSON.text(section["title"])
             for renderer in nodes("notificationRenderer", in: section["items"]) {
-                let item = NotificationItem(renderer: renderer)
+                let item = NotificationItem(renderer: renderer, seen: seen)
                 add(item, to: title ?? ageTitle(item.time))
             }
         }
         if result.isEmpty {
             for renderer in nodes("notificationRenderer", in: json) {
-                let item = NotificationItem(renderer: renderer)
+                let item = NotificationItem(renderer: renderer, seen: seen)
                 add(item, to: ageTitle(item.time))
             }
         }
@@ -219,7 +246,7 @@ private struct NotificationRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let thumbnail = item.thumbnail, let id = item.videoId {
-                    Thumbnail(url: thumbnail, videoId: id).frame(width: 112)
+                    Thumbnail(url: thumbnail, videoId: id, maxPixels: 400).frame(width: 112)
                 }
             }
             .contentShape(.rect)

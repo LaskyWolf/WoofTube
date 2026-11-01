@@ -560,11 +560,13 @@ final class Router {
             return
         }
         guard current?.videoId == videoId else { return }
-        let loaded = await offMain { WatchDetails(json: json, videoId: videoId) }
+        let (loaded, chatToken) = await offMain {
+            (WatchDetails(json: json, videoId: videoId), JSON.string("continuation", in: JSON.first("liveChatRenderer", in: json)))
+        }
         guard current?.videoId == videoId else { return }
         details = loaded
         WatchedChannels.mark(loaded.channelId)
-        liveChatToken = JSON.string("continuation", in: JSON.first("liveChatRenderer", in: json))
+        liveChatToken = chatToken
         async let dislikes = DislikeCounts.fetch(videoId: videoId)
         async let comment = CommentsPage.topComment(token: loaded.commentsToken)
         async let options = PlaylistActions.options(for: videoId)

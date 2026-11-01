@@ -58,7 +58,7 @@ final class ShortsModel: ObservableObject {
     private func play(_ video: YouTubeVideo) async {
         SeenVideos.mark(video.videoId)
         watchReporter?.finish()
-        watchReporter = WatchReporter(videoId: video.videoId)
+        watchReporter = WatchReporter(videoId: video.videoId, asksPosition: false)
         if player.errorText != nil || errorText != nil { await StreamLoader.forget(videoId: video.videoId) }
         player.prepareForNewVideo()
         playingId = video.videoId

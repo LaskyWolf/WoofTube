@@ -366,7 +366,6 @@ final class DownloadStore: ObservableObject {
         guard job.finished.insert(name).inserted else { return }
         written[name] = nil
         self.job = job
-        savePending()
         publishFraction()
         if job.isComplete { join(job) }
     }

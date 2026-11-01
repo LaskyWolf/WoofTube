@@ -48,6 +48,7 @@ final class FeedModel {
     private var nextToken: String?
     private var nextQuery: String?
     private(set) var isHome = false
+    private var isPlaylist = false
     /// Home keeps asking for pages until this many rows are new to the person.
     private static let freshRowsWanted = 8
     private static let pagesToSkip = 3
@@ -99,19 +100,22 @@ final class FeedModel {
         }
         do {
             let json = try await source.fetch()
-            var page = await offMain { FeedParser.items(in: json) }
+            let parsed = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json), FeedModel.parseChips(json)) }
+            var page = parsed.0
             guard generation == loadGeneration else { return }
             isHome = source == .browse(YouTubeFeeds.home)
+            if case .browse(let id, _) = source { isPlaylist = id.hasPrefix("VL") } else { isPlaylist = false }
             if isHome {
                 let file = SavedHome.file
                 await offMain { SavedHome.write(json, to: file) }
             }
-            if !keepChips { chips = Self.parseChips(json) }
-            nextToken = YouTubeFeedParser.continuation(in: json)
+            if !keepChips { chips = parsed.2 }
+            nextToken = parsed.1
             if isHome {
                 page = await freshHomeRows(from: page)
                 guard generation == loadGeneration else { return }
             }
+            page = FeedParser.arrangingShorts(page, keepsOrder: isPlaylist)
             if items.isEmpty {
                 withAnimation(.easeOut(duration: 0.25)) { items = page }
             } else {
@@ -145,10 +149,11 @@ final class FeedModel {
             }
             guard generation == loadGeneration else { return }
             let known = Set(items.map(\.id))
-            let page = await offMain { FeedParser.items(in: json) }
-            let added = (isHome ? SeenVideos.removing(from: page) : page).filter { !known.contains($0.id) }
+            let (page, token) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
+            let added = FeedParser.arrangingShorts(isHome ? SeenVideos.removing(from: page) : page, keepsOrder: isPlaylist)
+                .filter { !known.contains($0.id) }
             items += added
-            nextToken = YouTubeFeedParser.continuation(in: json)
+            nextToken = token
             if !added.isEmpty { return }
         }
     }
@@ -159,12 +164,12 @@ final class FeedModel {
         defer { isLoading = false }
         let file = SavedHome.file
         guard let json = await offMain({ SavedHome.read(file) }) else { return }
-        let page = await offMain { FeedParser.items(in: json) }
+        let (page, savedChips) = await offMain { (FeedParser.items(in: json), FeedModel.parseChips(json)) }
         guard items.isEmpty else { return }
         isHome = true
-        chips = Self.parseChips(json)
+        chips = savedChips
         let fresh = SeenVideos.removing(from: page)
-        items = fresh.isEmpty ? page : fresh
+        items = FeedParser.arrangingShorts(fresh.isEmpty ? page : fresh)
     }
 
     /// Falls back to the page as it came, rather than showing nothing to someone who has seen it all.
@@ -174,8 +179,8 @@ final class FeedModel {
         while fresh.count < Self.freshRowsWanted, skipped < Self.pagesToSkip, let token = nextToken,
               let json = try? await InnerTubeClient.wooftube.browse(continuation: token) {
             skipped += 1
-            let more = await offMain { FeedParser.items(in: json) }
-            nextToken = YouTubeFeedParser.continuation(in: json)
+            let (more, token) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
+            nextToken = token
             let known = Set(fresh.map(\.id))
             fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) }
         }
@@ -243,7 +248,7 @@ final class FeedModel {
     }
 
     /// The chip YouTube marks as selected is "All", which is simply the page itself.
-    private static func parseChips(_ json: [String: Any]) -> [FeedChip] {
+    nonisolated private static func parseChips(_ json: [String: Any]) -> [FeedChip] {
         guard let bar = JSON.first("feedFilterChipBarRenderer", in: json) as? [String: Any],
               let contents = bar["contents"] as? [[String: Any]] else { return [] }
         return contents.compactMap { item in
@@ -398,6 +403,7 @@ struct HomeView: View {
     @EnvironmentObject private var session: Session
     @State private var model = FeedModel()
     @State private var history = FeedModel()
+    @State private var wasInBackground = false
     @State private var selectedChip: String?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -421,7 +427,12 @@ struct HomeView: View {
             }
             .task { if history.items.isEmpty { await history.load(.browse(YouTubeFeeds.history)) } }
             .onChange(of: scenePhase) {
-                if scenePhase == .active { Task { await history.load(.browse(YouTubeFeeds.history)) } }
+                // Control Center only makes the app inactive, which changes nothing.
+                if scenePhase == .background { wasInBackground = true }
+                if scenePhase == .active, wasInBackground {
+                    wasInBackground = false
+                    Task { await history.load(.browse(YouTubeFeeds.history)) }
+                }
             }
         }
     }
@@ -639,20 +650,28 @@ struct SubsView: View {
                 if case .video(let video, _) = $0 { return video.isNew } else { return false }
             }
         case .notSeenLately:
+            let isStale = WatchedChannels.staleCheck()
             return {
-                if case .video(let video, _) = $0, let id = video.channelId { return WatchedChannels.isStale(id) }
+                if case .video(let video, _) = $0, let id = video.channelId { return isStale(id) }
                 return false
             }
         case .videos:
             return {
                 guard $0.id != relevantId else { return false }
                 switch $0 {
-                case .video, .shelf: return true
+                case .video(let video, _): return !video.isShort
+                case .shelf: return true
                 default: return false
                 }
             }
         case .shorts:
-            return { if case .shorts = $0 { return true } else { return false } }
+            return {
+                switch $0 {
+                case .video(let video, _): return video.isShort
+                case .shorts: return true
+                default: return false
+                }
+            }
         case nil:
             return { $0.id != relevantId }
         case .posts:
@@ -736,6 +755,16 @@ struct SubsView: View {
 
 /// A list with a search field for one page: the whole list until something is searched, if it has one.
 struct ScopedSearchPage: View {
+    private enum Filter: String, CaseIterable {
+        case videos = "Videos"
+        case shorts = "Shorts"
+        case inProgress = "In Progress"
+        case finished = "Finished"
+    }
+
+    /// A filter can leave a page empty, so it looks a little further before giving up.
+    private static let pagesToSearch = 3
+
     let title: String
     let prompt: String
     let browseId: String
@@ -745,9 +774,45 @@ struct ScopedSearchPage: View {
     @State private var model = FeedModel()
     @State private var text = ""
     @State private var submitted = ""
+    @State private var filter: Filter?
 
     private var source: FeedSource {
         submitted.isEmpty ? .browse(browseId) : .scoped(browseId: browseId, params: params, query: submitted)
+    }
+
+    private var keeps: ((FeedItem) -> Bool)? {
+        switch filter {
+        case .videos:
+            return {
+                switch $0 {
+                case .video(let video, _): return !video.isShort
+                case .shelf: return true
+                default: return false
+                }
+            }
+        case .shorts:
+            return {
+                switch $0 {
+                case .video(let video, _): return video.isShort
+                case .shorts: return true
+                default: return false
+                }
+            }
+        case .inProgress:
+            return { ($0.watchedFraction ?? 0) > 0 && ($0.watchedFraction ?? 0) < WatchPositions.finishedFraction }
+        case .finished:
+            return { ($0.watchedFraction ?? 0) >= WatchPositions.finishedFraction }
+        case nil:
+            return nil
+        }
+    }
+
+    private func searchFurther() async {
+        guard let keeps else { return }
+        for _ in 0..<Self.pagesToSearch where !model.items.contains(where: keeps) {
+            guard let last = model.items.last else { break }
+            await model.loadMore(after: last)
+        }
     }
 
     var body: some View {
@@ -755,7 +820,12 @@ struct ScopedSearchPage: View {
             if submitted.isEmpty, !listsWithoutQuery {
                 ContentUnavailableView(prompt, systemImage: "magnifyingglass")
             } else {
-                FeedContent(model: model, retry: { await model.load(source) }, isCompact: true) { EmptyView() }
+                FeedContent(model: model, retry: { await model.load(source) }, isCompact: true, keeps: keeps) {
+                    FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
+                        let tapped = Filter(rawValue: title)
+                        filter = filter == tapped ? nil : tapped
+                    }
+                }
             }
         }
         .navigationTitle(title)
@@ -769,7 +839,9 @@ struct ScopedSearchPage: View {
         }
         .task(id: submitted) {
             if !submitted.isEmpty || listsWithoutQuery { await model.load(source) }
+            await searchFurther()
         }
+        .task(id: filter) { await searchFurther() }
     }
 }
 
@@ -824,7 +896,7 @@ struct FeedContent<Header: View>: View {
                     Label("Nothing Here", systemImage: "play.rectangle")
                 }
             } description: {
-                Text(model.errorText ?? "YouTube returned nothing here.")
+                Text(model.errorText ?? (keeps == nil ? "YouTube returned nothing here." : "Nothing here matches this filter."))
             } actions: {
                 Button("Try Again") { Task { await retry() } }
                     .buttonStyle(.bordered)
@@ -1376,11 +1448,12 @@ struct Thumbnail: View {
     let videoId: String
     var aspect: CGFloat = 16 / 9
     var showsDownload = true
+    var maxPixels = ImageStore.feedPixels
 
     var body: some View {
         Color(.secondarySystemFill)
             .aspectRatio(aspect, contentMode: .fit)
-            .overlay { CachedImage(url: url ?? YouTubeVideo.cover(of: videoId)) }
+            .overlay { CachedImage(url: url ?? YouTubeVideo.cover(of: videoId), maxPixels: maxPixels) }
             .overlay(alignment: .topTrailing) {
                 if showsDownload { DownloadedBadge(videoId: videoId) }
             }
@@ -1422,12 +1495,13 @@ private struct ShortCard: View {
 
     static let width: CGFloat = 158
     static let coverAspect: CGFloat = 158 / 250
+    static let coverPixels = 500
     static let avatarSize: CGFloat = 44
     static let fadeHeight: CGFloat = 64
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: Self.coverAspect)
+            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: Self.coverAspect, maxPixels: Self.coverPixels)
                 .fadesAtBottom()
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
                 .videoZoomSource(video.videoId)
@@ -1657,7 +1731,9 @@ private enum ShortAvatars {
 
     static func url(of videoId: String) async -> String? {
         if let url = known[videoId] { return url }
-        guard let json = try? await InnerTubeClient.wooftube.next(videoId: videoId),
+        // Scrolling past a shelf cancels this before it costs a request.
+        try? await Task.sleep(for: .milliseconds(300))
+        guard !Task.isCancelled, let json = try? await InnerTubeClient.wooftube.next(videoId: videoId),
               let url = await offMain({ WatchDetails(json: json, videoId: videoId).channelAvatar }) else { return nil }
         known[videoId] = url
         return url

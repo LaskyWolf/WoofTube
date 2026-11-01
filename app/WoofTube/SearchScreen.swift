@@ -288,6 +288,8 @@ private struct SearchStart: View {
 private struct SearchResults: View {
     private enum Filter: String, CaseIterable {
         case videos = "Videos"
+        case neverSeen = "Never Seen"
+        case live = "Live"
         case shorts = "Shorts"
         case channels = "Channels"
         case playlists = "Playlists"
@@ -296,7 +298,8 @@ private struct SearchResults: View {
         /// The codes youtube.com puts in its search filter links.
         var params: String? {
             switch self {
-            case .videos: return "EgIQAQ%3D%3D"
+            case .videos, .neverSeen: return "EgIQAQ%3D%3D"
+            case .live: return "EgJAAQ%3D%3D"
             case .shorts: return "EgIQCQ%3D%3D"
             case .channels: return "EgIQAg%3D%3D"
             case .playlists: return "EgIQAw%3D%3D"
@@ -311,8 +314,20 @@ private struct SearchResults: View {
     @State private var filter: Filter?
     @State private var creator: YouTubeChannel?
 
+    /// A filter can leave a page empty, so it looks a little further before giving up.
+    private static let pagesToSearch = 3
+
+    /// YouTube has no such filter, so this drops what its progress or this phone says was seen.
+    private var keeps: ((FeedItem) -> Bool)? {
+        guard filter == .neverSeen else { return nil }
+        return {
+            guard case .video(let video, _) = $0 else { return false }
+            return ($0.watchedFraction ?? 0) == 0 && !SeenVideos.contains(video.videoId)
+        }
+    }
+
     var body: some View {
-        FeedContent(model: model, retry: { await load() }, isCompact: filter == .history) {
+        FeedContent(model: model, retry: { await load() }, isCompact: filter == .history, keeps: keeps) {
             FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
                 let tapped = Filter(rawValue: title)
                 filter = filter == tapped ? nil : tapped
@@ -329,6 +344,12 @@ private struct SearchResults: View {
             await model.load(.scoped(browseId: YouTubeFeeds.history, query: query))
         } else {
             await model.load(.search(query, params: filter?.params))
+        }
+        if let keeps {
+            for _ in 0..<Self.pagesToSearch where !model.items.contains(where: keeps) {
+                guard let last = model.items.last else { break }
+                await model.loadMore(after: last)
+            }
         }
         guard filter == nil else {
             creator = nil

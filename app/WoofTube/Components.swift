@@ -335,6 +335,8 @@ struct CachedImage: View {
             }
         }
         .task(id: url) { await load() }
+        // A lazy list keeps the state of rows scrolled away, and this would pin their pictures.
+        .onDisappear { loaded = nil }
     }
 
     private func load() async {
