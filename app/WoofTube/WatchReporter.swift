@@ -1,4 +1,5 @@
 import Foundation
+import SwiftyTube
 
 /// The stretches of a video watched in one go. A seek ends one and starts the next.
 struct WatchSegments {
