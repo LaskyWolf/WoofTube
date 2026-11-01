@@ -149,11 +149,11 @@ final class FeedModel {
             }
             guard generation == loadGeneration else { return }
             let known = Set(items.map(\.id))
-            let (page, token) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
+            let (page, next) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
             let added = FeedParser.arrangingShorts(isHome ? SeenVideos.removing(from: page) : page, keepsOrder: isPlaylist)
                 .filter { !known.contains($0.id) }
             items += added
-            nextToken = token
+            nextToken = next
             if !added.isEmpty { return }
         }
     }
@@ -179,8 +179,8 @@ final class FeedModel {
         while fresh.count < Self.freshRowsWanted, skipped < Self.pagesToSkip, let token = nextToken,
               let json = try? await InnerTubeClient.wooftube.browse(continuation: token) {
             skipped += 1
-            let (more, token) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
-            nextToken = token
+            let (more, next) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
+            nextToken = next
             let known = Set(fresh.map(\.id))
             fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) }
         }
