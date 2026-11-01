@@ -120,7 +120,7 @@ final class MpvPlayer: ObservableObject {
 
     /// The picture showing right now, shrunk to this width. Nil until the video has a frame.
     func currentFrame(width: CGFloat) -> UIImage? {
-        guard isVideoReady, let buffer = videoLayer.sampleBufferRenderer.copyDisplayedPixelBuffer() else { return nil }
+        guard isVideoReady, let buffer = videoLayer.sampleBufferRenderer.displayedPixelBuffer() else { return nil }
         let image = CIImage(cvPixelBuffer: buffer)
         let scale = width / max(image.extent.width, 1)
         let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
