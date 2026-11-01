@@ -10,11 +10,11 @@
 **A free, open source YouTube client for iPhone, written from scratch in SwiftUI.**
 It contains no YouTube code and shows no ads.
 
-<img src=".github/assets/home.svg" width="31%" alt="Home" />&nbsp;
-<img src=".github/assets/player.svg" width="31%" alt="Video page" />&nbsp;
-<img src=".github/assets/subs.svg" width="31%" alt="Subs with New Videos" />
+<img src=".github/assets/home.png" width="31%" alt="Home" />&nbsp;
+<img src=".github/assets/player.png" width="31%" alt="Video page" />&nbsp;
+<img src=".github/assets/subs.png" width="31%" alt="Subs with New Videos" />
 
-<sub>Illustrations of the interface, with sample content.</sub>
+<sub>The app's screens, with video content replaced by placeholders.</sub>
 
 </div>
 
@@ -55,28 +55,20 @@ It contains no YouTube code and shows no ads.
 - The next Short's address is loaded ahead of the swipe
 
 ### Library
-- History, Watch Later, Liked Videos and your playlists
+- History with search and filters, Watch Later, Liked Videos and your playlists
 - Create and edit playlists
 - Downloads with quality choice, progress on each row and Cancel All
 
 ### Accounts and search
 - Google sign-in inside the app, with several accounts, each keeping its own data
 - Notification inbox with an unread badge
-- Search with suggestions and history, and an incognito mode that stops recording it
+- Search with suggestions and history, filters for Never Seen and Live videos, and an incognito mode that stops recording it
 
 ### Look
 - Accent colours that also change the app icon
 - Light, dark or system appearance
 - Icons with their own animation that follow the real state: the speed needle, the download ring, the sleep timer countdown
 - Pages open by growing out of what you tapped
-
-<div align="center">
-
-<img src=".github/assets/shorts.svg" width="31%" alt="Shorts" />&nbsp;
-<img src=".github/assets/downloads.svg" width="31%" alt="Downloads" />&nbsp;
-<img src=".github/assets/settings.svg" width="31%" alt="Settings" />
-
-</div>
 
 ## Speed
 
@@ -119,7 +111,7 @@ Google can challenge or restrict an account used in an unofficial app, and posti
 
 ## Project status
 
-The app is young and each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
+Version 1.0. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
 
 The `tweak/` and `scripts/` folders hold an older build that injected tweaks into a decrypted IPA. It is not maintained.
 
