@@ -14,7 +14,7 @@ private struct VideoMenuModifier: ViewModifier {
     let collaborators: [Collaborator]
     let onRemove: (() -> Void)?
     let onRemoveFromPlaylist: (() -> Void)?
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var showsPlaylists = false
 
     func body(content: Content) -> some View {
@@ -148,7 +148,7 @@ enum PlaylistActions {
 /// Woof Music's Add to Playlist sheet. Tapping a playlist again takes the video out.
 struct PlaylistPickerSheet: View {
     let video: YouTubeVideo
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var playlists: [PlaylistOption] = []
     @State private var isLoading = true

@@ -108,12 +108,13 @@ enum FeedItem: Identifiable {
 
 /// The channels you follow, for the Library and the New badge.
 @MainActor
-final class Subscriptions: ObservableObject {
+@Observable
+final class Subscriptions {
     static let shared = Subscriptions()
 
-    @Published private(set) var channels: [YouTubeChannel] = []
-    @Published private(set) var ids: Set<String> = []
-    @Published private(set) var isLoading = true
+    private(set) var channels: [YouTubeChannel] = []
+    private(set) var ids: Set<String> = []
+    private(set) var isLoading = true
 
     /// The side menu's list comes whole, while the channels page arrives in parts.
     func load() async {
@@ -170,35 +171,15 @@ extension YouTubeVideo {
     /// True when YouTube's "3 hours ago" counts in seconds, minutes or hours, so under a day.
     // ponytail: reads English and Italian, the languages in use. Other languages show no New badge.
     var isRecent: Bool {
-        let units: Set<String> = ["second", "seconds", "minute", "minutes", "hour", "hours", "secondo", "secondi", "minuto", "minuti", "ora", "ore"]
-        return (publishedTimeText ?? "").lowercased().split { !$0.isLetter }.contains { units.contains(String($0)) }
+        (publishedTimeText ?? "").lowercased().split { !$0.isLetter }.contains { Self.recentUnits.contains(String($0)) }
     }
+
+    private static let recentUnits: Set<String> = ["second", "seconds", "minute", "minutes", "hour", "hours", "secondo", "secondi", "minuto", "minuti", "ora", "ore"]
 }
 
 /// Reads a page in display order and keeps each kind of content.
 /// SwiftyTube's parser only returns a flat list of videos.
 enum FeedParser {
-    private(set) static var seenContentTypes: Set<String> = []
-    private(set) static var homePages = 0
-    private(set) static var homePostsSent = 0
-    private(set) static var homePostsShown = 0
-
-    /// Tells a bug from a feed with no posts: if YouTube sends posts, both numbers rise.
-    static func noteHomePage(_ json: [String: Any], items: [FeedItem]) {
-        homePages += 1
-        homePostsSent += postCount(in: json)
-        homePostsShown += items.filter { if case .post = $0 { return true } else { return false } }.count
-    }
-
-    private static func postCount(in node: Any) -> Int {
-        if let array = node as? [Any] { return array.reduce(0) { $0 + postCount(in: $1) } }
-        guard let dict = node as? [String: Any] else { return 0 }
-        return dict.reduce(0) { total, entry in
-            total + (entry.key == "backstagePostRenderer" || entry.key == "postRenderer" ? 1 : postCount(in: entry.value))
-        }
-    }
-
-
     private static let shelfKeys = ["reelShelfRenderer", "richShelfRenderer", "shelfRenderer", "gridShelfViewModel"]
     private static let postKeys = ["backstagePostThreadRenderer", "backstagePostRenderer", "sharedPostRenderer", "postRenderer"]
     private static let skippedKeys: Set<String> = [
@@ -236,7 +217,6 @@ enum FeedParser {
 
         for key in ["richItemRenderer", "richSectionRenderer"] {
             if let content = (dict[key] as? [String: Any])?["content"] as? [String: Any] {
-                seenContentTypes.formUnion(content.keys)
             }
         }
         if let key = shelfKeys.first(where: { dict[$0] != nil }) {
@@ -340,5 +320,22 @@ enum FeedParser {
             unlikeAction: JSON.string("action", in: likeButton?["toggledServiceEndpoint"]),
             isLiked: likeButton?["isToggled"] as? Bool ?? false
         )
+    }
+}
+
+/// The last Home page, shown at launch while the new one loads. Each account has its own.
+enum SavedHome {
+    static var file: URL { URL.cachesDirectory.appending(path: "home-\(ProfileStorage.active).json") }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    static func write(_ json: [String: Any], to file: URL) {
+        try? JSONSerialization.data(withJSONObject: json).write(to: file, options: .atomic)
+    }
+
+    static func read(_ file: URL) -> [String: Any]? {
+        (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     }
 }

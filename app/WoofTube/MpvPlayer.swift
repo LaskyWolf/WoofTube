@@ -18,7 +18,7 @@ final class MpvPlayer: ObservableObject {
     @Published private(set) var isPaused = false
     @Published private(set) var isBuffering = false
     @Published private(set) var errorText: String?
-    @Published private(set) var recentLog: [String] = []
+    private(set) var recentLog: [String] = []
     private var loadStarted: Date?
 
     /// mpv puts its frames here. It's the kind of layer Apple's Picture in Picture window can show.

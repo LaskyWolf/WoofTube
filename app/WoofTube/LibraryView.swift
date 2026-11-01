@@ -10,12 +10,12 @@ struct LibraryView: View {
         case inProgress = "In Progress"
     }
 
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @ObservedObject private var downloads = DownloadStore.shared
-    @ObservedObject private var subscriptions = Subscriptions.shared
-    @StateObject private var history = FeedModel()
-    @StateObject private var liked = FeedModel()
-    @StateObject private var watchLater = FeedModel()
+    private var subscriptions: Subscriptions { .shared }
+    @State private var history = FeedModel()
+    @State private var liked = FeedModel()
+    @State private var watchLater = FeedModel()
     @State private var playlists: [YouTubePlaylist] = []
     @State private var isLoadingPlaylists = true
     @State private var musicPlaylistIds: Set<String> = []
@@ -393,8 +393,8 @@ private struct ShortcutTile: View {
 
 /// Woof Music's Keep Listening card: the title on top and covers to scroll through below.
 private struct HistoryStrip: View {
-    @ObservedObject var model: FeedModel
-    @EnvironmentObject private var router: Router
+    let model: FeedModel
+    @Environment(Router.self) private var router
 
     private static let coverWidth: CGFloat = 150
     private static let shown = 20
@@ -471,9 +471,9 @@ struct PlaylistPage: View {
     let title: String
     let playlistId: String
 
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @EnvironmentObject private var settings: AppSettings
-    @StateObject private var model = FeedModel()
+    @State private var model = FeedModel()
     @State private var newTitle: String?
     @State private var isRenaming = false
     @State private var draftTitle = ""

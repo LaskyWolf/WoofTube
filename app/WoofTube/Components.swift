@@ -1,3 +1,4 @@
+import ImageIO
 import SwiftUI
 import SwiftyTube
 
@@ -172,10 +173,11 @@ struct ChannelBanner: View {
 /// An image that fills whatever frame it gets.
 struct CoverImage: View {
     let url: String?
+    var maxPixels: Int? = ImageStore.feedPixels
 
     var body: some View {
         Color(.secondarySystemFill)
-            .overlay { CachedImage(url: url) }
+            .overlay { CachedImage(url: url, maxPixels: maxPixels) }
             .clipped()
     }
 }
@@ -247,52 +249,69 @@ struct SectionTitle: View {
 /// so it downloads again whenever SwiftUI rebuilds the view.
 @MainActor
 enum ImageStore {
-    // ponytail: counts images, not bytes. Limit by bytes if memory warnings show up in Diagnostics.
-    private static let limit = 150
-    private static var images: [String: UIImage] = [:]
-    private static var order: [String] = []
+    /// What a full-width row needs, and the size of YouTube's largest thumbnails.
+    nonisolated static let feedPixels = 1280
+    private static let costLimit = 200 * 1024 * 1024
+    // Empties itself under memory pressure.
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = costLimit
+        return cache
+    }()
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.urlCache = URLCache(memoryCapacity: 0, diskCapacity: 300 * 1024 * 1024)
         configuration.requestCachePolicy = .returnCacheDataElseLoad
         return URLSession(configuration: configuration)
     }()
-    private static let memoryWarning = NotificationCenter.default.addObserver(
-        forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
-    ) { _ in
-        MainActor.assumeIsolated {
-            images.removeAll()
-            order.removeAll()
-        }
+
+    private static func key(_ url: String, _ maxPixels: Int?) -> NSString {
+        "\(url)|\(maxPixels ?? 0)" as NSString
     }
 
-    static func image(for url: String) -> UIImage? {
-        images[url]
+    static func image(for url: String, maxPixels: Int? = nil) -> UIImage? {
+        cache.object(forKey: key(url, maxPixels))
     }
 
-    static func load(_ url: String) async throws -> UIImage {
-        _ = memoryWarning
+    /// Without `maxPixels` the image keeps its full size, which cropping a storyboard sheet needs.
+    static func load(_ url: String, maxPixels: Int? = nil) async throws -> UIImage {
         // Some of YouTube's image addresses leave out the "https:".
         guard let address = URL(string: url.hasPrefix("//") ? "https:" + url : url) else { throw URLError(.badURL) }
         let (data, _) = try await session.data(from: address)
-        guard let image = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
-        let prepared = await image.byPreparingForDisplay() ?? image
-        if images[url] == nil { order.append(url) }
-        images[url] = prepared
-        if order.count > limit { images[order.removeFirst()] = nil }
-        return prepared
+        guard let image = await offMain({ decode(data, maxPixels: maxPixels) }) else { throw URLError(.cannotDecodeContentData) }
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        cache.setObject(image, forKey: key(url, maxPixels), cost: cost)
+        return image
+    }
+
+    /// Memory follows an image's pixels, not its file size, so small uses decode small.
+    nonisolated private static func decode(_ data: Data, maxPixels: Int?) -> UIImage? {
+        if let maxPixels, let source = CGImageSourceCreateWithData(data as CFData, nil) {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixels
+            ]
+            if let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+                return UIImage(cgImage: thumbnail)
+            }
+        }
+        guard let image = UIImage(data: data) else { return nil }
+        return image.preparingForDisplay() ?? image
     }
 }
 
 /// Woof Music's AsyncImageView: a cached image shows at once, and a shimmer stands in for the rest.
 struct CachedImage: View {
     let url: String?
+    var maxPixels: Int? = ImageStore.feedPixels
     @State private var loaded: (url: String, image: UIImage)?
     @State private var didFail = false
 
     private var image: UIImage? {
         guard let url else { return nil }
-        return ImageStore.image(for: url) ?? (loaded?.url == url ? loaded?.image : nil)
+        return ImageStore.image(for: url, maxPixels: maxPixels) ?? (loaded?.url == url ? loaded?.image : nil)
     }
 
     var body: some View {
@@ -302,7 +321,7 @@ struct CachedImage: View {
             } else if url == nil || didFail {
                 Color.clear
             } else {
-                ShimmerFill(radius: 0)
+                Color(.systemGray5)
             }
         }
         .task(id: url) { await load() }
@@ -312,14 +331,14 @@ struct CachedImage: View {
         didFail = false
         guard let url else { return }
         // Kept here too, because the store can drop an image while this view still shows it.
-        if let stored = ImageStore.image(for: url) {
+        if let stored = ImageStore.image(for: url, maxPixels: maxPixels) {
             loaded = (url, stored)
             return
         }
         var retryDelays: [Duration] = [.seconds(1), .seconds(3)]
         while !Task.isCancelled {
             do {
-                let image = try await ImageStore.load(url)
+                let image = try await ImageStore.load(url, maxPixels: maxPixels)
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { loaded = (url, image) }
                 return

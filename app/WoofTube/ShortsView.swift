@@ -51,6 +51,7 @@ final class ShortsModel: ObservableObject {
 
     private func play(_ video: YouTubeVideo) async {
         SeenVideos.mark(video.videoId)
+        if player.errorText != nil || errorText != nil { await StreamLoader.forget(videoId: video.videoId) }
         player.prepareForNewVideo()
         playingId = video.videoId
         details = nil
@@ -72,6 +73,11 @@ final class ShortsModel: ObservableObject {
                 shorts[index].channelId = stream.channelId
             }
             player.load(url: stream.url)
+            // So the next swipe finds its address ready.
+            if let index = shorts.firstIndex(where: { $0.videoId == video.videoId }), shorts.indices.contains(index + 1) {
+                let next = shorts[index + 1].videoId
+                Task { _ = try? await StreamLoader.load(videoId: next, maxHeight: 1080) }
+            }
             if captions.isEmpty {
                 let found = await StreamLoader.captions(videoId: video.videoId)
                 guard !Task.isCancelled else { return }
@@ -159,7 +165,7 @@ struct ShortsView: View {
     }
 
     @ObservedObject var model: ShortsModel
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var showsComments = false
     @State private var showsDescription = false
     @State private var scrub: Scrub?
@@ -447,7 +453,7 @@ private struct ShortsMoreMenu: View {
     @ObservedObject var player: MpvPlayer
     let video: YouTubeVideo
     @Binding var showsDescription: Bool
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
 
     var body: some View {
         Menu {

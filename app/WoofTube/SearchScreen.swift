@@ -287,8 +287,8 @@ private struct SearchResults: View {
     }
 
     let query: String
-    @EnvironmentObject private var router: Router
-    @StateObject private var model = FeedModel()
+    @Environment(Router.self) private var router
+    @State private var model = FeedModel()
     @State private var filter: Filter?
     @State private var creator: YouTubeChannel?
 

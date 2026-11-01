@@ -1,6 +1,15 @@
 import Foundation
 import SwiftyTube
 
+private struct Unchecked<Value>: @unchecked Sendable {
+    let value: Value
+}
+
+/// For long reads of YouTube's pages, so scrolling doesn't stall while they run.
+func offMain<Value>(_ work: @escaping @Sendable () -> Value) async -> Value {
+    await Task.detached { Unchecked(value: work()) }.value.value
+}
+
 /// Small helpers for reading YouTube's deeply nested JSON.
 enum JSON {
     static func first(_ key: String, in object: Any?) -> Any? {

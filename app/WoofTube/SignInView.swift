@@ -30,7 +30,7 @@ struct SignInView: View {
 /// Signs in to one more account, from the Profile page.
 struct AddAccountSheet: View {
     @EnvironmentObject private var session: Session
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var isReady = false
 

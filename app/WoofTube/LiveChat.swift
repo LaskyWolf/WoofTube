@@ -62,7 +62,7 @@ struct LiveChatSheet: View {
                 LazyVStack(alignment: .leading, spacing: Layout.rowSpacing) {
                     ForEach(model.messages) { message in
                         HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                            CachedImage(url: message.avatar)
+                            CachedImage(url: message.avatar, maxPixels: 96)
                                 .frame(width: 28, height: 28)
                                 .clipShape(.circle)
                                 .accessibilityHidden(true)

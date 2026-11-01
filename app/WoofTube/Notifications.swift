@@ -43,7 +43,7 @@ private struct NotificationSection: Identifiable {
 
 struct NotificationsView: View {
     @EnvironmentObject private var session: Session
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var sections: [NotificationSection] = []
     @State private var isLoading = true
     @State private var errorText: String?
@@ -160,7 +160,7 @@ struct NotificationsView: View {
 private struct NotificationRow: View {
     let item: NotificationItem
     let onOpen: () -> Void
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var showsPlaylists = false
 
     var body: some View {

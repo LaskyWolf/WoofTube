@@ -1,7 +1,7 @@
 import Foundation
 import SwiftyTube
 
-struct LoadedStream {
+struct LoadedStream: @unchecked Sendable {
     let url: String
     let summary: String
     let captions: [YouTubeCaptionTrack]
@@ -110,9 +110,26 @@ enum StreamLoader {
         return response.map { YouTubeWatchParser.captionTracks(from: $0) } ?? []
     }
 
+    private static let cache = StreamCache()
+
+    /// The same address again when it's fresh, and the same request when one is already on its way.
+    static func load(videoId: String, maxHeight: Int) async throws -> LoadedStream {
+        try await cache.stream(videoId: videoId, maxHeight: maxHeight) {
+            try await resolve(videoId: videoId, maxHeight: maxHeight)
+        }
+    }
+
+    static func forget(videoId: String) async {
+        await cache.remove(videoId: videoId)
+    }
+
+    static func forgetAll() async {
+        await cache.removeAll()
+    }
+
     /// `StreamFallback.resolveVideo` returns a 360p combined stream whenever one
     /// exists, so this looks for separate video and audio first.
-    static func load(videoId: String, maxHeight: Int) async throws -> LoadedStream {
+    private static func resolve(videoId: String, maxHeight: Int) async throws -> LoadedStream {
         let tube = InnerTubeClient.wooftube
         var providers = StreamResolveProviders.live
         providers.poTokenProvider = { id in
@@ -200,5 +217,60 @@ enum StreamLoader {
             attempts.append("Fallback: \(error.localizedDescription)")
             throw StreamFailure(attempts: attempts)
         }
+    }
+}
+
+actor StreamCache {
+    private struct Entry {
+        let videoId: String
+        let task: Task<LoadedStream, Error>
+        let started: Date
+    }
+
+    /// YouTube's addresses last for hours, so this is well inside that.
+    private static let lifetime: TimeInterval = 30 * 60
+    private var entries: [String: Entry] = [:]
+
+    func stream(videoId: String, maxHeight: Int, resolve: @escaping @Sendable () async throws -> LoadedStream) async throws -> LoadedStream {
+        let key = "\(videoId)|\(maxHeight)"
+        entries = entries.filter { Date().timeIntervalSince($0.value.started) < Self.lifetime }
+        let task = entries[key]?.task ?? Task { try await resolve() }
+        entries[key] = entries[key] ?? Entry(videoId: videoId, task: task, started: Date())
+        do {
+            let stream = try await task.value
+            // A live stream's address is the live edge, and playing it later would start behind.
+            if stream.isLive { entries[key] = nil }
+            return stream
+        } catch {
+            entries[key] = nil
+            throw error
+        }
+    }
+
+    func remove(videoId: String) {
+        entries = entries.filter { $0.value.videoId != videoId }
+    }
+
+    func removeAll() {
+        entries = [:]
+    }
+
+    static func selfCheck() async {
+        func stream(_ url: String, isLive: Bool = false) -> LoadedStream {
+            LoadedStream(url: url, summary: "", captions: [], trackingURL: nil, isLive: isLive)
+        }
+        let cache = StreamCache()
+        _ = try? await cache.stream(videoId: "a", maxHeight: 1) { stream("first") }
+        let repeated = try? await cache.stream(videoId: "a", maxHeight: 1) { stream("second") }
+        assert(repeated?.url == "first")
+        await cache.remove(videoId: "a")
+        let refreshed = try? await cache.stream(videoId: "a", maxHeight: 1) { stream("third") }
+        assert(refreshed?.url == "third")
+        _ = try? await cache.stream(videoId: "b", maxHeight: 1) { throw URLError(.badURL) }
+        let retried = try? await cache.stream(videoId: "b", maxHeight: 1) { stream("fourth") }
+        assert(retried?.url == "fourth")
+        _ = try? await cache.stream(videoId: "c", maxHeight: 1) { stream("live", isLive: true) }
+        let live = try? await cache.stream(videoId: "c", maxHeight: 1) { stream("fifth") }
+        assert(live?.url == "fifth")
     }
 }

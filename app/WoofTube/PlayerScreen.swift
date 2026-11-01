@@ -7,7 +7,7 @@ struct PlayerOverlay: View {
     static let zoomSource = "player"
 
     let zoom: Namespace.ID
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var dragOffset = CGSize.zero
     @State private var isMiniLeading = false
     @State private var isMiniTop = false
@@ -184,7 +184,7 @@ private struct HandleChevron: Shape {
 /// The video page. It opens with the system zoom from the floating card, which also
 /// gives it the system's swipe down to close.
 struct WatchPage: View {
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showsComments = false
     @State private var pullDistance: CGFloat = 0
@@ -408,7 +408,7 @@ private struct AmbientFrame: View {
             if let frame {
                 Image(uiImage: frame).resizable().scaledToFill().transition(.opacity).id(frame)
             } else {
-                CachedImage(url: poster)
+                CachedImage(url: poster, maxPixels: 320)
             }
         }
         .onChange(of: poster) { frame = nil }
@@ -720,15 +720,11 @@ private struct StoryboardPreview: View {
         let frame = storyboard.frame(at: seconds)
         let scale = Self.width / storyboard.frameSize.width
         let height = storyboard.frameSize.height * scale
-        AsyncImage(url: frame.url) { image in
-            image
-                .resizable()
-                .frame(width: Self.width * CGFloat(storyboard.columns), height: height * CGFloat(storyboard.rows))
-                .offset(x: -Self.width * CGFloat(frame.column), y: -height * CGFloat(frame.row))
-                .frame(width: Self.width, height: height, alignment: .topLeading)
-        } placeholder: {
-            Color.black.opacity(0.4)
-        }
+        CachedImage(url: frame.url?.absoluteString, maxPixels: nil)
+            .frame(width: Self.width * CGFloat(storyboard.columns), height: height * CGFloat(storyboard.rows))
+            .offset(x: -Self.width * CGFloat(frame.column), y: -height * CGFloat(frame.row))
+            .frame(width: Self.width, height: height, alignment: .topLeading)
+            .background(Color.black.opacity(0.4))
         .frame(width: Self.width, height: height)
         .clipShape(.rect(cornerRadius: Layout.cardRadius))
         .allowsHitTesting(false)
@@ -833,7 +829,7 @@ private struct PlayerControls: View {
     @ObservedObject var sleepTimer: SleepTimer
     let isFullscreen: Bool
 
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var showsControls = true
     @State private var showsSleepTimer = false
     @State private var hideTask: Task<Void, Never>?
@@ -1058,7 +1054,7 @@ private struct PlayerControls: View {
             }
             .pickerStyle(.menu)
             Menu("Speed") { speedPicker }
-            Toggle("Autoplay", isOn: $router.autoplay)
+            Toggle("Autoplay", isOn: Bindable(router).autoplay)
             Button(sleepTimer.isActive ? "Sleep Timer · On" : "Sleep Timer…", systemImage: sleepTimer.isActive ? "moon.zzz.fill" : "moon.zzz") {
                 showsSleepTimer = true
             }
@@ -1094,7 +1090,7 @@ private struct RoutePicker: UIViewRepresentable {
 
 private struct WatchDetailsView: View {
     @Binding var showsComments: Bool
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var downloads = DownloadStore.shared
     @State private var showsDescription = false
@@ -1471,7 +1467,7 @@ struct CommentsCard: View {
 
 /// What plays next, apart from YouTube's suggestions below. A long playlist stays short until opened.
 private struct QueueCard: View {
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var showsAll = false
 
     private static let collapsedCount = 4
@@ -1590,7 +1586,7 @@ private struct ChannelSearchContent: View {
     let channelTitle: String
     let morph: Namespace.ID
     let onClose: () -> Void
-    @StateObject private var model = FeedModel()
+    @State private var model = FeedModel()
     @State private var text = ""
     @State private var query = ""
     @FocusState private var isFocused: Bool
@@ -1643,7 +1639,7 @@ private struct ChannelSearchContent: View {
 struct ChannelView: View {
     let channelId: String
 
-    @StateObject private var model = FeedModel()
+    @State private var model = FeedModel()
     @State private var page: YouTubeChannelPage?
     @State private var isSubscribed = false
     @State private var selectedTab: String?

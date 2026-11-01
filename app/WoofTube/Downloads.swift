@@ -401,6 +401,7 @@ final class DownloadStore: ObservableObject {
         lastAddressRefresh = Date()
         let startedIn = generation
         let refresh = Task {
+            await StreamLoader.forget(videoId: job.video.videoId)
             let chosen = UserDefaults.standard.integer(forKey: DownloadSettings.maxHeightKey)
             guard let stream = try? await StreamLoader.load(videoId: job.video.videoId, maxHeight: chosen > 0 ? chosen : queueHeight),
                   let videoURL = stream.videoURL.flatMap(URL.init(string:)),
@@ -750,7 +751,7 @@ struct LibraryDownloadCard: View {
 /// Woof Music's downloads page: the header card, what's downloading, then the saved videos.
 struct DownloadsView: View {
     @ObservedObject private var store = DownloadStore.shared
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @EnvironmentObject private var settings: AppSettings
     @State private var confirmsRemoveAll = false
 

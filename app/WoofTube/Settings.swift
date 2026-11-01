@@ -65,7 +65,7 @@ final class AppSettings: ObservableObject {
 
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
 
     var body: some View {
@@ -127,7 +127,7 @@ struct SettingsView: View {
 /// Woof Music's account page, with the accounts saved on this phone.
 private struct ProfileView: View {
     @EnvironmentObject private var session: Session
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var confirmsSignOut = false
     @State private var isAddingAccount = false
     @ObservedObject private var downloads = DownloadStore.shared
@@ -210,25 +210,25 @@ private struct ProfileView: View {
 }
 
 private struct PlayerSettingsView: View {
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
 
     var body: some View {
         List {
             Section {
-                Picker(selection: $router.maxHeight) {
+                Picker(selection: Bindable(router).maxHeight) {
                     ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
                 } label: {
                     Label("Maximum Quality", systemImage: "sparkles.tv")
                 }
-                Toggle(isOn: $router.autoplay) {
+                Toggle(isOn: Bindable(router).autoplay) {
                     Label("Autoplay", systemImage: "play.square.stack")
                 }
             } footer: {
                 Text("Autoplay starts the first Up Next video when one ends.")
             }
             Section {
-                Toggle(isOn: $router.skipsSponsors) {
+                Toggle(isOn: Bindable(router).skipsSponsors) {
                     Label("Skip Sponsors", systemImage: "forward.end")
                 }
             } footer: {
@@ -317,11 +317,9 @@ private struct DiagnosticsView: View {
     @State private var state = ""
 
     private var report: String {
-        let feedTypes = "Feed content types: " + FeedParser.seenContentTypes.sorted().joined(separator: ", ")
-        let homePosts = "Home posts: YouTube sent \(FeedParser.homePostsSent), app shows \(FeedParser.homePostsShown), in \(FeedParser.homePages) pages"
         let download = DownloadStore.shared.lastReport.map { [$0] } ?? []
         let crashes = "Crash and hang reports: \(CrashReports.saved.count)"
-        return ([stream ?? "No stream", state, crashes, feedTypes, homePosts] + download + player.recentLog).joined(separator: "\n")
+        return ([stream ?? "No stream", state, crashes] + download + player.recentLog).joined(separator: "\n")
     }
 
     var body: some View {

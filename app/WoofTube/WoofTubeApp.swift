@@ -9,7 +9,7 @@ extension InnerTubeClient {
 struct WoofTubeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var session = Session()
-    @StateObject private var router = Router()
+    @State private var router = Router()
     @StateObject private var settings = AppSettings()
 
     var body: some Scene {
@@ -18,12 +18,14 @@ struct WoofTubeApp: App {
                 if session.isSignedIn {
                     // A new identity resets every tab's feeds when the account changes.
                     RootTabs().id(session.generation)
+                } else if session.isRestoring {
+                    Color(.systemBackground).ignoresSafeArea()
                 } else {
                     SignInView()
                 }
             }
             .environmentObject(session)
-            .environmentObject(router)
+            .environment(router)
             .environmentObject(settings)
             .task {
                 await InnerTubeClient.wooftube.updateLocale(YouTubeLocale(
@@ -31,6 +33,9 @@ struct WoofTubeApp: App {
                     hl: Locale.current.language.languageCode?.identifier ?? "en"
                 ))
                 await session.restore()
+                #if DEBUG
+                await StreamCache.selfCheck()
+                #endif
             }
             .alert("Session Expired", isPresented: $session.isExpired) {
                 Button("Sign In Again") {
@@ -96,7 +101,7 @@ enum AppTab: Hashable {
 /// Pushes a channel's page on this tab's navigation stack.
 struct ChannelPageDestination: ViewModifier {
     let tab: AppTab
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
 
     func body(content: Content) -> some View {
         content.navigationDestination(item: Binding(get: { router.channelPage?.tab == tab ? router.channelPage : nil }, set: { router.channelPage = $0 })) { route in
@@ -106,13 +111,13 @@ struct ChannelPageDestination: ViewModifier {
 }
 
 struct RootTabs: View {
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @Environment(\.scenePhase) private var scenePhase
     /// Links the floating card and the video page for the zoom, as Woof Music does for its player.
     @Namespace private var playerZoom
 
     var body: some View {
-        TabView(selection: $router.selectedTab) {
+        TabView(selection: Bindable(router).selectedTab) {
             Tab("Home", systemImage: "house", value: AppTab.home) {
                 HomeView()
             }
@@ -128,13 +133,13 @@ struct RootTabs: View {
         }
         .tabBarMinimizeBehavior(.never)
         .overlay { PlayerOverlay(zoom: playerZoom) }
-        .fullScreenCover(isPresented: $router.isExpanded) {
+        .fullScreenCover(isPresented: Bindable(router).isExpanded) {
             WatchPage()
                 .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
                 .onAppear { router.isWatchPageOnScreen = true }
                 .onDisappear { router.isWatchPageOnScreen = false }
         }
-        .fullScreenCover(item: $router.shortsRoute) { route in
+        .fullScreenCover(item: Bindable(router).shortsRoute) { route in
             ShortsView(model: route.model)
                 .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
                 .onAppear { router.isShortsPageOnScreen = true }

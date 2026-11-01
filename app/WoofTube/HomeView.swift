@@ -33,11 +33,12 @@ struct FeedChip: Identifiable, Hashable {
 
 /// Loads a feed and its next pages for every list in the app.
 @MainActor
-final class FeedModel: ObservableObject {
-    @Published private(set) var items: [FeedItem] = []
-    @Published private(set) var chips: [FeedChip] = []
-    @Published private(set) var isLoading = false
-    @Published private(set) var errorText: String?
+@Observable
+final class FeedModel {
+    private(set) var items: [FeedItem] = []
+    private(set) var chips: [FeedChip] = []
+    private(set) var isLoading = false
+    private(set) var errorText: String?
     private var nextToken: String?
     private var nextQuery: String?
     private(set) var isHome = false
@@ -85,9 +86,12 @@ final class FeedModel: ObservableObject {
         defer { isLoading = false }
         do {
             let json = try await source.fetch()
-            var page = FeedParser.items(in: json)
+            var page = await offMain { FeedParser.items(in: json) }
             isHome = source == .browse(YouTubeFeeds.home)
-            if isHome { FeedParser.noteHomePage(json, items: page) }
+            if isHome {
+                let file = SavedHome.file
+                await offMain { SavedHome.write(json, to: file) }
+            }
             if !keepChips { chips = Self.parseChips(json) }
             nextToken = YouTubeFeedParser.continuation(in: json)
             if isHome { page = await freshHomeRows(from: page) }
@@ -116,13 +120,26 @@ final class FeedModel: ObservableObject {
                 ? tube.search(query: nextQuery ?? "", continuation: token)
                 : tube.browse(continuation: token)) else { return }
             let known = Set(items.map(\.id))
-            let page = FeedParser.items(in: json)
-            if isHome { FeedParser.noteHomePage(json, items: page) }
+            let page = await offMain { FeedParser.items(in: json) }
             let added = (isHome ? SeenVideos.removing(from: page) : page).filter { !known.contains($0.id) }
             items += added
             nextToken = YouTubeFeedParser.continuation(in: json)
             if !added.isEmpty { return }
         }
+    }
+
+    /// Real rows straight away. The next pages wait for the new answer, because these addresses may have expired.
+    func showSavedHome() async {
+        isLoading = true
+        defer { isLoading = false }
+        let file = SavedHome.file
+        guard let json = await offMain({ SavedHome.read(file) }) else { return }
+        let page = await offMain { FeedParser.items(in: json) }
+        guard items.isEmpty else { return }
+        isHome = true
+        chips = Self.parseChips(json)
+        let fresh = SeenVideos.removing(from: page)
+        items = fresh.isEmpty ? page : fresh
     }
 
     /// Falls back to the page as it came, rather than showing nothing to someone who has seen it all.
@@ -132,8 +149,7 @@ final class FeedModel: ObservableObject {
         while fresh.count < Self.freshRowsWanted, skipped < Self.pagesToSkip, let token = nextToken,
               let json = try? await InnerTubeClient.wooftube.browse(continuation: token) {
             skipped += 1
-            let more = FeedParser.items(in: json)
-            FeedParser.noteHomePage(json, items: more)
+            let more = await offMain { FeedParser.items(in: json) }
             nextToken = YouTubeFeedParser.continuation(in: json)
             let known = Set(fresh.map(\.id))
             fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) }
@@ -160,8 +176,8 @@ final class FeedModel: ObservableObject {
                 return await tasks.reduce(into: [Page]()) { $0.append($1) }
             }
         }
-        // Parsed here, because the parser keeps shared notes for Diagnostics.
-        let found = pages.compactMap(\.json).flatMap { FeedParser.items(in: $0).prefix(Self.postsPerChannel) }
+        let perChannel = Self.postsPerChannel
+        let found = await offMain { [pages] in pages.compactMap(\.json).flatMap { FeedParser.items(in: $0).prefix(perChannel) } }
         items = found
             .filter { if case .post = $0 { return true } else { return false } }
             .sorted { Self.age(of: $0) < Self.age(of: $1) }
@@ -347,8 +363,8 @@ struct FilterChips: View {
 
 struct HomeView: View {
     @EnvironmentObject private var session: Session
-    @StateObject private var model = FeedModel()
-    @StateObject private var history = FeedModel()
+    @State private var model = FeedModel()
+    @State private var history = FeedModel()
     @State private var selectedChip: String?
 
     var body: some View {
@@ -364,7 +380,11 @@ struct HomeView: View {
             .tabRoot(title: "Home", tab: .home)
             // Separate tasks, so each part of the page appears as soon as its own answer arrives.
             .task { await session.refreshUnseenNotifications() }
-            .task { if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.home)) } }
+            .task {
+                guard model.items.isEmpty else { return }
+                await model.showSavedHome()
+                await model.load(.browse(YouTubeFeeds.home))
+            }
             .task { if history.items.isEmpty { await history.load(.browse(YouTubeFeeds.history)) } }
         }
     }
@@ -393,8 +413,8 @@ struct HomeView: View {
 
 /// Resumes the latest unfinished video. The small covers swap into the large slot.
 private struct KeepWatchingCard: View {
-    @ObservedObject var history: FeedModel
-    @EnvironmentObject private var router: Router
+    let history: FeedModel
+    @Environment(Router.self) private var router
     @State private var selectedId: String?
 
     private static let shown = 8
@@ -532,9 +552,9 @@ struct SubsView: View {
         case posts = "Posts"
     }
 
-    @StateObject private var model = FeedModel()
-    @StateObject private var posts = FeedModel()
-    @ObservedObject private var subscriptions = Subscriptions.shared
+    @State private var model = FeedModel()
+    @State private var posts = FeedModel()
+    private var subscriptions: Subscriptions { .shared }
     @State private var filter: Filter?
 
     /// A filter can leave a page empty, so it looks a little further before giving up.
@@ -609,7 +629,7 @@ struct ScopedSearchPage: View {
     var params: String?
     /// The watch history lists everything. A channel starts empty, as its own page already lists it.
     var listsWithoutQuery = false
-    @StateObject private var model = FeedModel()
+    @State private var model = FeedModel()
     @State private var text = ""
     @State private var submitted = ""
 
@@ -642,7 +662,7 @@ struct ScopedSearchPage: View {
 
 /// A ScrollView like Woof Music's pages: a List row fires every link inside it at once.
 struct FeedContent<Header: View>: View {
-    @ObservedObject var model: FeedModel
+    let model: FeedModel
     let retry: () async -> Void
     var isCompact = false
     /// Leaves out what a filter doesn't want.
@@ -687,14 +707,14 @@ struct FeedContent<Header: View>: View {
 }
 
 struct FeedRows: View {
-    @ObservedObject var model: FeedModel
+    let model: FeedModel
     var isCompact = false
     /// Set on a playlist the user can edit, to offer removing videos.
     var editablePlaylistId: String?
     /// Set on a playlist, so a tapped video carries on with the ones after it.
     var playlistTitle: String?
     var keeps: ((FeedItem) -> Bool)?
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var pendingRemoval: PendingRemoval?
 
     private struct PendingRemoval {
@@ -794,7 +814,7 @@ struct VideoButton: View {
     var onRemove: (() -> Void)?
     var onRemoveFromPlaylist: (() -> Void)?
     var onPlay: (() -> Void)?
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
 
     private func play() {
         if let onPlay {
@@ -824,7 +844,7 @@ struct VideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
     let onPlay: () -> Void
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
 
     private var details: String {
         [video.channelTitle, video.viewCountText, video.publishedTimeText]
@@ -907,7 +927,7 @@ private struct NewBadge: View {
     let video: YouTubeVideo
     let extras: VideoExtras
     var isCompact = false
-    @ObservedObject private var subscriptions = Subscriptions.shared
+    private var subscriptions: Subscriptions { .shared }
 
     private var isFromFollowedChannel: Bool {
         video.channelId.map { subscriptions.ids.contains($0) } == true
@@ -1022,7 +1042,7 @@ struct CompactVideoRow: View {
 
     var body: some View {
         HStack(spacing: Layout.rowSpacing) {
-            CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
+            CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg", maxPixels: 336)
                 .frame(width: 112, height: 63)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
                 .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
@@ -1101,7 +1121,7 @@ struct Thumbnail: View {
 private struct ShortsShelf: View {
     let title: String
     let videos: [YouTubeVideo]
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1202,7 +1222,7 @@ private struct VideoShelf: View {
 
 private struct PostRow: View {
     let post: CommunityPost
-    @EnvironmentObject private var router: Router
+    @Environment(Router.self) private var router
     @State private var isExpanded = false
     @State private var isLiked: Bool?
     @State private var votedChoice: String?
@@ -1354,7 +1374,7 @@ struct Avatar: View {
     let size: CGFloat
 
     var body: some View {
-        CachedImage(url: url)
+        CachedImage(url: url, maxPixels: Int(size * 3))
         .frame(width: size, height: size)
         .background {
             Color(.secondarySystemFill)

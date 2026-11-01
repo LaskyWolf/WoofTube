@@ -14,6 +14,8 @@ struct SavedAccount: Codable, Identifiable {
 @MainActor
 final class Session: ObservableObject {
     @Published private(set) var isSignedIn = false
+    /// True until the saved sign-in has been looked for, so a signed-in person never sees the sign-in page.
+    @Published private(set) var isRestoring = true
     @Published var isExpired = false
     @Published private(set) var account: AccountInfo?
     @Published var unseenNotifications = 0
@@ -39,10 +41,14 @@ final class Session: ObservableObject {
             accounts = (try? JSONDecoder().decode([SavedAccount].self, from: data)) ?? []
         }
         guard let data = try? store.load(for: key),
-              let auth = try? JSONDecoder().decode(AuthState.self, from: data) else { return }
+              let auth = try? JSONDecoder().decode(AuthState.self, from: data) else {
+            isRestoring = false
+            return
+        }
         currentAuth = auth
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
+        isRestoring = false
         await refreshIfStale(auth)
         await loadAccount()
         openStorageOfCurrentAccount()
@@ -77,6 +83,7 @@ final class Session: ObservableObject {
 
     private func accountChanged() {
         generation += 1
+        Task { await StreamLoader.forgetAll() }
         Subscriptions.shared.reset()
         Task { await Subscriptions.shared.load() }
     }
@@ -143,6 +150,7 @@ final class Session: ObservableObject {
     /// Removes this account from the phone, and moves to another saved one if there is one.
     /// Also clears the web view's cookies, so the next sign-in can pick another account.
     func signOut() async {
+        SavedHome.clear()
         accounts.removeAll { $0.id == currentAccountId || $0.auth == currentAuth }
         saveAccounts()
         await clearWebSignIn()

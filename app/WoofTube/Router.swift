@@ -1,3 +1,4 @@
+import Combine
 import MediaPlayer
 import SwiftUI
 import SwiftyTube
@@ -20,9 +21,10 @@ struct ShortsRoute: Identifiable {
 /// The video being watched. It lives above the tabs, so playback continues
 /// while the user browses with the mini player.
 @MainActor
-final class Router: ObservableObject {
-    @Published private(set) var current: YouTubeVideo?
-    @Published var isExpanded = false {
+@Observable
+final class Router {
+    private(set) var current: YouTubeVideo?
+    var isExpanded = false {
         didSet {
             guard isExpanded != oldValue else { return }
             Orientation.videoPageChanged(isOpen: isExpanded)
@@ -30,61 +32,61 @@ final class Router: ObservableObject {
     }
     /// True from when the video page has appeared until its closing animation ends.
     /// It decides which view holds the one video layer.
-    @Published var isWatchPageOnScreen = false
-    @Published private(set) var queue: [YouTubeVideo] = []
-    @Published var channelRoute: ChannelRoute?
-    @Published var channelPage: ChannelPageRoute?
-    @Published var selectedTab = AppTab.home
+    var isWatchPageOnScreen = false
+    private(set) var queue: [YouTubeVideo] = []
+    var channelRoute: ChannelRoute?
+    var channelPage: ChannelPageRoute?
+    var selectedTab = AppTab.home
     /// The open Shorts page. With `shortsModel` set and this nil, the Short is in the floating card.
-    @Published var shortsRoute: ShortsRoute?
-    @Published private(set) var shortsModel: ShortsModel?
+    var shortsRoute: ShortsRoute?
+    private(set) var shortsModel: ShortsModel?
     /// Like `isWatchPageOnScreen`, for the Shorts player's layer.
-    @Published var isShortsPageOnScreen = false
+    var isShortsPageOnScreen = false
     /// The playlist the queue came from.
-    @Published private(set) var playlistTitle: String?
-    @Published var actionMessage: String?
-    @Published private(set) var details: WatchDetails?
-    @Published private(set) var streamSummary: String?
-    @Published private(set) var loadError: String?
-    @Published private(set) var captions: [YouTubeCaptionTrack] = []
-    @Published private(set) var selectedCaption: String?
-    @Published private(set) var captionCues: [CaptionCue] = []
-    @Published var maxHeight: Int {
+    private(set) var playlistTitle: String?
+    var actionMessage: String?
+    private(set) var details: WatchDetails?
+    private(set) var streamSummary: String?
+    private(set) var loadError: String?
+    private(set) var captions: [YouTubeCaptionTrack] = []
+    private(set) var selectedCaption: String?
+    private(set) var captionCues: [CaptionCue] = []
+    var maxHeight: Int {
         didSet { UserDefaults.standard.set(maxHeight, forKey: Self.maxHeightKey) }
     }
-    @Published var autoplay: Bool {
+    var autoplay: Bool {
         didSet { UserDefaults.standard.set(autoplay, forKey: Self.autoplayKey) }
     }
-    @Published var skipsSponsors: Bool {
+    var skipsSponsors: Bool {
         didSet { UserDefaults.standard.set(skipsSponsors, forKey: Self.skipsSponsorsKey) }
     }
-    @Published private(set) var audioTracks: [AudioTrack] = []
-    @Published private(set) var selectedAudioTrack: String?
-    @Published private(set) var storyboard: Storyboard?
+    private(set) var audioTracks: [AudioTrack] = []
+    private(set) var selectedAudioTrack: String?
+    private(set) var storyboard: Storyboard?
     /// The details request failed, as it does for a download with no connection.
-    @Published private(set) var detailsUnavailable = false
+    private(set) var detailsUnavailable = false
 
     let player = MpvPlayer()
-    private(set) lazy var pictureInPicture: PictureInPicture = {
+    @ObservationIgnored private(set) lazy var pictureInPicture: PictureInPicture = {
         let window = PictureInPicture(player: player)
         window.onFailure = { [weak self] message in self?.actionMessage = message }
         window.onRestore = { [weak self] in self?.isExpanded = true }
         return window
     }()
     /// The window for Shorts only opens by itself, when the app leaves the screen.
-    private lazy var shortsPictureInPicture: PictureInPicture = {
+    @ObservationIgnored private lazy var shortsPictureInPicture: PictureInPicture = {
         let window = PictureInPicture(player: shortsPlayer)
         window.onFailure = { [weak self] message in self?.actionMessage = message }
         window.onRestore = { [weak self] in self?.expandShorts() }
         return window
     }()
     /// Created on the first Short, and kept because mpv isn't torn down.
-    private(set) lazy var shortsPlayer: MpvPlayer = {
+    @ObservationIgnored private(set) lazy var shortsPlayer: MpvPlayer = {
         let player = MpvPlayer()
         player.setProperty("loop-file", "inf")
         return player
     }()
-    private(set) lazy var sleepTimer = SleepTimer { [weak self] in self?.player.setPaused(true) }
+    @ObservationIgnored private(set) lazy var sleepTimer = SleepTimer { [weak self] in self?.player.setPaused(true) }
     static let qualities = [2160, 1440, 1080, 720, 480, 360]
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
@@ -96,8 +98,8 @@ final class Router: ObservableObject {
     private var wasInBackground = false
     private var pendingWatchtime: String?
     private static let watchedAfterSeconds = 30.0
-    @Published private(set) var isLive = false
-    @Published private(set) var liveChatToken: String?
+    private(set) var isLive = false
+    private(set) var liveChatToken: String?
     private var nowPlayingSubscriptions: [Any] = []
     private var sponsorSegments: [ClosedRange<Double>] = []
     private var currentStream: LoadedStream?
@@ -461,7 +463,8 @@ final class Router: ObservableObject {
             return
         }
         guard current?.videoId == videoId else { return }
-        let loaded = WatchDetails(json: json, videoId: videoId)
+        let loaded = await offMain { WatchDetails(json: json, videoId: videoId) }
+        guard current?.videoId == videoId else { return }
         details = loaded
         liveChatToken = JSON.string("continuation", in: JSON.first("liveChatRenderer", in: json))
         async let dislikes = DislikeCounts.fetch(videoId: videoId)
@@ -498,6 +501,11 @@ final class Router: ObservableObject {
         nowPlayingSubscriptions = [
             player.$duration.sink { [weak self] _ in self?.updateNowPlaying() },
             player.$isPaused.sink { [weak self] _ in self?.updateNowPlaying() },
+            // A stream that won't play shouldn't come back from the cache when the video is opened again.
+            player.$errorText.compactMap { $0 }.sink { [weak self] _ in
+                guard let videoId = self?.current?.videoId else { return }
+                Task { await StreamLoader.forget(videoId: videoId) }
+            },
             player.clock.$time.sink { [weak self] time in self?.playbackTick(time) }
         ]
     }
