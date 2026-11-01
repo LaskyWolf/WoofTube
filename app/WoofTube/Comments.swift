@@ -101,7 +101,8 @@ final class CommentsModel: ObservableObject {
         didFailLoading = false
         isLoading = true
         do {
-            let page = CommentsPage(json: try await InnerTubeClient.wooftube.next(continuation: token))
+            let json = try await InnerTubeClient.wooftube.next(continuation: token)
+            let page = await offMain { CommentsPage(json: json) }
             comments = page.comments
             title = page.title
             createParams = page.createParams
@@ -118,7 +119,7 @@ final class CommentsModel: ObservableObject {
             nextToken = token
             return
         }
-        let page = CommentsPage(json: json)
+        let page = await offMain { CommentsPage(json: json) }
         comments += page.comments
         nextToken = page.nextToken
     }
@@ -126,7 +127,8 @@ final class CommentsModel: ObservableObject {
     func loadReplies(of comment: Comment) async {
         guard let token = comment.repliesToken,
               let json = try? await InnerTubeClient.wooftube.next(continuation: token) else { return }
-        update(comment.id) { $0.replies = CommentsPage(json: json).comments }
+        let replies = await offMain { CommentsPage(json: json).comments }
+        update(comment.id) { $0.replies = replies }
     }
 
     func toggleLike(_ comment: Comment) async {
@@ -241,7 +243,7 @@ struct CommentsSheet: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Layout.cardSpacing) {
             if let replyingTo {
                 HStack {
                     Text("Replying to \(replyingTo.author)")
@@ -253,11 +255,11 @@ struct CommentsSheet: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: Layout.chipSpacing) {
                 TextField("Add a comment", text: $draft, axis: .vertical)
                     .lineLimit(1...5)
                     .focused($isComposing)
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, Layout.screenPadding)
                     .padding(.vertical, 10)
                     .glassEffect(.regular, in: .rect(cornerRadius: 20))
                 Button("Send", systemImage: "arrow.up") {
@@ -270,8 +272,8 @@ struct CommentsSheet: View {
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.chipSpacing)
     }
 
     private func reply(to comment: Comment) {

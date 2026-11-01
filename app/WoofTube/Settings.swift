@@ -253,7 +253,7 @@ private struct PlayerSettingsView: View {
                     }
                 }
             } footer: {
-                Text("Uses SponsorBlock's community list, which receives the ID of each video you watch.")
+                Text("Uses SponsorBlock's community list. It receives part of a code shared by many videos, not which one you watch.")
             }
             Section {
                 Toggle(isOn: $showsDislikeCounts) {

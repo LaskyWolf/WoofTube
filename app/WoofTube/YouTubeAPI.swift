@@ -91,11 +91,35 @@ enum YouTubeAPI {
         return json
     }
 
-    /// Opens one of the addresses YouTube gives for reporting playback.
+    /// Opens one of the addresses YouTube gives for reporting playback. These carry the sign-in,
+    /// so they only ever go to YouTube itself and never follow a redirect elsewhere.
     static func ping(_ url: URL) async throws {
+        guard isYouTube(url) else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
         signIn(&request, auth: await InnerTubeClient.wooftube.currentAuth())
-        _ = try await URLSession.shared.data(for: request)
+        _ = try await URLSession.shared.data(for: request, delegate: NoRedirects())
+    }
+
+    private static func isYouTube(_ url: URL) -> Bool {
+        guard url.scheme == "https", let host = url.host() else { return false }
+        return host == "youtube.com" || host.hasSuffix(".youtube.com")
+    }
+
+    static func setLike(_ status: String, videoId: String) async throws {
+        let tube = InnerTubeClient.wooftube
+        switch status {
+        case "LIKE": _ = try await tube.like(videoId: videoId)
+        case "DISLIKE": _ = try await tube.dislike(videoId: videoId)
+        default: _ = try await tube.unlike(videoId: videoId)
+        }
+    }
+
+    static func selfCheck() {
+        assert(isYouTube(URL(string: "https://s.youtube.com/api/stats/watchtime")!))
+        assert(isYouTube(URL(string: "https://www.youtube.com/api/stats/playback")!))
+        assert(!isYouTube(URL(string: "http://www.youtube.com/")!))
+        assert(!isYouTube(URL(string: "https://notyoutube.com/")!))
+        assert(!isYouTube(URL(string: "https://youtube.com.example.org/")!))
     }
 
     private static func signIn(_ request: inout URLRequest, auth: AuthState) {
@@ -114,6 +138,12 @@ enum YouTubeAPI {
         if let sapisid = auth.sapisid {
             request.setValue(SAPISIDAuth.authorizationHeader(sapisid: sapisid, origin: origin), forHTTPHeaderField: "Authorization")
         }
+    }
+}
+
+private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest) async -> URLRequest? {
+        nil
     }
 }
 
@@ -183,7 +213,17 @@ struct WatchDetails {
                   let milliseconds = chapter["timeRangeStartMillis"] as? Double else { return nil }
             return Chapter(title: title, start: milliseconds / 1000)
         }
-        related = watch.related
+        if chapters.isEmpty {
+            let autoPanel = panels.first { JSON.string("panelIdentifier", in: $0) == "engagement-panel-macro-markers-auto-chapters" }
+            let markerList = JSON.first("contents", in: JSON.first("macroMarkersListRenderer", in: autoPanel)) as? [[String: Any]] ?? []
+            chapters = markerList.compactMap { item in
+                guard let marker = item["macroMarkersListItemRenderer"] as? [String: Any],
+                      let title = JSON.text(marker["title"]),
+                      let start = JSON.first("startTimeSeconds", in: marker["onTap"]) as? Double else { return nil }
+                return Chapter(title: title, start: start)
+            }
+        }
+        related = LockupDetails.fixed(watch.related, in: json["contents"])
         commentsToken = watch.commentsContinuation
     }
 }

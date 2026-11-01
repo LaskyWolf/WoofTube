@@ -39,6 +39,9 @@ struct WoofTubeApp: App {
                 GlyphScript.selfCheck()
                 WatchSegments.selfCheck()
                 WatchedChannels.selfCheck()
+                YouTubeAPI.selfCheck()
+                SponsorBlock.selfCheck()
+                LockupDetails.selfCheck()
                 VideoFlavor.selfCheck()
                 #endif
             }

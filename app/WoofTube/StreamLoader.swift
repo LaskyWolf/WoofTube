@@ -13,7 +13,6 @@ struct LoadedStream: @unchecked Sendable {
     var duration: Int?
     var client: YouTubeClient?
     var isLive = false
-    /// Tells YouTube how much was watched, which is what shapes the recommendations.
     var title: String?
     var channelTitle: String?
     var channelId: String?
@@ -108,6 +107,26 @@ enum StreamLoader {
         return response.map { YouTubeWatchParser.captionTracks(from: $0) } ?? []
     }
 
+    /// YouTube's current visionOS app. Older versions get fewer formats and no captions.
+    private static let visionOS = YouTubeClient(
+        clientName: "VISIONOS",
+        clientVersion: "1.04",
+        clientId: 101,
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        useMusicPlayerEndpoint: true,
+        includeUserAgentInContext: true,
+        skipPlayerResponseValidation: true,
+        osName: "visionOS",
+        osVersion: "26.6.0.23O770",
+        deviceMake: "Apple",
+        deviceModel: "RealityDevice17,1"
+    )
+    /// In SwiftyTube's list the other direct clients are refused, or their addresses stop working
+    /// partway through a video. The older visionOS stays in case an account is treated differently.
+    private static let directClients: [YouTubeClient] = [visionOS, .visionOS, .iOS]
+    private static let fallbackChain = directClients.map { FallbackClient(client: $0, skipValidation: $0 == .iOS) }
+        + [FallbackClient(client: .web, skipValidation: true)]
+
     private static let cache = StreamCache()
 
     /// The same address again when it's fresh, and the same request when one is already on its way.
@@ -136,8 +155,7 @@ enum StreamLoader {
 
         var attempts: [String] = []
         var isLive = false
-        for entry in ClientFallbackChain.youtube {
-            let client = entry.client
+        for client in directClients {
             do {
                 let timestamp = client.useSignatureTimestamp ? await providers.signatureTimestamp?() : nil
                 let response: PlayerResponse = try await tube.playerResponse(
@@ -198,14 +216,14 @@ enum StreamLoader {
 
         // Web clients return encrypted URLs. This path decrypts them, but only gives a combined stream.
         do {
-            let request = StreamResolveRequest(videoId: videoId, chain: ClientFallbackChain.youtube)
+            let request = StreamResolveRequest(videoId: videoId, chain: fallbackChain)
             let result = try await StreamFallback.resolveFirstValid(request, using: tube, providers: providers)
             // This path carries no captions, so they come from a plain player request.
-            let captionsResponse: PlayerResponse? = try? await tube.playerResponse(videoId: videoId, client: .web, options: PlayerRequestOptions(signatureTimestamp: nil))
+            let captionTracks = await captions(videoId: videoId)
             return LoadedStream(
                 url: result.muxedStreamUrl ?? result.streamUrl,
                 summary: "\(result.clientName) · \(result.muxedHeight ?? 0)p combined",
-                captions: captionsResponse.map { YouTubeWatchParser.captionTracks(from: $0) } ?? []
+                captions: captionTracks
             )
         } catch {
             attempts.append("Fallback: \(error.localizedDescription)")

@@ -103,7 +103,8 @@ final class ShortsModel: ObservableObject {
     private func loadDetails(of video: YouTubeVideo) async {
         let json = try? await InnerTubeClient.wooftube.next(videoId: video.videoId)
         guard !Task.isCancelled else { return }
-        details = json.map { WatchDetails(json: $0, videoId: video.videoId) }
+        let videoId = video.videoId
+        details = await offMain { json.map { WatchDetails(json: $0, videoId: videoId) } }
         async let dislikes = DislikeCounts.fetch(videoId: video.videoId)
         async let comment = CommentsPage.topComment(token: details?.commentsToken)
         let (dislikeCount, topComment) = await (dislikes, comment)
@@ -116,13 +117,8 @@ final class ShortsModel: ObservableObject {
     func setLike(_ status: String, video: YouTubeVideo) async {
         guard let previous = details?.likeStatus else { return }
         details?.likeStatus = status
-        let tube = InnerTubeClient.wooftube
         do {
-            switch status {
-            case "LIKE": _ = try await tube.like(videoId: video.videoId)
-            case "DISLIKE": _ = try await tube.dislike(videoId: video.videoId)
-            default: _ = try await tube.unlike(videoId: video.videoId)
-            }
+            try await YouTubeAPI.setLike(status, videoId: video.videoId)
         } catch {
             if playingId == video.videoId { details?.likeStatus = previous }
             errorText = error.localizedDescription

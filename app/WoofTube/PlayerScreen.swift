@@ -82,7 +82,7 @@ struct PlayerOverlay: View {
         return ZStack(alignment: .topLeading) {
             AmbientImage(
                 player: miniPlayerObject,
-                poster: miniVideo.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" },
+                poster: miniVideo.map { $0.cover },
                 storyboard: isShort ? nil : router.storyboard,
                 isPaused: isShort ? router.isShortsPageOnScreen : router.isWatchPageOnScreen
             )
@@ -242,7 +242,7 @@ struct WatchPage: View {
     }
 
     private var poster: String? {
-        router.current.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" }
+        router.current.map { $0.cover }
     }
 
     private var video: some View {
@@ -480,13 +480,9 @@ struct PlayerGlyphLabelStyle: LabelStyle {
 
 /// Woof Music's PlayerSkipButtonStyle: a soft disc shows only under the finger.
 struct PlayerPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(.white.opacity(configuration.isPressed ? 0.12 : 0), in: .circle)
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.85)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
@@ -802,9 +798,6 @@ private struct PlayerProgress: View {
         let shownTime = isEditing ? position * total : clock.time
         let chapter = chapters.last { $0.start <= shownTime }
         VStack(spacing: 0) {
-            if isEditing, let storyboard {
-                StoryboardPreview(storyboard: storyboard, seconds: position * total)
-            }
             HStack(alignment: .bottom) {
                 HStack(alignment: .bottom) {
                     if player.isLiveStream {
@@ -855,6 +848,13 @@ private struct PlayerProgress: View {
                         onScrubbing(editing)
                     }
                 )
+            }
+        }
+        // Above the bar without taking up room, so the controls don't move while scrubbing.
+        .overlay(alignment: .top) {
+            if isEditing, let storyboard {
+                StoryboardPreview(storyboard: storyboard, seconds: position * total)
+                    .alignmentGuide(.top) { $0[.bottom] }
             }
         }
         .sensoryFeedback(.selection, trigger: chapter?.start) { _, _ in isEditing }
@@ -1105,7 +1105,7 @@ private struct PlayerControls: View {
                     .font(.system(size: 11, weight: .bold).monospacedDigit())
             }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, Layout.chipSpacing)
                 .padding(.vertical, 3)
                 .background {
                     if player.speed == 1 {
@@ -1338,13 +1338,16 @@ private struct WatchDetailsView: View {
                             ShimmerBlock(width: 90, height: 12)
                         }
                         Spacer(minLength: 0)
-                        ShimmerBlock(width: 96, height: 34, radius: 17)
+                        ShimmerBlock(width: 96, height: 38, radius: 19)
                     }
                     HStack(spacing: 10) {
                         ShimmerFill(radius: 19).frame(height: 38)
                         ForEach(0..<4, id: \.self) { _ in
                             ShimmerBlock(width: 38, height: 38, radius: 19)
                         }
+                    }
+                    ForEach(0..<2, id: \.self) { _ in
+                        ShimmerFill(radius: Layout.sheetRadius).frame(height: 88)
                     }
                 }
                 .shimmerClock()
@@ -1534,7 +1537,7 @@ private struct WatchDetailsView: View {
 
     private func descriptionCard(_ details: WatchDetails) -> some View {
         Button {
-            withAnimation(.snappy) { showsDescription.toggle() }
+            withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { showsDescription.toggle() }
         } label: {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 let metadata = [details.views, details.age ?? router.current?.publishedTimeText, details.date].compactMap { $0 }
@@ -1576,12 +1579,7 @@ private struct WatchDetailsView: View {
         router.setDetails { $0.likeStatus = status }
         Task {
             do {
-                let tube = InnerTubeClient.wooftube
-                switch status {
-                case "LIKE": _ = try await tube.like(videoId: id)
-                case "DISLIKE": _ = try await tube.dislike(videoId: id)
-                default: _ = try await tube.unlike(videoId: id)
-                }
+                try await YouTubeAPI.setLike(status, videoId: id)
             } catch {
                 if router.current?.videoId == id { router.setDetails { $0.likeStatus = previous } }
                 router.actionMessage = error.localizedDescription
@@ -1696,7 +1694,7 @@ private struct QueueCard: View {
             }
             if router.queue.count > Self.collapsedCount {
                 Button(showsAll ? "Show Less" : "Show All") {
-                    withAnimation(.snappy) { showsAll.toggle() }
+                    withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { showsAll.toggle() }
                 }
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity, minHeight: 44)
@@ -1941,7 +1939,7 @@ struct ChannelView: View {
 
     /// Stands in for the whole header, so the real buttons only ever appear in their final place.
     private var loadingHeader: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: Layout.menuRowSpacing) {
             ShimmerBlock(width: Layout.avatarLarge, height: Layout.avatarLarge, radius: Layout.avatarLarge / 2)
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 ShimmerBlock(width: 90, height: 13)
@@ -1949,7 +1947,9 @@ struct ChannelView: View {
                 ShimmerBlock(width: 110, height: 15)
             }
         }
-        .padding(Layout.screenPadding)
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, ChannelBanner.contentInset)
+        .padding(.bottom, Layout.screenPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .shimmerClock()
         .accessibilityHidden(true)
@@ -2020,7 +2020,7 @@ struct ChannelView: View {
     private func load() async {
         defer { isLoading = false }
         guard page == nil, let json = try? await InnerTubeClient.wooftube.browse(browseId: channelId) else { return }
-        page = YouTubeChannelParser.channelPage(in: json)
+        page = await offMain { YouTubeChannelParser.channelPage(in: json) }
         avatar = Self.avatarURL(in: json)
         isSubscribed = JSON.first("subscribed", in: json) as? Bool == true || Subscriptions.shared.ids.contains(channelId)
         if let player = JSON.first("channelVideoPlayerRenderer", in: json) as? [String: Any], let id = player["videoId"] as? String {

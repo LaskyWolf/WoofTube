@@ -140,7 +140,6 @@ extension GlyphScript {
         bits: burst(4, shape: .symbol("sparkle"), inks: [.color(.yellow), .color(.white)], spread: 120, reach: 18, stagger: 0.1, life: 0.55, size: 7)
     )
     static let nextCard = GlyphScript(keys: [Key(0, s: 0.85, y: 8), Key(0.22, s: 1.05, y: -3), Key(0.42, s: 1)])
-    static let quarterTurn = GlyphScript(keys: [Key(0, s: 1), Key(0.14, s: 0.75, r: 60), Key(0.25, s: 1, r: 90)])
 
     // The video page
     /// A different trick each time, and now and then the emoji of what the video is about.

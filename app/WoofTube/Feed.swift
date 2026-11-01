@@ -175,6 +175,12 @@ final class Subscriptions {
 }
 
 extension YouTubeVideo {
+    static func cover(of videoId: String) -> String {
+        "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg"
+    }
+
+    var cover: String { thumbnailURL ?? Self.cover(of: videoId) }
+
     /// True when YouTube's "3 hours ago" counts in seconds, minutes or hours, so under a day.
     // ponytail: reads English and Italian, the languages in use. Other languages show no New badge.
     /// Out today, not live and not opened yet.
@@ -187,6 +193,78 @@ extension YouTubeVideo {
     }
 
     private static let recentUnits: Set<String> = ["second", "seconds", "minute", "minutes", "hour", "hours", "secondo", "secondi", "minuto", "minuti", "ora", "ore"]
+}
+
+/// SwiftyTube sorts a lockup's rows by English words, which fails in other languages and on "208M".
+/// Where a part sits says what it is, and YouTube's rows no longer say much else.
+enum LockupDetails {
+    static func fixed(_ videos: [YouTubeVideo], in node: Any?) -> [YouTubeVideo] {
+        var lockups: [String: [String: Any]] = [:]
+        collect(node, into: &lockups)
+        return videos.map { video in lockups[video.videoId].map { fixed(video, lockup: $0) } ?? video }
+    }
+
+    private static func collect(_ node: Any?, into lockups: inout [String: [String: Any]]) {
+        if let array = node as? [Any] {
+            array.forEach { collect($0, into: &lockups) }
+        } else if let dict = node as? [String: Any] {
+            for (key, value) in dict {
+                if key == "lockupViewModel", let lockup = value as? [String: Any], let id = lockup["contentId"] as? String {
+                    lockups[id] = lockup
+                } else if key == "shortsLockupViewModel", let lockup = value as? [String: Any], let id = JSON.string("videoId", in: lockup["onTap"]) {
+                    lockups[id] = lockup
+                } else {
+                    collect(value, into: &lockups)
+                }
+            }
+        }
+    }
+
+    private static func fixed(_ original: YouTubeVideo, lockup: [String: Any]) -> YouTubeVideo {
+        var video = original
+        if video.thumbnailURL == nil, let sources = JSON.first("sources", in: lockup["thumbnailViewModel"]) as? [[String: Any]] {
+            video.thumbnailURL = sources.last?["url"] as? String
+        }
+        if video.channelId == nil, let id = JSON.string("browseId", in: JSON.first("decoratedAvatarViewModel", in: lockup)), id.hasPrefix("UC") {
+            video.channelId = id
+        }
+        let rows = (JSON.first("metadataRows", in: lockup["metadata"]) as? [[String: Any]] ?? []).map { row in
+            (row["metadataParts"] as? [[String: Any]] ?? []).compactMap { JSON.text($0["text"]) }
+        }
+        // A row of two parts is the views and the age, unless its first part is the linked channel.
+        guard let last = rows.last, last.count == 2, original.channelId == nil || last[0] != original.channelTitle else { return video }
+        video.viewCountText = last[0]
+        video.publishedTimeText = last[1]
+        if rows.count == 1 {
+            if original.channelId == nil { video.channelTitle = nil }
+        } else if rows[0].count == 1 {
+            video.channelTitle = rows[0][0]
+        }
+        return video
+    }
+
+    static func selfCheck() {
+        func row(_ parts: String...) -> [String: Any] {
+            ["metadataParts": parts.map { ["text": ["content": $0]] }]
+        }
+        func lockup(_ rows: [[String: Any]]) -> [String: Any] {
+            ["metadata": ["metadataRows": rows]]
+        }
+        let video = YouTubeVideo(videoId: "a", title: "", isLive: false, isShort: false)
+        let related = fixed(video, lockup: lockup([row("Rick Astley"), row("208M", "17y ago")]))
+        assert(related.channelTitle == "Rick Astley" && related.viewCountText == "208M" && related.publishedTimeText == "17y ago")
+        var misread = video
+        misread.channelTitle = "10 Mln di visualizzazioni"
+        let channelTab = fixed(misread, lockup: lockup([row("10 Mln di visualizzazioni", "2 anni fa")]))
+        assert(channelTab.channelTitle == nil && channelTab.publishedTimeText == "2 anni fa")
+        // Rows that don't fit stay as SwiftyTube read them.
+        misread.viewCountText = "1K watching"
+        assert(fixed(misread, lockup: lockup([row("Someone"), row("1K watching")])).viewCountText == "1K watching")
+        var linked = video
+        linked.channelId = "UCx"
+        linked.channelTitle = "Someone"
+        assert(fixed(linked, lockup: lockup([row("Someone", "5 views")])).viewCountText == nil)
+    }
 }
 
 /// Reads a page in display order and keeps each kind of content.
@@ -227,10 +305,6 @@ enum FeedParser {
         }
         guard let dict = node as? [String: Any] else { return }
 
-        for key in ["richItemRenderer", "richSectionRenderer"] {
-            if let content = (dict[key] as? [String: Any])?["content"] as? [String: Any] {
-            }
-        }
         if let key = shelfKeys.first(where: { dict[$0] != nil }) {
             appendShelf(dict[key], into: &items)
         } else if postKeys.contains(where: { dict[$0] != nil }) {
@@ -252,8 +326,8 @@ enum FeedParser {
         for (key, value) in shelf where !skippedKeys.contains(key) {
             collect(value, into: &inner)
         }
-        let title = JSON.text(shelf["title"]) ?? JSON.text(shelf["header"])
-        let videos = YouTubeFeedParser.videos(in: shelf)
+        let title = JSON.text(shelf["title"]) ?? JSON.text(shelf["header"]) ?? JSON.text(JSON.first("headline", in: shelf["header"]))
+        let videos = LockupDetails.fixed(YouTubeFeedParser.videos(in: shelf), in: shelf)
         // YouTube's own list of your channels is a shelf with no videos.
         items += inner.filter {
             switch $0 {
@@ -270,7 +344,7 @@ enum FeedParser {
     }
 
     private static func appendVideoOrPlaylist(_ dict: [String: Any], into items: inout [FeedItem]) {
-        if let video = YouTubeFeedParser.videos(in: dict).first {
+        if let video = LockupDetails.fixed(YouTubeFeedParser.videos(in: dict), in: dict).first {
             if video.isShort {
                 items.append(.shorts(title: nil, [video]))
             } else {
@@ -284,9 +358,25 @@ enum FeedParser {
                     setVideoId: JSON.string("setVideoId", in: dict)
                 )))
             }
-        } else if let playlist = YouTubeFeedParser.playlists(in: dict).first {
+        } else if let playlist = YouTubeFeedParser.playlists(in: dict).first ?? show(in: dict) {
             items.append(.playlist(playlist))
         }
+    }
+
+    /// A channel's series. SwiftyTube leaves these out, though they open like any playlist.
+    private static func show(in dict: [String: Any]) -> YouTubePlaylist? {
+        guard let lockup = dict["lockupViewModel"] as? [String: Any],
+              lockup["contentType"] as? String == "LOCKUP_CONTENT_TYPE_SHOW",
+              let id = lockup["contentId"] as? String else { return nil }
+        let sources = JSON.first("sources", in: lockup["contentImage"]) as? [[String: Any]]
+        return YouTubePlaylist(
+            playlistId: id,
+            title: JSON.text(JSON.first("title", in: lockup["metadata"])) ?? "",
+            thumbnailURL: sources?.last?["url"] as? String,
+            videoCountText: JSON.string("text", in: JSON.first("thumbnailBadgeViewModel", in: lockup)),
+            channelTitle: nil,
+            channelId: nil
+        )
     }
 
     private static func feedbackActions(in node: Any?) -> [FeedbackAction] {

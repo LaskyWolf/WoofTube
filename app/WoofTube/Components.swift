@@ -56,7 +56,7 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
     @ViewBuilder var buttons: () -> Buttons
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: Layout.menuRowSpacing) {
             cover()
                 .frame(width: artSize, height: artSize)
                 .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
@@ -192,7 +192,7 @@ struct VideoPoster: View {
 
     var body: some View {
         if !player.isVideoReady, let video {
-            CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
+            CoverImage(url: video.cover)
         }
     }
 }
@@ -268,6 +268,12 @@ enum ImageStore {
         configuration.requestCachePolicy = .returnCacheDataElseLoad
         return URLSession(configuration: configuration)
     }()
+
+    /// Another account's covers say what it watched.
+    static func clear() {
+        cache.removeAllObjects()
+        session.configuration.urlCache?.removeAllCachedResponses()
+    }
 
     private static func key(_ url: String, _ maxPixels: Int?) -> NSString {
         "\(url)|\(maxPixels ?? 0)" as NSString
@@ -369,7 +375,7 @@ struct ShimmerFill: View {
         } else if let sharedPhase {
             fill(phase: sharedPhase)
         } else {
-            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: UIAccessibility.isReduceMotionEnabled)) { timeline in
                 fill(phase: shimmerPhase(at: timeline.date))
             }
         }
@@ -411,7 +417,7 @@ extension EnvironmentValues {
 extension View {
     /// Drives every ShimmerFill inside from one timeline, instead of one per block.
     func shimmerClock() -> some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: UIAccessibility.isReduceMotionEnabled)) { timeline in
             environment(\.shimmerPhase, shimmerPhase(at: timeline.date))
         }
     }

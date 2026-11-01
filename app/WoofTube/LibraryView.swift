@@ -117,7 +117,7 @@ struct LibraryView: View {
     private func loadPlaylists() async {
         let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
         // A failed refresh leaves the list on screen.
-        if let json { playlists = YouTubeFeedParser.playlists(in: json) }
+        if let json { playlists = await offMain { YouTubeFeedParser.playlists(in: json) } }
         isLoadingPlaylists = false
         for playlist in playlists where !LibraryPlaylists.isHidden(playlist.playlistId) {
             if await LibraryPlaylists.isMusicOnly(playlist) {
@@ -160,7 +160,7 @@ struct LibraryView: View {
 
     /// Built from the video's id, because YouTube sends some list entries with an unusable picture.
     private func covers(_ videos: [YouTubeVideo]) -> [String] {
-        videos.prefix(2).map { "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" }
+        videos.prefix(2).map { YouTubeVideo.cover(of: $0.videoId) }
     }
 
     /// The hidden Liked Videos playlist has a cover of its own, for when its videos don't load.
@@ -288,7 +288,7 @@ enum LibraryPlaylists {
         var checks = UserDefaults.standard.dictionary(forKey: checksKey) as? [String: Bool] ?? [:]
         if let known = checks[key] { return known }
         guard let json = try? await FeedSource.browse(YouTubeFeeds.playlistBrowseId(id)).fetch() else { return false }
-        let videos = YouTubeFeedParser.videos(in: json)
+        let videos = await offMain { YouTubeFeedParser.videos(in: json) }
         let step = max(videos.count / sampleSize, 1)
         let sample = stride(from: 0, to: videos.count, by: step).prefix(sampleSize).map { videos[$0] }
         let answers = await withTaskGroup(of: Bool?.self) { group in
@@ -405,7 +405,7 @@ private struct HistoryStrip: View {
 
     private static let coverWidth: CGFloat = 150
     private static let shown = 20
-    private static let padding: CGFloat = 12
+    private static let padding = Layout.rowSpacing
 
     var body: some View {
         if model.isLoading || !model.videosAndShorts.isEmpty {
@@ -429,15 +429,16 @@ private struct HistoryStrip: View {
                 .padding(.horizontal, Self.padding)
 
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: 10) {
+                    LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
                         if model.videosAndShorts.isEmpty {
                             ForEach(0..<3, id: \.self) { _ in
                                 VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                                     ShimmerBlock(width: Self.coverWidth, height: Self.coverWidth * 9 / 16, radius: Layout.tileRadius)
-                                    LoadingLine(height: 12)
-                                    LoadingLine(height: 12, shortBy: 40)
+                                    LoadingLine(height: 14)
+                                    LoadingLine(height: 14, shortBy: 40)
                                 }
                                 .frame(width: Self.coverWidth)
+                                .shimmerClock()
                             }
                         }
                         ForEach(Array(model.videosAndShorts.prefix(Self.shown)), id: \.videoId) { video in
@@ -446,7 +447,6 @@ private struct HistoryStrip: View {
                     }
                     .padding(.horizontal, Self.padding)
                 }
-                .shimmerClock()
             }
             .padding(.vertical, Self.padding)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -462,7 +462,7 @@ private struct HistoryStrip: View {
             router.play(video)
         } label: {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
+                CoverImage(url: video.cover)
                     .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
                     .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
                     .downloadBadge(video.videoId)

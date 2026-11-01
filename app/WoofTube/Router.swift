@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import CryptoKit
 import MediaPlayer
 import SwiftUI
 import SwiftyTube
@@ -725,16 +726,36 @@ extension Int {
     }
 }
 
-/// SponsorBlock's community list of sponsor segments. It receives the video ID, so it's opt-in.
+/// SponsorBlock's community list of sponsor segments. It's opt-in, and it only receives the start
+/// of a code many videos share, so it answers for all of them and can't tell which one is playing.
 enum SponsorBlock {
     static func segments(videoId: String) async -> [ClosedRange<Double>] {
-        guard let url = URL(string: "https://sponsor.ajay.app/api/skipSegments?videoID=\(videoId)&category=sponsor"),
+        guard let url = URL(string: "https://sponsor.ajay.app/api/skipSegments/\(hashPrefix(of: videoId))?category=sponsor"),
               let (data, _) = try? await URLSession.shared.data(from: url),
               let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
-        return entries.compactMap { entry in
-            guard let segment = entry["segment"] as? [Double], segment.count == 2, segment[0] < segment[1] else { return nil }
+        return segments(in: entries, videoId: videoId)
+    }
+
+    private static func hashPrefix(of videoId: String) -> String {
+        SHA256.hash(data: Data(videoId.utf8)).prefix(2).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func segments(in entries: [[String: Any]], videoId: String) -> [ClosedRange<Double>] {
+        let entry = entries.first { $0["videoID"] as? String == videoId }
+        return (entry?["segments"] as? [[String: Any]] ?? []).compactMap { item in
+            guard let segment = item["segment"] as? [Double], segment.count == 2, segment[0] < segment[1] else { return nil }
             return segment[0]...segment[1]
         }
+    }
+
+    static func selfCheck() {
+        assert(hashPrefix(of: "dQw4w9WgXcQ") == "5f6b")
+        let entries: [[String: Any]] = [
+            ["videoID": "other", "segments": [["segment": [1.0, 2.0]]]],
+            ["videoID": "mine", "segments": [["segment": [3.0, 4.0]], ["segment": [5.0, 5.0]]]]
+        ]
+        assert(segments(in: entries, videoId: "mine") == [3.0...4.0])
+        assert(segments(in: entries, videoId: "none").isEmpty)
     }
 }
 

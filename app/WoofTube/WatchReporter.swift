@@ -62,6 +62,9 @@ struct WatchSegments {
 final class WatchReporter {
     private let sessionId = WatchReporter.makeSessionId()
     private var watchtimeURL: String?
+    /// Sent once the video really plays, so opening one doesn't count as watching it.
+    private var playbackURL: String?
+    private var playerStatus: String?
     private var segments = WatchSegments()
     private var unanswered = SearchSettings.isIncognito ? 0 : 3
     /// What each place says, in seconds. Exact, unlike the history's whole percent.
@@ -98,7 +101,7 @@ final class WatchReporter {
     func summary(local: Double, duration: Double?) -> String {
         func text(_ time: Double?) -> String { time?.clockText ?? "–" }
         let percent = historyProgress.map { "\(Int($0 * 100))%" } ?? "–"
-        return "Handoff: phone \(text(local)), next \(text(nextSeconds)), player \(text(playerSeconds)), "
+        return "Handoff: phone \(text(local)), next \(text(nextSeconds)), player \(playerStatus ?? "–") \(text(playerSeconds)), "
             + "history \(text(historySeconds)) \(percent), still waiting \(unanswered), used \(text(position(local: local, duration: duration)))"
     }
 
@@ -121,6 +124,10 @@ final class WatchReporter {
     }
 
     func tick(_ time: Double) {
+        if let playbackURL {
+            send(playbackURL, ["cmt": Self.seconds(time)])
+            self.playbackURL = nil
+        }
         if let segment = segments.advance(to: time) { report(segment) }
     }
 
@@ -130,12 +137,17 @@ final class WatchReporter {
 
     private func start(videoId: String) async {
         defer { unanswered -= 1 }
-        let body: [String: Any] = ["videoId": videoId, "contentCheckOk": true, "racyCheckOk": true]
+        var body: [String: Any] = ["videoId": videoId, "contentCheckOk": true, "racyCheckOk": true]
+        // Without this, YouTube answers the website's client that the video is unavailable.
+        if let timestamp = await StreamResolveProviders.live.signatureTimestamp?() {
+            body["playbackContext"] = ["contentPlaybackContext": ["signatureTimestamp": timestamp, "html5Preference": "HTML5_PREF_WANTS"]]
+        }
         let response = try? await YouTubeAPI.post("player", body: body)
+        playerStatus = JSON.string("status", in: response?["playabilityStatus"])
         playerSeconds = JSON.first("startSeconds", in: response?["playerConfig"]) as? Double
         let tracking = response?["playbackTracking"] as? [String: Any]
         watchtimeURL = JSON.string("baseUrl", in: tracking?["videostatsWatchtimeUrl"])
-        send(JSON.string("baseUrl", in: tracking?["videostatsPlaybackUrl"]), ["cmt": "0"])
+        playbackURL = JSON.string("baseUrl", in: tracking?["videostatsPlaybackUrl"])
     }
 
     private func report(_ segment: (start: Double, end: Double)) {
@@ -144,7 +156,7 @@ final class WatchReporter {
     }
 
     private func send(_ address: String?, _ values: [String: String]) {
-        guard let address, var components = URLComponents(string: address) else { return }
+        guard !SearchSettings.isIncognito, let address, var components = URLComponents(string: address) else { return }
         let added = values.merging(["ver": "2", "cpn": sessionId, "el": "detailpage"]) { first, _ in first }
         components.queryItems = (components.queryItems ?? []).filter { added[$0.name] == nil }
             + added.map { URLQueryItem(name: $0.key, value: $0.value) }

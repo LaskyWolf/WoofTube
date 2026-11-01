@@ -428,7 +428,7 @@ final class DownloadStore: ObservableObject {
         } else {
             fraction = Double(job.finished.count) / Double(job.chunks.count)
         }
-        if abs(fraction - active[0].fraction) >= 0.005 || job.isComplete {
+        if abs(fraction - active[0].fraction) >= 0.01 || job.isComplete {
             active[0].fraction = min(fraction, 1)
         }
     }
@@ -740,7 +740,7 @@ struct LibraryDownloadCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: store.batchFraction)
+        .animation(.linear(duration: 0.2), value: store.batchFraction)
     }
 
     private func symbol(_ batch: DownloadStore.Batch) -> String {
@@ -770,7 +770,7 @@ struct DownloadsView: View {
     @State private var confirmsRemoveAll = false
 
     private var videos: [YouTubeVideo] { store.items.map(\.video) }
-    private var cover: String? { videos.first.map { "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" } }
+    private var cover: String? { videos.first.map { YouTubeVideo.cover(of: $0.videoId) } }
     private var size: String { ByteCountFormatter.string(fromByteCount: store.storageBytes, countStyle: .file) }
 
     private var meta: String {

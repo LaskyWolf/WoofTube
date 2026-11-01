@@ -115,7 +115,7 @@ final class FeedModel {
             if items.isEmpty {
                 withAnimation(.easeOut(duration: 0.25)) { items = page }
             } else {
-                items = page
+                withTransaction(\.disablesAnimations, true) { items = page }
             }
             if case .search(let query, _) = source { nextQuery = query } else { nextQuery = nil }
             errorText = nil
@@ -512,7 +512,7 @@ private struct KeepWatchingCard: View {
                     HStack(spacing: Layout.chipSpacing) {
                         ForEach(others, id: \.video.videoId) { entry in
                             Button {
-                                withAnimation(.snappy) { selectedId = entry.video.videoId }
+                                withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { selectedId = entry.video.videoId }
                             } label: {
                                 thumb(entry).frame(width: Self.smallThumbWidth)
                             }
@@ -552,7 +552,7 @@ private struct KeepWatchingCard: View {
 
     private var loading: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            ShimmerBlock(width: 120, height: 18)
+            ShimmerBlock(width: 120, height: 22)
             HStack(spacing: Layout.rowSpacing) {
                 ShimmerFill(radius: Layout.tileRadius)
                     .aspectRatio(16 / 9, contentMode: .fit)
@@ -714,7 +714,7 @@ struct SubsView: View {
         let fresh = (relevantVideos + model.videos.filter(\.isRecent)).filter {
             !$0.isLive && !SeenVideos.contains($0.videoId) && known.insert($0.videoId).inserted
         }
-        withAnimation { newVideos = Array(fresh.prefix(Self.newVideosShown)) }
+        withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { newVideos = Array(fresh.prefix(Self.newVideosShown)) }
     }
 
     private func reload() async {
@@ -854,7 +854,7 @@ struct FeedRows: View {
         let shown = keeps.map { model.items.filter($0) } ?? model.items
         ForEach(shown) { item in
             row(item)
-                .transition(.opacity.combined(with: .offset(y: 24)))
+                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 24)), removal: .opacity))
                 .onScrollVisibilityChange(threshold: 0.6) { isVisible in
                     if isVisible, model.isHome { SeenVideos.mark(item) }
                 }
@@ -940,6 +940,7 @@ struct VideoButton: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
     var isCompact = false
+    var isNarrow = false
     var onRemove: (() -> Void)?
     var onRemoveFromPlaylist: (() -> Void)?
     var onPlay: (() -> Void)?
@@ -961,7 +962,7 @@ struct VideoButton: View {
                 }
                 .buttonStyle(RowPressStyle())
             } else {
-                VideoRow(video: video, extras: extras, onPlay: play)
+                VideoRow(video: video, extras: extras, isNarrow: isNarrow, onPlay: play)
             }
         }
         .videoMenu(video, feedback: extras.feedback, collaborators: extras.collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist)
@@ -972,6 +973,7 @@ struct VideoButton: View {
 struct VideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
+    var isNarrow = false
     let onPlay: () -> Void
     @Environment(Router.self) private var router
 
@@ -981,14 +983,15 @@ struct VideoRow: View {
             .joined(separator: " · ")
     }
 
+    private var hasAvatar: Bool {
+        extras.collaborators.count > 1 || video.channelAvatarURL != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: onPlay) {
                 Thumbnail(url: video.thumbnailURL, videoId: video.videoId, showsDownload: false)
-                    .overlay(alignment: .bottom) {
-                        LinearGradient(colors: [.clear, Color(.systemBackground)], startPoint: .top, endPoint: .bottom)
-                            .frame(height: ShortCard.fadeHeight)
-                    }
+                    .fadesAtBottom()
                     .overlay { WatchProgressLine(video: video, extras: extras) }
                     .overlay(alignment: .topTrailing) {
                         HStack(spacing: 0) {
@@ -1008,7 +1011,7 @@ struct VideoRow: View {
                         VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                             Text(video.title)
                                 .font(.subheadline.weight(.medium))
-                                .lineLimit(2)
+                                .lineLimit(2, reservesSpace: isNarrow)
                                 .multilineTextAlignment(.leading)
                             HStack(spacing: Layout.chipSpacing) {
                                 Text(details)
@@ -1016,7 +1019,7 @@ struct VideoRow: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
-                                VoteLine(videoId: video.videoId).fixedSize()
+                                if !isNarrow { VoteLine(videoId: video.videoId).fixedSize() }
                             }
                         }
                         Spacer(minLength: 0)
@@ -1024,9 +1027,10 @@ struct VideoRow: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(RowPressStyle())
+                .padding(.top, hasAvatar ? ShortCard.avatarSize / 2 + Layout.cardSpacing : 0)
             }
             .padding(.horizontal, Layout.rowPadding)
-            .padding(.top, -ShortCard.avatarSize / 2)
+            .padding(.top, hasAvatar ? -ShortCard.avatarSize / 2 : Layout.chipSpacing)
         }
     }
 
@@ -1182,7 +1186,7 @@ struct CompactVideoRow: View {
 
     var body: some View {
         HStack(spacing: Layout.rowSpacing) {
-            CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg", maxPixels: 336)
+            CoverImage(url: video.cover, maxPixels: 336)
                 .frame(width: 112, height: 63)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
                 .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
@@ -1245,14 +1249,16 @@ struct LoadingRows: View {
             ShimmerFill(radius: Layout.tileRadius).aspectRatio(16 / 9, contentMode: .fit)
             HStack(alignment: .top, spacing: Layout.chipSpacing) {
                 ShimmerBlock(width: ShortCard.avatarSize, height: ShortCard.avatarSize, radius: ShortCard.avatarSize / 2)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
                 VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                     LoadingLine(height: 15)
                     LoadingLine(height: 15, shortBy: 90)
                     LoadingLine(height: 11, shortBy: 150)
                 }
+                .padding(.top, ShortCard.avatarSize / 2 + Layout.cardSpacing)
             }
             .padding(.horizontal, Layout.rowPadding)
-            .padding(.top, Layout.chipSpacing)
+            .padding(.top, -ShortCard.avatarSize / 2)
         }
         .padding(.horizontal, Layout.screenPadding)
         .padding(.vertical, Layout.rowSpacing)
@@ -1273,7 +1279,7 @@ struct LoadingRows: View {
 
     private var shortsShelf: some View {
         VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-            ShimmerBlock(width: 90, height: 20)
+            ShimmerBlock(width: 90, height: 25)
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.top, Layout.chipSpacing)
             ScrollView(.horizontal) {
@@ -1343,7 +1349,7 @@ struct LoadingTextRows: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing + Layout.rowPadding) {
             ForEach(0..<6, id: \.self) { _ in
-                HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                HStack(alignment: .top, spacing: showsThumbnail ? Layout.chipSpacing : Layout.rowSpacing) {
                     ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
                     VStack(alignment: .leading, spacing: Layout.rowPadding) {
                         LoadingLine(height: 12, shortBy: 80)
@@ -1374,7 +1380,7 @@ struct Thumbnail: View {
     var body: some View {
         Color(.secondarySystemFill)
             .aspectRatio(aspect, contentMode: .fit)
-            .overlay { CachedImage(url: url ?? "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg") }
+            .overlay { CachedImage(url: url ?? YouTubeVideo.cover(of: videoId)) }
             .overlay(alignment: .topTrailing) {
                 if showsDownload { DownloadedBadge(videoId: videoId) }
             }
@@ -1422,10 +1428,7 @@ private struct ShortCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: Self.coverAspect)
-                .overlay(alignment: .bottom) {
-                    LinearGradient(colors: [.clear, Color(.systemBackground)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: Self.fadeHeight)
-                }
+                .fadesAtBottom()
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
                 .videoZoomSource(video.videoId)
             HStack(spacing: Layout.chipSpacing) {
@@ -1445,6 +1448,19 @@ private struct ShortCard: View {
         .contentShape(.rect)
         .task {
             if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
+        }
+    }
+}
+
+private extension View {
+    /// See-through at the bottom edge, so it blends into any background, such as the player's.
+    func fadesAtBottom() -> some View {
+        mask {
+            VStack(spacing: 0) {
+                Color.black
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: ShortCard.fadeHeight)
+            }
         }
     }
 }
@@ -1490,9 +1506,9 @@ private struct LoadingNewVideos: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             HStack {
-                ShimmerBlock(width: 100, height: 18)
+                ShimmerBlock(width: 100, height: 22)
                 Spacer()
-                ShimmerBlock(width: 50, height: 20, radius: 10)
+                ShimmerBlock(width: 50, height: 22, radius: 11)
             }
             .padding(.horizontal, Layout.rowSpacing)
             ScrollView(.horizontal) {
@@ -1548,7 +1564,7 @@ private struct NewVideoRibbon: View {
     static let avatarSize: CGFloat = 32
     private static let fadeHeight: CGFloat = 34
 
-    private var cover: String { video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg" }
+    private var cover: String { video.cover }
     private var cardColor: Color { tint ?? Color(.systemGray3) }
 
     var body: some View {
@@ -1660,7 +1676,7 @@ private struct VideoShelf: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
                     ForEach(videos, id: \.videoId) { video in
-                        VideoButton(video: video).frame(width: 280)
+                        VideoButton(video: video, isNarrow: true).frame(width: 280)
                     }
                 }
                 .padding(.horizontal, Layout.screenPadding)

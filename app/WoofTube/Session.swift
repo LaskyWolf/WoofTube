@@ -50,6 +50,7 @@ final class Session: ObservableObject {
         isSignedIn = true
         isRestoring = false
         await refreshIfStale(auth)
+        await fillVisitorData()
         await loadAccount()
         openStorageOfCurrentAccount()
     }
@@ -59,6 +60,7 @@ final class Session: ObservableObject {
         save(auth)
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
+        await fillVisitorData()
         await loadAccount()
         if currentAccountId == nil {
             try? await Task.sleep(for: Self.accountRetryDelay)
@@ -77,12 +79,19 @@ final class Session: ObservableObject {
         await InnerTubeClient.wooftube.updateAuth(saved.auth)
         openStorage(of: saved.id)
         await refreshIfStale(saved.auth)
+        await fillVisitorData()
         await loadAccount()
         accountChanged()
     }
 
+    private func clearAccountTraces() {
+        HTTPCookieStorage.shared.removeCookies(since: .distantPast)
+        ImageStore.clear()
+    }
+
     private func accountChanged() {
         generation += 1
+        clearAccountTraces()
         Task { await StreamLoader.forgetAll() }
         Subscriptions.shared.reset()
         Task { await Subscriptions.shared.load() }
@@ -123,6 +132,17 @@ final class Session: ObservableObject {
         WatchPositions.reload()
         SeenVideos.reload()
         DownloadStore.shared.reloadForActiveProfile()
+    }
+
+    /// The sign-in page doesn't always give this, and without it YouTube refuses the video clients.
+    private func fillVisitorData() async {
+        guard currentAuth.visitorData == nil,
+              let json = try? await YouTubeAPI.post("guide", body: [:]),
+              let visitorData = JSON.string("visitorData", in: json["responseContext"]) else { return }
+        var auth = currentAuth
+        auth.visitorData = visitorData
+        save(auth)
+        await InnerTubeClient.wooftube.updateAuth(auth)
     }
 
     private func loadAccount() async {
@@ -166,6 +186,7 @@ final class Session: ObservableObject {
         account = nil
         unseenNotifications = 0
         Subscriptions.shared.reset()
+        clearAccountTraces()
     }
 
     /// Google rotates its tokens, and a stale session answers as a guest instead of failing.

@@ -12,6 +12,9 @@ enum SearchSettings {
 
 /// YouTube's own suggestions, the job Woof Music gives to YouTube Music's. They need no account.
 enum YouTubeSuggestions {
+    /// Keeps no cookies, so what you type isn't tied to anything.
+    private static let session = URLSession(configuration: .ephemeral)
+
     static func fetch(_ query: String) async throws -> [String] {
         var components = URLComponents(string: "https://suggestqueries-clients6.youtube.com/complete/search")
         components?.queryItems = [
@@ -23,7 +26,7 @@ enum YouTubeSuggestions {
             URLQueryItem(name: "gl", value: Locale.current.region?.identifier ?? "US")
         ]
         guard let url = components?.url else { throw URLError(.badURL) }
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await session.data(from: url)
         return parse(String(decoding: data, as: UTF8.self))
     }
 
@@ -175,7 +178,7 @@ private struct SearchStart: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if isIncognito {
-                    Label("Incognito is on. This phone saves no searches or watch progress, and videos stay out of your YouTube history. YouTube still sees your searches while you're signed in.", systemImage: "eyeglasses")
+                    Label("Incognito is on. This phone saves no searches or watch progress, and videos stay out of your YouTube history. YouTube still sees what you search and open while you're signed in.", systemImage: "eyeglasses")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, Layout.screenPadding)
@@ -331,7 +334,7 @@ private struct SearchResults: View {
     private func findCreator() async -> YouTubeChannel? {
         if let found = firstMatch(in: model.items) { return found }
         guard let json = try? await FeedSource.search(query, params: Filter.channels.params).fetch() else { return nil }
-        return firstMatch(in: FeedParser.items(in: json))
+        return firstMatch(in: await offMain { FeedParser.items(in: json) })
     }
 
     private func firstMatch(in items: [FeedItem]) -> YouTubeChannel? {
@@ -345,11 +348,11 @@ private struct SearchResults: View {
     }
 
     private func creatorCard(_ channel: YouTubeChannel, id: String) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 16)
+        let shape = RoundedRectangle(cornerRadius: Layout.sheetRadius)
         return Button {
             router.openChannelPage(id)
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: Layout.menuRowSpacing) {
                 Avatar(url: channel.thumbnailURL, size: Layout.artMedium)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Channel")
@@ -372,8 +375,7 @@ private struct SearchResults: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, Layout.screenPadding)
-            .padding(.vertical, Layout.rowSpacing)
+            .padding(Layout.rowSpacing)
             .background(shape.fill(Color(.systemGray6)))
             .contentShape(shape)
         }

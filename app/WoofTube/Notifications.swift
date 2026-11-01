@@ -16,7 +16,7 @@ private struct NotificationItem: Identifiable {
     init(renderer: [String: Any]) {
         let full = JSON.text(renderer["shortMessage"]) ?? ""
         // "Name uploaded: Title" becomes the name on its own line, as in YouTube's app.
-        if let range = full.range(of: " uploaded: ") {
+        if let range = full.range(of: " uploaded: ") ?? full.range(of: " ha caricato: ") {
             name = String(full[..<range.lowerBound])
             videoTitle = String(full[range.upperBound...])
             message = "Uploaded: " + videoTitle
@@ -151,7 +151,7 @@ struct NotificationsView: View {
             }
         }
         for section in nodes("multiPageMenuNotificationSectionRenderer", in: json) {
-            let title = JSON.text(section["title"])
+            let title = JSON.text(section["notificationSectionTitle"]) ?? JSON.text(section["title"])
             for renderer in nodes("notificationRenderer", in: section["items"]) {
                 let item = NotificationItem(renderer: renderer)
                 add(item, to: title ?? ageTitle(item.time))
@@ -167,9 +167,9 @@ struct NotificationsView: View {
     }
 
     private static func ageTitle(_ time: String?) -> String {
-        let time = time ?? ""
-        if ["second", "minute", "hour"].contains(where: { time.contains($0) }) { return "Today" }
-        if time.contains("day") { return "This Week" }
+        let words = Set((time ?? "").lowercased().split { !$0.isLetter }.map(String.init))
+        if !words.isDisjoint(with: ["second", "seconds", "minute", "minutes", "hour", "hours", "secondo", "secondi", "minuto", "minuti", "ora", "ore"]) { return "Today" }
+        if !words.isDisjoint(with: ["day", "days", "giorno", "giorni"]) { return "This Week" }
         return "Older"
     }
 
