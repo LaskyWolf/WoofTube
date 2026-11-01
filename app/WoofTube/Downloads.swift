@@ -266,7 +266,7 @@ final class DownloadStore: ObservableObject {
         guard let size, size > 0 else {
             return [Chunk(name: file + ".0", url: url, range: "bytes=0-", size: 0)]
         }
-        return stride(from: Int64(0), to: size, by: chunkSize).enumerated().map { index, start in
+        return stride(from: Int64(0), to: size, by: Int(chunkSize)).enumerated().map { index, start in
             let end = min(start + chunkSize, size)
             return Chunk(name: "\(file).\(index)", url: url, range: "bytes=\(start)-\(end - 1)", size: end - start)
         }
