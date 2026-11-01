@@ -556,11 +556,14 @@ struct SubsView: View {
     @State private var posts = FeedModel()
     private var subscriptions: Subscriptions { .shared }
     @State private var filter: Filter?
+    @State private var newVideos: [YouTubeVideo] = []
+    @Environment(Router.self) private var router
 
     /// A filter can leave a page empty, so it looks a little further before giving up.
     private static let pagesToSearch = 3
     // ponytail: only this many channels get their posts read, one request each. Raise it if posts go missing.
     private static let channelsWithPosts = 30
+    private static let newVideosShown = 12
 
     private var keeps: ((FeedItem) -> Bool)? {
         switch filter {
@@ -585,8 +588,14 @@ struct SubsView: View {
                     let tapped = Filter(rawValue: title)
                     filter = filter == tapped ? nil : tapped
                 }
+                if !newVideos.isEmpty, filter == nil || filter == .videos {
+                    NewVideosCard(videos: newVideos)
+                }
             }
             .tabRoot(title: "Subs", tab: .subs)
+            .onChange(of: model.videos.count) { refreshNewVideos() }
+            .onChange(of: router.current?.videoId) { refreshNewVideos() }
+            .onAppear { refreshNewVideos() }
             .task {
                 if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.subscriptions)) }
                 Subscriptions.shared.add(model.videos.compactMap(\.channelId))
@@ -602,6 +611,11 @@ struct SubsView: View {
                 }
             }
         }
+    }
+
+    private func refreshNewVideos() {
+        let fresh = model.videos.filter { $0.isRecent && !$0.isLive && !SeenVideos.contains($0.videoId) }
+        withAnimation { newVideos = Array(fresh.prefix(Self.newVideosShown)) }
     }
 
     private func reload() async {
@@ -1181,6 +1195,129 @@ private struct ShortCard: View {
         .task {
             if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
         }
+    }
+}
+
+/// Today's videos from followed channels, in a row that scrolls sideways.
+private struct NewVideosCard: View {
+    let videos: [YouTubeVideo]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            HStack {
+                Text("New Videos").font(.headline)
+                Spacer()
+                Text("\(videos.count) new")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, Layout.chipSpacing)
+                    .padding(.vertical, 3)
+                    .background(.tint, in: .capsule)
+            }
+            .padding(.horizontal, Layout.rowSpacing)
+            ScrollView(.horizontal) {
+                HStack(spacing: Layout.chipSpacing) {
+                    ForEach(videos, id: \.videoId) { NewVideoRibbon(video: $0) }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .scrollTargetLayout()
+            }
+            .contentMargins(.horizontal, Layout.rowSpacing)
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
+        }
+        .padding(.vertical, Layout.rowSpacing)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius + 2, style: .continuous))
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.bottom, Layout.sectionGap)
+    }
+}
+
+/// A row in the colour of the video's own cover.
+private struct NewVideoRibbon: View {
+    let video: YouTubeVideo
+    @Environment(Router.self) private var router
+    @State private var tint: Color?
+    @State private var avatar: String?
+
+    private static let width: CGFloat = 276
+    private static let coverWidth: CGFloat = 104
+    private static let avatarSize: CGFloat = 26
+
+    private var cover: String { video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg" }
+
+    var body: some View {
+        Button {
+            SeenVideos.mark(video.videoId)
+            router.play(video)
+        } label: {
+            HStack(spacing: Layout.rowSpacing + 2) {
+                CoverImage(url: cover, maxPixels: 312)
+                    .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
+                    .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                            .offset(x: Layout.rowPadding, y: Layout.rowPadding)
+                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(video.title)
+                        .font(.footnote.weight(.bold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text([video.channelTitle, video.publishedTimeText].compactMap { $0 }.joined(separator: " · "))
+                        .font(.caption2)
+                        .opacity(0.85)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.white)
+            .padding(Layout.rowPadding)
+            .frame(width: Self.width)
+            .frame(maxHeight: .infinity)
+            .background(tint ?? Color(.systemGray3), in: .rect(cornerRadius: Layout.tileRadius + 2, style: .continuous))
+            .animation(.easeOut(duration: 0.3), value: tint)
+        }
+        .buttonStyle(ZoomPressStyle())
+        .videoMenu(video)
+        .task {
+            tint = await CoverTint.color(of: cover)
+            if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
+        }
+    }
+}
+
+/// A cover's average colour, made strong enough to be noticed and dark enough for white text.
+@MainActor
+enum CoverTint {
+    private static let samplePixels = 16
+
+    static func color(of url: String) async -> Color? {
+        var image = ImageStore.image(for: url, maxPixels: samplePixels)
+        if image == nil { image = try? await ImageStore.load(url, maxPixels: samplePixels) }
+        guard let cover = image?.cgImage else { return nil }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let drawn: Void? = pixel.withUnsafeMutableBytes { bytes in
+            CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?
+                .draw(cover, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        guard drawn != nil else { return nil }
+        let strong = vivid(red: Double(pixel[0]) / 255, green: Double(pixel[1]) / 255, blue: Double(pixel[2]) / 255)
+        return Color(hue: strong.hue, saturation: strong.saturation, brightness: strong.brightness)
+    }
+
+    nonisolated static func vivid(red: Double, green: Double, blue: Double) -> (hue: Double, saturation: Double, brightness: Double) {
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0
+        UIColor(red: red, green: green, blue: blue, alpha: 1).getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
+        return (hue, min(saturation * 1.6 + 0.15, 0.85), min(max(brightness, 0.38), 0.55))
+    }
+
+    nonisolated static func selfCheck() {
+        assert(vivid(red: 1, green: 1, blue: 1).brightness == 0.55)
+        assert(vivid(red: 0, green: 0, blue: 0).brightness == 0.38)
+        assert(vivid(red: 0.5, green: 0.4, blue: 0.4).saturation > 0.3)
     }
 }
 

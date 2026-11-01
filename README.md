@@ -1,61 +1,133 @@
-# WoofTube
+<div align="center">
 
-A YouTube for iOS build without ads, with tweaks injected into a decrypted YouTube IPA.
+<img src=".github/assets/banner.svg" width="100%" alt="WoofTube: YouTube, rebuilt natively for iPhone" />
 
-Included tweaks:
+[![iOS 26+](https://img.shields.io/badge/iOS-26%2B-black?logo=apple)](#install)
+[![SwiftUI](https://img.shields.io/badge/Swift-SwiftUI-F05138?logo=swift&logoColor=white)](app/WoofTube)
+[![Player: mpv](https://img.shields.io/badge/player-mpv-691f69)](https://mpv.io)
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
-| Tweak | What it does | License |
-|---|---|---|
-| [YouTube-X](https://github.com/PoomSmart/YouTube-X) by PoomSmart | Blocks video and feed ads, enables background playback | MIT |
-| [YTABGoodies](https://github.com/PoomSmart/YTABGoodies) by PoomSmart | Required by YouTube-X | MIT |
-| [YTPlaybackFix](https://github.com/Mark02-2012/YTPlaybackFix) by Mark02 | Recovers playback that stops after seeking on sideloaded installs | MIT |
+**A free, open source YouTube client for iPhone, written from scratch in SwiftUI.**
+It contains no YouTube code and shows no ads.
 
-These are downloaded and compiled from source at build time, using the latest commit.
+<img src=".github/assets/home.svg" width="31%" alt="Home" />&nbsp;
+<img src=".github/assets/player.svg" width="31%" alt="Video page" />&nbsp;
+<img src=".github/assets/subs.svg" width="31%" alt="Subs with New Videos" />
 
-The WoofTube tweak in [tweak/](tweak/) adds the clutter removal. Its settings are in **YouTube Settings → WoofTube**:
+<sub>Illustrations of the interface, with sample content.</sub>
 
-| Setting | Default |
-|---|---|
-| Native Tab Bar | On |
-| Hide Shorts or Subscriptions tab | Off |
-| Apple Icons | On |
-| Glass Controls | On |
-| Woof Music Pages | On |
-| Hide Cast Button | On |
+</div>
 
-The build also sets `UIDesignRequiresCompatibility` to `false` in YouTube's Info.plist (see [Info-overrides.plist](Info-overrides.plist)), so the app uses the iOS 26 design for system controls.
+## Highlights
 
-## Requirements
+| | |
+| --- | --- |
+| 🚫 **No ads** | The app plays the video streams directly, so there are no ad breaks or banners. |
+| 🎧 **Background and Picture in Picture** | Audio keeps playing when you lock the phone, and the video can float over other apps. |
+| ⬇️ **Real downloads** | Videos download in the background and retry when YouTube's address expires. |
+| ⏭️ **SponsorBlock** | Sponsor segments are skipped using the community list. Dislike counts come from Return YouTube Dislike. Both are optional. |
+| 🧊 **Native iOS 26** | Liquid Glass buttons, SF Symbols, system menus, tab bar and sheets. Dynamic Type, Dark Mode and Reduce Motion are respected. |
 
-- Linux on x86_64 or aarch64, with `git curl tar xz perl make python3 unzip`
-- A **decrypted** YouTube IPA. An App Store IPA is encrypted and the build stops with an error.
-- A sideloading tool to install the result: AltStore, SideStore, Sideloadly, TrollStore or LiveContainer
+## Features
 
-## Build locally
+### Home and Subs
+- Your own Home feed, with filter chips and videos you have already seen moved out of the way
+- Keep Watching card to resume where you stopped
+- New Videos row on Subs: today's uploads, each in the colour of its cover
+- Shorts shelves, community posts with polls, and playlists in the feed
+- Long-press menus on videos: Watch Later, playlists, share, download and feedback
 
-```bash
-scripts/setup-theos.sh
-scripts/build-ipa.sh path/to/YouTube.ipa
-```
+### Player
+- mpv engine with up to the quality you choose
+- Playback speed, captions, audio tracks, chapters and thumbnail previews while seeking
+- Live streams with live chat
+- Lock screen and Control Center controls, and AirPlay audio
+- Miniplayer that floats above the tabs, with light from the video behind it
+- Sleep timer and autoplay
 
-The first command installs Theos, the iOS toolchain and the iOS SDK into `~/theos` (about 1 GB, no sudo). Set `THEOS` to use another folder.
+### Video page
+- Likes, dislike estimates, subscribe, Watch Later, playlists and share
+- Comments and replies, with likes
+- Up Next, channel pages and search inside a channel
 
-The second command writes `out/WoofTube.ipa`.
+### Shorts
+- Vertical swipe through YouTube's own Shorts sequence
+- The next Short's address is loaded ahead of the swipe
 
-To compile the tweaks without an IPA, run `scripts/build-tweaks.sh`. The results go to `.build/dylibs/`.
+### Library
+- History, Watch Later, Liked Videos and your playlists
+- Create and edit playlists
+- Downloads with quality choice, progress on each row and Cancel All
 
-## Build on GitHub Actions
+### Accounts and search
+- Google sign-in inside the app, with several accounts, each keeping its own data
+- Notification inbox with an unread badge
+- Search with suggestions and history, and an incognito mode that stops recording it
+
+### Look
+- Accent colours that also change the app icon
+- Light, dark or system appearance
+
+<div align="center">
+
+<img src=".github/assets/shorts.svg" width="31%" alt="Shorts" />&nbsp;
+<img src=".github/assets/downloads.svg" width="31%" alt="Downloads" />&nbsp;
+<img src=".github/assets/settings.svg" width="31%" alt="Settings" />
+
+</div>
+
+## Speed
+
+- Feeds are parsed away from the main thread, so scrolling doesn't stall while a page loads.
+- Home opens on the last saved page while the new one arrives.
+- Images are decoded at the size they are shown and held in a memory-limited cache.
+- A stream address is reused for 30 minutes, so reopening a video starts at once.
+
+## Privacy
+
+- The app has no analytics and no server of its own. It talks to YouTube directly.
+- SponsorBlock and Return YouTube Dislike receive the ID of each video you watch. Turn them off in Settings to stop that.
+- Crash reports stay on the phone until you choose to share them from Settings.
+
+## Install
+
+You need iOS 26 or later. This project does not publish IPA files, so you build your own.
 
 1. Fork this repository.
-2. In **Settings → Secrets and variables → Actions**, add two repository secrets:
-   - `IPA_URL`: a direct download link to your decrypted YouTube IPA
-   - `IPA_PASSWORD`: a password for the archive the build produces
-3. In **Actions → Build IPA**, click **Run workflow**.
-4. When the run finishes, download the `WoofTube` artifact from the run page and open `WoofTube.7z` with your `IPA_PASSWORD`.
+2. Open the **Actions** tab and run the **Native app** workflow.
+3. Download the `WoofTube-native` artifact from the finished run. It contains an unsigned `WoofTube.ipa` and expires after one day.
+4. Sideload it with a tool that re-signs apps with your Apple ID, such as AltStore, SideStore or Sideloadly.
+5. Open WoofTube and sign in.
 
-The IPA is uploaded only inside the encrypted archive and deleted after 3 days. Run logs of a public repository are public, so the URL and password must stay in secrets.
+### Build on a Mac
 
-## Known limits
+You need Xcode 26.
 
-- Signing in may fail on a sideloaded install: sideloaded apps cannot read the keychain group the YouTube login uses. A fix is planned.
-- A YouTube update can break a tweak until its author updates it. Rebuilding picks up their latest fixes.
+```bash
+brew install xcodegen
+```
+
+```bash
+cd app && xcodegen generate && open WoofTube.xcodeproj
+```
+
+## Account risk
+
+Google can challenge or restrict an account used in an unofficial app, and posting comments is more visible than watching. Test with a second account.
+
+## Project status
+
+The app is young and each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
+
+The `tweak/` and `scripts/` folders hold an older build that injected tweaks into a decrypted IPA. It is not maintained.
+
+## Credits
+
+- [SwiftyTube](https://github.com/686udjie/SwiftyTube): Swift client for YouTube's InnerTube API
+- [Trop](https://github.com/686udjie/Trop) and [Woof Music](https://github.com/LaskyWolf/WoofMusic): design and code this app is based on
+- [mpv](https://mpv.io) and [MPVKit](https://github.com/streamyfin/MPVKit): video playback
+- [SponsorBlock](https://sponsor.ajay.app) and [Return YouTube Dislike](https://returnyoutubedislike.com): community data
+
+## License
+
+[GPLv3](LICENSE). WoofTube is not affiliated with, endorsed or sponsored by Google or YouTube.

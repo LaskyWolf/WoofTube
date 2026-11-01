@@ -35,6 +35,7 @@ struct WoofTubeApp: App {
                 await session.restore()
                 #if DEBUG
                 await StreamCache.selfCheck()
+                CoverTint.selfCheck()
                 #endif
             }
             .alert("Session Expired", isPresented: $session.isExpired) {
