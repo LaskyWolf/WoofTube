@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import MPVKit
 import SwiftUI
 
@@ -18,6 +19,10 @@ final class MpvPlayer: ObservableObject {
     @Published private(set) var isPaused = false
     @Published private(set) var isBuffering = false
     @Published private(set) var errorText: String?
+    /// A live stream can't be sought: mpv never reports that such a seek finished.
+    @Published var isLiveStream = false
+    /// The length the feed gave, for the floating window until mpv knows it.
+    var expectedDuration = 0.0
     private(set) var recentLog: [String] = []
     private var loadStarted: Date?
 
@@ -39,6 +44,7 @@ final class MpvPlayer: ObservableObject {
     private var observers: [Any] = []
 
     private static let logLimit = 100
+    private static let frameContext = CIContext()
     private static let ticksPerSecond = 4.0
     /// Tries per video before leaving a failed picture alone, so it can't loop forever.
     private static let maxDecoderResets = 3
@@ -83,7 +89,7 @@ final class MpvPlayer: ObservableObject {
 
     func seek(to seconds: Double) {
         // An invalid time would crash whatever draws it.
-        guard seconds.isFinite else { return }
+        guard seconds.isFinite, !isLiveStream else { return }
         clock.time = seconds
         isBuffering = true
         command(["seek", String(seconds), "absolute"])
@@ -110,6 +116,15 @@ final class MpvPlayer: ObservableObject {
     func setSpeed(_ speed: Double) {
         self.speed = speed
         setProperty("speed", String(speed))
+    }
+
+    /// The picture showing right now, shrunk to this width. Nil until the video has a frame.
+    func currentFrame(width: CGFloat) -> UIImage? {
+        guard isVideoReady, let buffer = videoLayer.sampleBufferRenderer.copyDisplayedPixelBuffer() else { return nil }
+        let image = CIImage(cvPixelBuffer: buffer)
+        let scale = width / max(image.extent.width, 1)
+        let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return Self.frameContext.createCGImage(small, from: small.extent).map { UIImage(cgImage: $0) }
     }
 
     /// What mpv is doing right now, for the Diagnostics screen in Settings.

@@ -81,7 +81,7 @@ struct PlayerOverlay: View {
         let isShort = short != nil
         return ZStack(alignment: .topLeading) {
             AmbientImage(
-                clock: miniPlayerObject.clock,
+                player: miniPlayerObject,
                 poster: miniVideo.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" },
                 storyboard: isShort ? nil : router.storyboard
             )
@@ -99,6 +99,7 @@ struct PlayerOverlay: View {
             MpvVideoView(player: miniPlayerObject, isActive: isShort ? !router.isShortsPageOnScreen : !router.isWatchPageOnScreen)
                 .id(isShort)
                 .overlay { VideoPoster(player: miniPlayerObject, video: miniVideo) }
+                .overlay { MovingVideoCover(poster: miniVideo?.thumbnailURL, fills: isShort) }
                 .frame(width: miniSize.width, height: miniSize.height)
                 .background(.black)
                 .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
@@ -210,7 +211,7 @@ struct WatchPage: View {
                 ZStack(alignment: .top) {
                     Color(.systemBackground)
                     AmbientBackdrop(
-                        clock: router.player.clock,
+                        player: router.player,
                         poster: poster,
                         storyboard: router.storyboard
                     )
@@ -252,17 +253,8 @@ struct WatchPage: View {
                     .background(.black)
                     .allowsHitTesting(false)
                     .ignoresSafeArea(edges: isFullscreen ? .all : [])
-                // ponytail: a low-resolution frame fills the zoom back to the card, because the video
-                // layer turns black during it. Replace it if a way to keep the live layer turns up.
-                Color.clear
-                    .overlay {
-                        AmbientImage(clock: router.player.clock, poster: poster, storyboard: router.storyboard)
-                    }
-                    .clipped()
-                    .opacity(router.isExpanded ? 0 : 1)
-                    .animation(nil, value: router.isExpanded)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                MovingVideoCover(poster: poster, fills: isFullscreen && fillsScreen)
+                    .ignoresSafeArea(edges: isFullscreen ? .all : [])
                 CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen)
@@ -271,6 +263,32 @@ struct WatchPage: View {
         .simultaneousGesture(MagnifyGesture().onEnded { value in
             if isFullscreen { fillsScreen = value.magnification > 1 }
         })
+    }
+}
+
+/// The picture that was showing when the zoom started, over the video on both the page and the card.
+struct MovingVideoCover: View {
+    let poster: String?
+    var fills = false
+    @Environment(Router.self) private var router
+
+    var body: some View {
+        Group {
+            if router.isVideoMoving {
+                Color.black
+                    .overlay {
+                        if let still = router.stillFrame {
+                            Image(uiImage: still).resizable().aspectRatio(contentMode: fills ? .fill : .fit)
+                        } else {
+                            CachedImage(url: poster, maxPixels: 640)
+                        }
+                    }
+                    .clipped()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .transaction { $0.animation = nil }
     }
 }
 
@@ -356,10 +374,9 @@ struct PlayerDismissGesture: UIGestureRecognizerRepresentable {
 }
 
 /// YouTube's ambient mode in Woof Music's style: the part of the video playing now, blurred
-/// and fading into the page. The frames come from the storyboard, because reading them from
-/// the Metal video layer would cost far more.
+/// and fading into the page.
 private struct AmbientBackdrop: View {
-    let clock: PlayerClock
+    let player: MpvPlayer
     let poster: String?
     let storyboard: Storyboard?
 
@@ -368,7 +385,7 @@ private struct AmbientBackdrop: View {
     private static let overflow: CGFloat = 300
 
     var body: some View {
-        AmbientImage(clock: clock, poster: poster, storyboard: storyboard)
+        AmbientImage(player: player, poster: poster, storyboard: storyboard)
         .frame(height: Self.height + Self.overflow)
         .frame(maxWidth: .infinity)
         .clipped()
@@ -384,24 +401,36 @@ private struct AmbientBackdrop: View {
 
 /// A frame of the video that follows the picture, or the poster until one loads.
 struct AmbientImage: View {
-    @ObservedObject var clock: PlayerClock
+    @ObservedObject private var clock: PlayerClock
+    private let player: MpvPlayer
     let poster: String?
     let storyboard: Storyboard?
 
     /// Seconds between frames. The clock ticks far more often, so only this view redraws with it.
-    private static let refresh = 3.0
+    private static let refresh = 1.0
+
+    init(player: MpvPlayer, poster: String?, storyboard: Storyboard?) {
+        clock = player.clock
+        self.player = player
+        self.poster = poster
+        self.storyboard = storyboard
+    }
 
     var body: some View {
-        AmbientFrame(moment: (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
+        AmbientFrame(player: player, moment: (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
     }
 }
 
 private struct AmbientFrame: View {
+    let player: MpvPlayer
     let moment: Double
     let poster: String?
     let storyboard: Storyboard?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var frame: UIImage?
+
+    private static let liveFrameWidth: CGFloat = 160
+    private static let fade = 0.8
 
     var body: some View {
         ZStack {
@@ -416,7 +445,15 @@ private struct AmbientFrame: View {
     }
 
     private func loadFrame() async {
-        guard !reduceMotion, !ProcessInfo.processInfo.isLowPowerModeEnabled, let storyboard else { return }
+        guard !reduceMotion, !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
+        let player = player
+        if let live = await offMain({ player.currentFrame(width: Self.liveFrameWidth) }) {
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: Self.fade)) { frame = live }
+            return
+        }
+        // The video can't give a frame while it's off, so this falls back on YouTube's preview sheets.
+        guard let storyboard else { return }
         let spot = storyboard.frame(at: moment)
         guard let url = spot.url?.absoluteString else { return }
         var image = ImageStore.image(for: url)
@@ -759,7 +796,15 @@ private struct PlayerProgress: View {
                 StoryboardPreview(storyboard: storyboard, seconds: position * total)
             }
             HStack {
-                Text("\(shownTime.clockText) | \(duration.clockText)")
+                if player.isLiveStream {
+                    Text("LIVE")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, Layout.rowPadding)
+                        .padding(.vertical, 2)
+                        .background(.tint, in: .capsule)
+                } else {
+                    Text("\(shownTime.clockText) | \(duration.clockText)")
+                }
                 if let chapter {
                     chapterMenu(current: chapter)
                 }
@@ -771,8 +816,7 @@ private struct PlayerProgress: View {
                     Label {
                         Text(isFullscreen ? "Exit Full Screen" : "Full Screen")
                     } icon: {
-                        MorphingGlyph(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                            .glyphMotion(isFullscreen ? .pullApart : .squeezeIn, trigger: isFullscreen)
+                        FullscreenGlyph(isFullscreen: isFullscreen)
                     }
                 }
                 .buttonStyle(PlayerPressStyle())
@@ -783,19 +827,21 @@ private struct PlayerProgress: View {
             .shadow(color: .black.opacity(0.5), radius: 3)
             .padding(.leading, Layout.chipSpacing)
 
-            ProgressBar(
-                progress: Binding(get: { isEditing ? position : clock.time / total }, set: { position = $0 }),
-                marks: chapters.dropFirst().map { $0.start / total },
-                onEditingChanged: { editing in
-                    if editing {
-                        position = clock.time / total
-                    } else {
-                        player.seek(to: position * total)
+            if !player.isLiveStream {
+                ProgressBar(
+                    progress: Binding(get: { isEditing ? position : clock.time / total }, set: { position = $0 }),
+                    marks: chapters.dropFirst().map { $0.start / total },
+                    onEditingChanged: { editing in
+                        if editing {
+                            position = clock.time / total
+                        } else {
+                            player.seek(to: position * total)
+                        }
+                        isEditing = editing
+                        onScrubbing(editing)
                     }
-                    isEditing = editing
-                    onScrubbing(editing)
-                }
-            )
+                )
+            }
         }
         .sensoryFeedback(.selection, trigger: chapter?.start) { _, _ in isEditing }
     }
@@ -904,6 +950,7 @@ private struct PlayerControls: View {
                     scheduleHide()
                 },
                 onDoubleTap: { isLeading in
+                    guard !player.isLiveStream else { return }
                     player.skip(by: Double(isLeading ? -Self.skipSeconds : Self.skipSeconds))
                     let previous = seekHint?.isLeading == isLeading ? seekHint?.seconds ?? 0 : 0
                     seekHint = SeekHint(isLeading: isLeading, seconds: previous + Self.skipSeconds)
@@ -1417,7 +1464,8 @@ private struct WatchDetailsView: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
                 if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
                     ShareLink(item: url) {
-                        HeaderRoundIcon(systemImage: "square.and.arrow.up", motion: .shareLaunch, trigger: shareTaps)
+                        HeaderRoundIcon(systemImage: "square.and.arrow.up")
+                            .symbolEffect(.bounce.up.byLayer, value: shareTaps)
                     }
                     .simultaneousGesture(TapGesture().onEnded { shareTaps += 1 })
                     .accessibilityLabel("Share")
@@ -1425,18 +1473,18 @@ private struct WatchDetailsView: View {
                         laterTaps += 1
                         toggleWatchLater(id, isSaved: details.isInWatchLater)
                     } label: {
-                        HeaderRoundIcon(
-                            systemImage: details.isInWatchLater ? "clock.fill" : "clock",
-                            tint: details.isInWatchLater ? settings.accentColor : .primary,
-                            motion: details.isInWatchLater ? .clockForward : .clockBack,
-                            trigger: laterTaps
-                        )
+                        ClockGlyph(isSaved: details.isInWatchLater, trigger: laterTaps)
+                            .frame(width: 38, height: 38)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                            // Reaches 44 pt, using the gap between neighbouring buttons.
+                            .contentShape(Circle().inset(by: -3))
                     }
                     .accessibilityLabel(details.isInWatchLater ? "Remove from Watch Later" : "Save to Watch Later")
                     Button {
                         showsPlaylists = true
                     } label: {
-                        HeaderRoundIcon(systemImage: "text.badge.plus", motion: showsPlaylists ? .addToList : nil, trigger: showsPlaylists)
+                        HeaderRoundIcon(systemImage: "text.badge.plus")
+                            .symbolEffect(.bounce.byLayer, value: showsPlaylists)
                     }
                     .accessibilityLabel("Add to Playlist")
                     if let video = router.current {
@@ -1499,8 +1547,9 @@ private struct WatchDetailsView: View {
             withAnimation(.snappy) { showsDescription.toggle() }
         } label: {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                if let metadata = details.metadata, !metadata.isEmpty {
-                    Text(metadata).font(.subheadline.weight(.semibold))
+                let metadata = [details.views, details.age ?? router.current?.publishedTimeText, details.date].compactMap { $0 }
+                if !metadata.isEmpty {
+                    Text(metadata.joined(separator: " · ")).font(.subheadline.weight(.semibold))
                 }
                 if let description = details.description, !description.isEmpty {
                     Text(description)

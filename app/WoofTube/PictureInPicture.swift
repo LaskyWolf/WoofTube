@@ -101,8 +101,10 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
     }
 
     func pictureInPictureControllerTimeRangeForPlayback(_ controller: AVPictureInPictureController) -> CMTimeRange {
-        let duration = player.duration > 0 ? CMTime(seconds: player.duration, preferredTimescale: 1000) : .positiveInfinity
-        return CMTimeRange(start: .zero, duration: duration)
+        // An infinite length is how the window knows it's live, so a video still loading must not send one.
+        if player.isLiveStream { return CMTimeRange(start: .zero, duration: .positiveInfinity) }
+        let duration = player.duration > 0 ? player.duration : player.expectedDuration
+        return duration > 0 ? CMTimeRange(start: .zero, duration: CMTime(seconds: duration, preferredTimescale: 1000)) : .invalid
     }
 
     func pictureInPictureControllerIsPlaybackPaused(_ controller: AVPictureInPictureController) -> Bool {

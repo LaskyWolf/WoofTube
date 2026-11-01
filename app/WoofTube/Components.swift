@@ -208,6 +208,7 @@ struct MediaListRow: View {
             CoverImage(url: url)
                 .frame(width: Layout.artSmall, height: Layout.artSmall)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+                .zoomLinkCover()
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 Text(title)
                     .font(.body.weight(.semibold))

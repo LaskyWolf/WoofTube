@@ -371,7 +371,6 @@ private struct SearchResults: View {
             .background(shape.fill(Color(.systemGray6)))
             .contentShape(shape)
         }
-        .tabZoomSource(id)
         .buttonStyle(ZoomPressStyle(scale: 0.98))
         .padding(.horizontal, Layout.screenPadding)
         .padding(.vertical, Layout.chipSpacing)

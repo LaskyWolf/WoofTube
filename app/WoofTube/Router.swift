@@ -28,11 +28,23 @@ final class Router {
         didSet {
             guard isExpanded != oldValue else { return }
             Orientation.videoPageChanged(isOpen: isExpanded)
+            videoStartedMoving(player, isOpening: isExpanded)
         }
     }
     /// True from when the video page has appeared until its closing animation ends.
     /// It decides which view holds the one video layer.
-    var isWatchPageOnScreen = false
+    var isWatchPageOnScreen = false {
+        didSet { if !isWatchPageOnScreen { finishVideoMove(after: Self.layerSettleTime) } }
+    }
+    /// What the video page or the Short grows out of: the tapped cover, then the floating card.
+    private(set) var zoomSource = PlayerOverlay.zoomSource
+    /// The zoom draws the video layer black, so this still stands in on both the page and the card.
+    private(set) var isVideoMoving = false
+    private(set) var stillFrame: UIImage?
+    private var moveTask: Task<Void, Never>?
+    private static let stillWidth: CGFloat = 720
+    private static let zoomTime = Duration.milliseconds(700)
+    private static let layerSettleTime = Duration.milliseconds(150)
     private(set) var queue: [YouTubeVideo] = []
     var channelRoute: ChannelRoute?
     var channelPage: ChannelPageRoute?
@@ -41,7 +53,9 @@ final class Router {
     var shortsRoute: ShortsRoute?
     private(set) var shortsModel: ShortsModel?
     /// Like `isWatchPageOnScreen`, for the Shorts player's layer.
-    var isShortsPageOnScreen = false
+    var isShortsPageOnScreen = false {
+        didSet { if !isShortsPageOnScreen { finishVideoMove(after: Self.layerSettleTime) } }
+    }
     /// The playlist the queue came from.
     private(set) var playlistTitle: String?
     var actionMessage: String?
@@ -98,7 +112,9 @@ final class Router {
     private var wasInBackground = false
     private var pendingWatchtime: String?
     private static let watchedAfterSeconds = 30.0
-    private(set) var isLive = false
+    private(set) var isLive = false {
+        didSet { player.isLiveStream = isLive }
+    }
     private(set) var liveChatToken: String?
     private var nowPlayingSubscriptions: [Any] = []
     private var sponsorSegments: [ClosedRange<Double>] = []
@@ -132,7 +148,10 @@ final class Router {
         current = video
         liveChatToken = nil
         channelRoute = nil
-        if expand { isExpanded = true }
+        if expand {
+            if !isExpanded { zoomSource = video.videoId }
+            isExpanded = true
+        }
         updateAutomaticWindow()
         details = nil
         detailsUnavailable = false
@@ -142,8 +161,12 @@ final class Router {
         selectedCaption = nil
         captionCues = []
         sponsorSegments = []
+        player.expectedDuration = Double(video.durationSeconds ?? 0)
         player.prepareForNewVideo()
+        // The frame taken above belongs to the previous video.
+        stillFrame = nil
         startStream(videoId: video.videoId, start: WatchPositions.start(for: video), isNewPlayback: true)
+        player.isLiveStream = video.isLive
         Task { await loadDetails(videoId: video.videoId) }
         if skipsSponsors, !SearchSettings.isIncognito {
             Task {
@@ -196,17 +219,41 @@ final class Router {
         channelRoute = nil
         let model = ShortsModel(shorts: videos, startId: start.videoId, player: shortsPlayer)
         shortsModel = model
+        zoomSource = start.videoId
+        videoStartedMoving(shortsPlayer, isOpening: true)
+        stillFrame = nil
         shortsRoute = ShortsRoute(model: model)
         updateAutomaticWindow()
     }
 
     /// The Short keeps playing in the floating card.
     func minimizeShorts() {
+        if shortsRoute != nil { videoStartedMoving(shortsPlayer, isOpening: false) }
         shortsRoute = nil
     }
 
     func expandShorts() {
+        videoStartedMoving(shortsPlayer, isOpening: true)
         shortsRoute = shortsModel.map { ShortsRoute(model: $0) }
+    }
+
+    private func videoStartedMoving(_ moving: MpvPlayer, isOpening: Bool) {
+        moveTask?.cancel()
+        stillFrame = moving.currentFrame(width: Self.stillWidth)
+        isVideoMoving = true
+        // A closing page says when it's gone. An opening one doesn't say when its zoom ends.
+        if isOpening { finishVideoMove(after: Self.zoomTime) }
+    }
+
+    private func finishVideoMove(after delay: Duration) {
+        moveTask?.cancel()
+        moveTask = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            isVideoMoving = false
+            stillFrame = nil
+            zoomSource = PlayerOverlay.zoomSource
+        }
     }
 
     func closeShorts() {

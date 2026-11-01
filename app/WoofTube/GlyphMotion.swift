@@ -127,8 +127,6 @@ extension GlyphScript {
         keys: [Key(0, sx: 1.25, sy: 0.7, x: -8), Key(0.16, sx: 0.92, sy: 1.1, x: 3), Key(0.3, s: 1)],
         rings: [Ring(ink: .color(.white))]
     )
-    static let pullApart = GlyphScript(keys: [Key(0, s: 0.7), Key(0.2, s: 1.28), Key(0.35, s: 1)])
-    static let squeezeIn = GlyphScript(keys: [Key(0, s: 1.25), Key(0.2, s: 0.78), Key(0.35, s: 1)])
     static let spinBack = GlyphScript(keys: [Key(0, s: 0.8, r: 0, x: 8), Key(0.25, s: 1.2, r: -300, x: -4), Key(0.42, s: 1, r: -360)])
     static let spinForward = GlyphScript(keys: [Key(0, s: 0.8, r: 0, x: -8), Key(0.25, s: 1.2, r: 300, x: 4), Key(0.42, s: 1, r: 360)])
     static let needleRev = GlyphScript(keys: [Key(0, r: 0), Key(0.08, r: 7), Key(0.16, r: -6), Key(0.24, r: 5), Key(0.32, r: -3), Key(0.42, r: 0)], bits: burst(5, inks: [.color(.orange), .accent], around: 0, spread: 70, reach: 22, delay: 0.1, life: 0.45, size: 3))
@@ -199,16 +197,6 @@ extension GlyphScript {
         bits: burst(12, inks: [.accent, .color(.orange), .color(.green), .color(.blue), .color(.white)], reach: 44, delay: 0.1, life: 0.9, size: 4)
     )
     static let unsubscribed = GlyphScript(keys: [Key(0, r: -3, y: -3), Key(0.18, r: 2), Key(0.3)])
-    static let shareLaunch = GlyphScript(
-        keys: [Key(0, s: 1), Key(0.1, sx: 1.14, sy: 0.82), Key(0.2, sx: 0.9, sy: 1.1, y: -5), Key(0.34, sx: 1.04, sy: 0.96), Key(0.5)],
-        bits: [Bit(shape: .symbol("arrow.up"), ink: .color(.white), angle: -90, reach: 34, delay: 0.06, life: 0.42, size: 12)]
-    )
-    static let clockForward = GlyphScript(keys: [Key(0, s: 0.92, r: 0), Key(0.7, s: 1, r: 1080)])
-    static let clockBack = GlyphScript(keys: [Key(0, s: 0.92, r: 0), Key(0.7, s: 1, r: -1080)])
-    static let addToList = GlyphScript(
-        keys: [Key(0, y: -4), Key(0.2, s: 1.1, y: 2), Key(0.45, s: 1)],
-        bits: [Bit(shape: .symbol("minus"), ink: .color(.white), angle: 180, reach: 22, life: 0.3, size: 12)]
-    )
     static let arrowDrop = GlyphScript(keys: [Key(0, y: -12, o: 0), Key(0.18, sx: 1.1, sy: 0.84, y: 2), Key(0.34)])
     static let checkStamp = GlyphScript(
         keys: [Key(0, s: 0.2, o: 0), Key(0.16, s: 1.45), Key(0.32, s: 1)],
@@ -242,9 +230,9 @@ extension GlyphScript {
 
     static func selfCheck() {
         let all: [GlyphScript] = [
-            .pauseStamp, .playShoot, .pullApart, .squeezeIn, .spinBack, .spinForward, .needleRev, .captionsOn, .captionsOff,
+            .pauseStamp, .playShoot, .spinBack, .spinForward, .needleRev, .captionsOn, .captionsOff,
             .qualitySparkle, .audioPulse, .nextCard, .sleepRock, .like(emojis: []), .deflate, .dislike, .rise, .subscribed,
-            .unsubscribed, .shareLaunch, .addToList, .arrowDrop, .checkStamp, .bubblePop, .lensZoom, .bellRing, .glassesOn,
+            .unsubscribed, .arrowDrop, .checkStamp, .bubblePop, .lensZoom, .bellRing, .glassesOn,
             .glassesOff, .crossSwap, .dashAhead, .sunRise, .moonRise, .pop
         ]
         // Every movement has to land where the icon rests, or it jumps at the end.
@@ -446,39 +434,147 @@ enum VideoFlavor {
     }
 }
 
-/// Opens a page by growing it out of what was tapped, as Woof Music does for its covers.
+/// Four corners that fly outward going into full screen, and inward coming out of it.
+struct FullscreenGlyph: View {
+    let isFullscreen: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let size: CGFloat = 17
+    private static let corners: [(x: CGFloat, y: CGFloat)] = [(-1, -1), (1, -1), (-1, 1), (1, 1)]
+
+    private struct Corner: Shape {
+        let pointsInward: Bool
+
+        func path(in rect: CGRect) -> Path {
+            let length = rect.width * 0.32
+            var path = Path()
+            if pointsInward {
+                path.move(to: CGPoint(x: length, y: rect.minY))
+                path.addLine(to: CGPoint(x: length, y: length))
+                path.addLine(to: CGPoint(x: rect.minX, y: length))
+            } else {
+                path.move(to: CGPoint(x: rect.minX, y: length))
+                path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+                path.addLine(to: CGPoint(x: length, y: rect.minY))
+            }
+            return path
+        }
+    }
+
+    var body: some View {
+        KeyframeAnimator(initialValue: 0.0, trigger: isFullscreen) { spread in
+            ZStack {
+                ForEach(0..<Self.corners.count, id: \.self) { index in
+                    let corner = Self.corners[index]
+                    Corner(pointsInward: isFullscreen)
+                        .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                        // The shape is drawn for the top left, and mirrored for the others.
+                        .scaleEffect(x: -corner.x, y: -corner.y)
+                        .offset(x: corner.x * spread, y: corner.y * spread)
+                }
+            }
+            .frame(width: Self.size, height: Self.size)
+        } keyframes: { _ in
+            let direction: Double = reduceMotion ? 0 : (isFullscreen ? 1 : -1)
+            KeyframeTrack {
+                LinearKeyframe(-5 * direction, duration: 0.01)
+                SpringKeyframe(3 * direction, duration: 0.24)
+                SpringKeyframe(0, duration: 0.26)
+            }
+        }
+    }
+}
+
+/// A clock whose hands really turn: forward when saving for later, backward when removing.
+struct ClockGlyph: View {
+    let isSaved: Bool
+    let trigger: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var minuteAngle = 0.0
+
+    private static let size: CGFloat = 17
+    private static let spin = 1080.0
+
+    var body: some View {
+        ZStack {
+            if isSaved {
+                Circle().fill(.tint)
+            } else {
+                Circle().stroke(.primary, lineWidth: 2)
+            }
+            hand(length: Self.size * 0.36, angle: minuteAngle)
+            hand(length: Self.size * 0.24, angle: 120 + minuteAngle / 12)
+        }
+        .frame(width: Self.size, height: Self.size)
+        .onChange(of: trigger) {
+            guard !reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.7)) { minuteAngle += isSaved ? Self.spin : -Self.spin }
+        }
+    }
+
+    private func hand(length: CGFloat, angle: Double) -> some View {
+        Capsule()
+            .fill(isSaved ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .frame(width: 2, height: length)
+            .offset(y: -length / 2)
+            .rotationEffect(.degrees(angle))
+    }
+}
+
+/// Opens a playlist-like page by growing it out of its cover, as Woof Music does.
+/// Mark the cover with `zoomLinkCover`. `wholeLabel` is for a tile that is its own cover.
 struct ZoomLink<Destination: View, Label: View>: View {
+    private let wholeLabel: Bool
     private let destination: () -> Destination
     private let label: () -> Label
     @Namespace private var space
-    private static var sourceId: String { "open" }
 
-    init(@ViewBuilder destination: @escaping () -> Destination, @ViewBuilder label: @escaping () -> Label) {
+    init(wholeLabel: Bool = false, @ViewBuilder destination: @escaping () -> Destination, @ViewBuilder label: @escaping () -> Label) {
+        self.wholeLabel = wholeLabel
         self.destination = destination
         self.label = label
     }
 
     var body: some View {
         NavigationLink {
-            destination().navigationTransition(.zoom(sourceID: Self.sourceId, in: space))
+            destination().navigationTransition(.zoom(sourceID: zoomLinkSource, in: space))
         } label: {
-            label().matchedTransitionSource(id: Self.sourceId, in: space)
+            if wholeLabel {
+                label().matchedTransitionSource(id: zoomLinkSource, in: space)
+            } else {
+                label().environment(\.zoomLinkSpace, space)
+            }
         }
     }
 }
 
+private let zoomLinkSource = "open"
+
 extension EnvironmentValues {
-    /// Shared by a tab's screens, for pages opened from code rather than from a link.
-    @Entry var tabZoomSpace: Namespace.ID?
+    @Entry var zoomLinkSpace: Namespace.ID?
+    /// Shared by every video cover and the video page that grows out of them.
+    @Entry var videoZoomSpace: Namespace.ID?
 }
 
-private struct TabZoomSource<ID: Hashable & Sendable>: ViewModifier {
-    let id: ID
-    @Environment(\.tabZoomSpace) private var space
+private struct ZoomLinkCover: ViewModifier {
+    @Environment(\.zoomLinkSpace) private var space
 
     func body(content: Content) -> some View {
         if let space {
-            content.matchedTransitionSource(id: id, in: space)
+            content.matchedTransitionSource(id: zoomLinkSource, in: space)
+        } else {
+            content
+        }
+    }
+}
+
+private struct VideoZoomSource: ViewModifier {
+    let videoId: String
+    @Environment(\.videoZoomSpace) private var space
+
+    func body(content: Content) -> some View {
+        if let space {
+            content.matchedTransitionSource(id: videoId, in: space)
         } else {
             content
         }
@@ -486,8 +582,13 @@ private struct TabZoomSource<ID: Hashable & Sendable>: ViewModifier {
 }
 
 extension View {
-    /// What a page in the same tab grows out of when it opens with this ID.
-    func tabZoomSource<ID: Hashable & Sendable>(_ id: ID) -> some View {
-        modifier(TabZoomSource(id: id))
+    /// What the page of the surrounding `ZoomLink` grows out of.
+    func zoomLinkCover() -> some View {
+        modifier(ZoomLinkCover())
+    }
+
+    /// What the video page grows out of when this video is opened.
+    func videoZoomSource(_ videoId: String) -> some View {
+        modifier(VideoZoomSource(videoId: videoId))
     }
 }

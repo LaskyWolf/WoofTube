@@ -69,7 +69,10 @@ enum YouTubeAPI {
         ]
         clientContext["visitorData"] = auth.visitorData
         var payload = body
-        payload["context"] = ["client": clientContext, "user": ["lockedSafetyMode": false]]
+        var user: [String: Any] = ["lockedSafetyMode": false]
+        // Without this, an account with several channels answers as its main channel.
+        user["onBehalfOfUser"] = auth.dataSyncId
+        payload["context"] = ["client": clientContext, "user": user]
 
         var request = URLRequest(url: YouTubeService.youtube.baseURL.appendingPathComponent(endpoint))
         request.httpMethod = "POST"
@@ -111,7 +114,10 @@ struct Chapter: Hashable {
 
 struct WatchDetails {
     var description: String?
-    var metadata: String?
+    var views: String?
+    /// How long ago it was published, such as "3 days ago".
+    var age: String?
+    var date: String?
     var channelTitle: String?
     var channelId: String?
     var channelAvatar: String?
@@ -139,9 +145,9 @@ struct WatchDetails {
         let toggle = JSON.first("toggleButtonViewModel", in: JSON.first("likeButtonViewModel", in: likeButton))
 
         description = JSON.text(JSON.first("attributedDescription", in: secondary))?.trimmingCharacters(in: .whitespacesAndNewlines)
-        metadata = [JSON.text(JSON.first("viewCount", in: JSON.first("videoViewCountRenderer", in: primary))), JSON.text(JSON.first("dateText", in: primary))]
-            .compactMap { $0 }
-            .joined(separator: " · ")
+        views = JSON.text(JSON.first("viewCount", in: JSON.first("videoViewCountRenderer", in: primary)))
+        age = JSON.text(JSON.first("relativeDateText", in: primary))
+        date = JSON.text(JSON.first("dateText", in: primary))
         collaborators = Collaborator.all(in: owner)
         // A video with several creators has only attributedTitle, and its collaborator list also has titles.
         channelTitle = JSON.text((owner as? [String: Any])?["attributedTitle"]) ?? JSON.text(JSON.first("title", in: owner))

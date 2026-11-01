@@ -38,6 +38,8 @@ final class FeedModel {
     private(set) var items: [FeedItem] = []
     private(set) var chips: [FeedChip] = []
     private(set) var isLoading = false
+    /// A filter was picked and its videos are on the way, so the old ones give way to the loading rows.
+    private(set) var isSwitching = false
     private(set) var errorText: String?
     private var nextToken: String?
     private var nextQuery: String?
@@ -83,7 +85,10 @@ final class FeedModel {
 
     func load(_ source: FeedSource, keepChips: Bool = false) async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            isSwitching = false
+        }
         do {
             let json = try await source.fetch()
             var page = await offMain { FeedParser.items(in: json) }
@@ -155,6 +160,10 @@ final class FeedModel {
             fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) }
         }
         return fresh.isEmpty ? page : fresh
+    }
+
+    func beginSwitching() {
+        isSwitching = true
     }
 
     func remove(_ item: FeedItem) {
@@ -282,7 +291,6 @@ struct TabHeader: View {
                         .frame(width: 44, height: 44)
                         .overlay(alignment: .topTrailing) { badge }
                         .contentShape(.rect)
-                        .tabZoomSource(HeaderRoute.notifications)
                 }
                 .accessibilityLabel(session.unseenNotifications > 0 ? "Notifications, \(session.unseenNotifications) unread" : "Notifications")
 
@@ -290,7 +298,6 @@ struct TabHeader: View {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
-                        .tabZoomSource(HeaderRoute.settings)
                 }
                 .accessibilityLabel("Settings")
             }
@@ -357,6 +364,7 @@ struct FilterChips: View {
                     .buttonStyle(ZoomPressStyle())
                 }
             }
+            .animation(.smooth(duration: 0.25), value: selected)
             .padding(.horizontal, Layout.screenPadding)
             .padding(.vertical, Layout.chipSpacing)
         }
@@ -373,12 +381,12 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             FeedContent(model: model, retry: { await reload() }) {
-                KeepWatchingCard(history: history)
                 if !model.chips.isEmpty {
                     FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
                 } else if model.isLoading {
                     LoadingChips()
                 }
+                KeepWatchingCard(history: history)
             }
             .tabRoot(title: "Home", tab: .home)
             // Separate tasks, so each part of the page appears as soon as its own answer arrives.
@@ -404,6 +412,7 @@ struct HomeView: View {
         let isSelected = selectedChip == title
         selectedChip = isSelected ? nil : title
         let token = model.chips.first { $0.title == title }?.token
+        model.beginSwitching()
         Task {
             if !isSelected, let token {
                 await model.load(.continuation(token), keepChips: true)
@@ -498,6 +507,7 @@ private struct KeepWatchingCard: View {
         Thumbnail(url: entry.video.thumbnailURL, videoId: entry.video.videoId)
             .overlay { WatchProgressLine(video: entry.video, extras: entry.extras) }
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
+            .videoZoomSource(entry.video.videoId)
     }
 
     private func timeLeft(_ entry: (video: YouTubeVideo, extras: VideoExtras)) -> String {
@@ -686,15 +696,26 @@ struct FeedContent<Header: View>: View {
     var keeps: ((FeedItem) -> Bool)?
     @ViewBuilder let header: () -> Header
 
+    /// Woof Music's filters: loading rows at once, then the new rows fade up into place.
+    private var shownIds: [String] {
+        (keeps.map { model.items.filter($0) } ?? model.items).map(\.id)
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header()
-                if model.items.isEmpty {
-                    emptyState
+                if model.isSwitching {
+                    LoadingRows(isCompact: isCompact).transition(.opacity)
+                } else {
+                    if model.items.isEmpty {
+                        emptyState
+                    }
+                    FeedRows(model: model, isCompact: isCompact, keeps: keeps)
                 }
-                FeedRows(model: model, isCompact: isCompact, keeps: keeps)
             }
+            .animation(.smooth(duration: 0.4), value: shownIds)
+            .animation(.smooth(duration: 0.3), value: model.isSwitching)
         }
         .refreshable { await retry() }
     }
@@ -743,6 +764,7 @@ struct FeedRows: View {
         let shown = keeps.map { model.items.filter($0) } ?? model.items
         ForEach(shown) { item in
             row(item)
+                .transition(.opacity.combined(with: .offset(y: 24)))
                 .onScrollVisibilityChange(threshold: 0.6) { isVisible in
                     if isVisible, model.isHome { SeenVideos.mark(item) }
                 }
@@ -815,7 +837,6 @@ struct FeedRows: View {
                     ChannelRow(channel: channel)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(.rect)
-                        .tabZoomSource(id)
                 }
                 .buttonStyle(RowPressStyle())
                 .padding(.horizontal, Layout.screenPadding)
@@ -878,6 +899,7 @@ struct VideoRow: View {
                     .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
                     .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras) }
                     .clipShape(.rect(cornerRadius: Layout.tileRadius))
+                    .videoZoomSource(video.videoId)
             }
             .buttonStyle(RowPressStyle())
             HStack(alignment: .top, spacing: Layout.rowSpacing) {
@@ -986,7 +1008,7 @@ private struct VideoBadge: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, isCompact ? Layout.cardSpacing : Layout.rowPadding)
                 .padding(.vertical, 2)
-                .background(video.isLive ? Color.red : Color.black.opacity(0.78), in: .rect(cornerRadius: Layout.rowPadding, style: .continuous))
+                .background(video.isLive ? AnyShapeStyle(.tint) : AnyShapeStyle(Color.black.opacity(0.78)), in: .rect(cornerRadius: Layout.rowPadding, style: .continuous))
                 .padding(isCompact ? Layout.cardSpacing : Layout.rowPadding)
                 .allowsHitTesting(false)
         }
@@ -1066,6 +1088,7 @@ struct CompactVideoRow: View {
                 .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
                 .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras, isCompact: true) }
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+                .videoZoomSource(video.videoId)
             VStack(alignment: .leading, spacing: 2) {
                 Text(video.title)
                     .font(.subheadline.weight(.medium))
@@ -1181,6 +1204,7 @@ private struct ShortCard: View {
                         .frame(height: Self.fadeHeight)
                 }
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
+                .videoZoomSource(video.videoId)
             HStack(spacing: Layout.chipSpacing) {
                 Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
                     .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
@@ -1237,7 +1261,8 @@ private struct NewVideosCard: View {
     }
 }
 
-/// A small upright card in the colour of the video's own cover.
+/// A small upright card in the colour of the video's own cover. Like a Short card,
+/// the avatar and title straddle the cover's lower edge, and the cover fades into the card.
 private struct NewVideoRibbon: View {
     let video: YouTubeVideo
     @Environment(Router.self) private var router
@@ -1245,42 +1270,50 @@ private struct NewVideoRibbon: View {
     @State private var avatar: String?
 
     private static let width: CGFloat = 148
-    private static let avatarSize: CGFloat = 26
+    private static let avatarSize: CGFloat = 32
+    private static let fadeHeight: CGFloat = 34
 
     private var cover: String { video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg" }
+    private var cardColor: Color { tint ?? Color(.systemGray3) }
 
     var body: some View {
         Button {
             SeenVideos.mark(video.videoId)
             router.play(video)
         } label: {
-            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                CoverImage(url: cover, maxPixels: 408)
-                    .frame(height: (Self.width - Layout.rowPadding * 2) * 9 / 16)
-                    .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
-                    .overlay(alignment: .bottomTrailing) {
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                VStack(alignment: .leading, spacing: 0) {
+                    CoverImage(url: cover, maxPixels: 408)
+                        .frame(height: (Self.width - Layout.rowPadding * 2) * 9 / 16)
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(colors: [.clear, cardColor], startPoint: .top, endPoint: .bottom)
+                                .frame(height: Self.fadeHeight)
+                        }
+                        .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+                        .videoZoomSource(video.videoId)
+                    HStack(spacing: Layout.chipSpacing) {
                         Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                            .offset(x: -Layout.rowPadding, y: Layout.rowPadding)
+                            .overlay(Circle().stroke(cardColor, lineWidth: 2))
+                        Text(video.title)
+                            .font(.caption.weight(.bold))
+                            .lineLimit(2, reservesSpace: true)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
                     }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(video.title)
-                        .font(.caption.weight(.bold))
-                        .lineLimit(2, reservesSpace: true)
-                        .multilineTextAlignment(.leading)
-                    Text(video.publishedTimeText ?? video.channelTitle ?? "")
-                        .font(.caption2)
-                        .opacity(0.85)
-                        .lineLimit(1)
+                    .padding(.top, -Self.avatarSize / 2)
                 }
-                .padding(.horizontal, 2)
-                .padding(.bottom, 2)
+                Text(video.publishedTimeText ?? video.channelTitle ?? "")
+                    .font(.caption2)
+                    .opacity(0.85)
+                    .lineLimit(1)
+                    .padding(.horizontal, 2)
+                    .padding(.bottom, 2)
             }
             .foregroundStyle(.white)
             .padding(Layout.rowPadding)
             .frame(width: Self.width)
             .frame(maxHeight: .infinity)
-            .background(tint ?? Color(.systemGray3), in: .rect(cornerRadius: Layout.tileRadius + 2, style: .continuous))
+            .background(cardColor, in: .rect(cornerRadius: Layout.tileRadius + 2, style: .continuous))
             .animation(.easeOut(duration: 0.3), value: tint)
         }
         .buttonStyle(ZoomPressStyle())

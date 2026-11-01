@@ -79,7 +79,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section {
-                ZoomLink {
+                NavigationLink {
                     ProfileView()
                 } label: {
                     HStack(spacing: Layout.menuRowSpacing) {
@@ -122,7 +122,7 @@ struct SettingsView: View {
     }
 
     private func settingsRow<Destination: View>(_ title: String, icon: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
-        ZoomLink(destination: destination) {
+        NavigationLink(destination: destination) {
             Label {
                 Text(title)
             } icon: {

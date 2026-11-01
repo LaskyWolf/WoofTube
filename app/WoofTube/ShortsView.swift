@@ -228,24 +228,18 @@ struct ShortsView: View {
     }
 
     private var topBar: some View {
-        ZStack(alignment: .trailing) {
-            Button {
-                router.minimizeShorts()
-            } label: {
-                Capsule()
-                    .fill(.white.opacity(0.5))
-                    .frame(width: 36, height: 5)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Send to Mini Player")
-            Button("Close", systemImage: "xmark") { router.closeShorts() }
-                .buttonStyle(PlayerPressStyle())
-                .labelStyle(PlayerGlyphLabelStyle(size: 17))
-                .padding(.horizontal, Layout.chipSpacing)
+        Button {
+            router.minimizeShorts()
+        } label: {
+            Capsule()
+                .fill(.white.opacity(0.5))
+                .frame(width: 36, height: 5)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .contentShape(.rect)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Send to Mini Player")
     }
 
     private func page(_ video: YouTubeVideo) -> some View {
@@ -255,6 +249,7 @@ struct ShortsView: View {
                 if video.videoId == model.playingId {
                     MpvVideoView(player: model.player, isActive: router.isShortsPageOnScreen, fills: true)
                     VideoPoster(player: model.player, video: video)
+                    MovingVideoCover(poster: video.thumbnailURL, fills: true)
                 } else {
                     CoverImage(url: video.thumbnailURL)
                 }

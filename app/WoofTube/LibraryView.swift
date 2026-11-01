@@ -67,6 +67,7 @@ struct LibraryView: View {
                         videoSection(title: "In Progress", videos: history.unfinished, emptyText: "Videos you stop partway through show up here.")
                     }
                 }
+                .animation(.smooth(duration: 0.4), value: selectedFilter)
             }
             .tabRoot(title: "Library", tab: .library) {
                 newTitle = ""
@@ -128,17 +129,17 @@ struct LibraryView: View {
 
     private var shortcuts: some View {
         HStack(spacing: 10) {
-            ZoomLink {
+            ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
             } label: {
                 ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .pink, covers: likedCovers)
             }
-            ZoomLink {
+            ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
             } label: {
                 ShortcutTile(title: "Watch Later", subtitle: countText(watchLater), icon: "clock.fill", tint: .orange, covers: covers(watchLater.videos))
             }
-            ZoomLink {
+            ZoomLink(wholeLabel: true) {
                 DownloadsView()
             } label: {
                 ShortcutTile(
@@ -230,7 +231,6 @@ struct LibraryView: View {
                         ChannelRow(channel: channel, avatarSize: Layout.avatarMedium)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
-                            .tabZoomSource(channel.channelId ?? channel.title)
                     }
                     .buttonStyle(RowPressStyle())
                     .padding(.horizontal, Layout.screenPadding)
@@ -404,7 +404,7 @@ private struct HistoryStrip: View {
     var body: some View {
         if model.isLoading || !model.videosAndShorts.isEmpty {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                ZoomLink {
+                NavigationLink {
                     ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history, listsWithoutQuery: true)
                 } label: {
                     HStack(alignment: .firstTextBaseline) {

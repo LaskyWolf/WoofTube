@@ -652,7 +652,7 @@ struct LibraryDownloadCard: View {
 
     var body: some View {
         if let batch = store.batch {
-            ZoomLink {
+            NavigationLink {
                 DownloadsView().onAppear { store.clearFinishedBatch() }
             } label: {
                 content(batch)
@@ -776,7 +776,7 @@ struct DownloadsView: View {
                     } description: {
                         Text("Long press a video and choose Download.")
                     } actions: {
-                        ZoomLink { DownloadSettingsView() } label: { Text("Download Settings") }
+                        NavigationLink { DownloadSettingsView() } label: { Text("Download Settings") }
                             .buttonStyle(.borderedProminent)
                     }
                     .padding(.vertical, 48)
@@ -830,7 +830,7 @@ struct DownloadsView: View {
                     for video in videos { router.addToQueue(video) }
                 }
                 .disabled(videos.isEmpty)
-                ZoomLink {
+                NavigationLink {
                     DownloadSettingsView()
                 } label: {
                     Label("Download Settings", systemImage: "gearshape")
@@ -889,7 +889,7 @@ struct DownloadSettingsView: View {
     var body: some View {
         List {
             Section {
-                ZoomLink {
+                NavigationLink {
                     DownloadsView()
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {

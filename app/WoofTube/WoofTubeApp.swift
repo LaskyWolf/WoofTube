@@ -101,11 +101,10 @@ enum AppTab: Hashable {
     case home, library, subs, search
 }
 
-/// The pages a tab opens from code, each growing out of what was tapped.
+/// The pages a tab opens from code.
 struct TabDestinations: ViewModifier {
     let tab: AppTab
     @Environment(Router.self) private var router
-    @Namespace private var zoom
 
     func body(content: Content) -> some View {
         content
@@ -116,16 +115,11 @@ struct TabDestinations: ViewModifier {
                     case .settings: SettingsView()
                     }
                 }
-                .environment(\.tabZoomSpace, zoom)
-                .navigationTransition(.zoom(sourceID: route, in: zoom))
             }
             .navigationDestination(item: Binding(get: { router.channelPage?.tab == tab ? router.channelPage : nil }, set: { router.channelPage = $0 })) { route in
                 ChannelView(channelId: route.id)
                     .id(route.id)
-                    .environment(\.tabZoomSpace, zoom)
-                    .navigationTransition(.zoom(sourceID: route.id, in: zoom))
             }
-            .environment(\.tabZoomSpace, zoom)
     }
 }
 
@@ -151,16 +145,17 @@ struct RootTabs: View {
             }
         }
         .tabBarMinimizeBehavior(.never)
+        .environment(\.videoZoomSpace, playerZoom)
         .overlay { PlayerOverlay(zoom: playerZoom) }
         .fullScreenCover(isPresented: Bindable(router).isExpanded) {
             WatchPage()
-                .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
+                .navigationTransition(.zoom(sourceID: router.zoomSource, in: playerZoom))
                 .onAppear { router.isWatchPageOnScreen = true }
                 .onDisappear { router.isWatchPageOnScreen = false }
         }
         .fullScreenCover(item: Bindable(router).shortsRoute) { route in
             ShortsView(model: route.model)
-                .navigationTransition(.zoom(sourceID: PlayerOverlay.zoomSource, in: playerZoom))
+                .navigationTransition(.zoom(sourceID: router.zoomSource, in: playerZoom))
                 .onAppear { router.isShortsPageOnScreen = true }
                 .onDisappear { router.isShortsPageOnScreen = false }
         }
