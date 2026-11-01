@@ -15,6 +15,8 @@ enum Layout {
     static let avatarSmall: CGFloat = 36
     static let avatarMedium: CGFloat = 60
     static let avatarLarge: CGFloat = 104
+    /// Woof Music's medium art, for the channel card on top of search results.
+    static let artMedium: CGFloat = 115
     static let cardRadius: CGFloat = 8
     static let sheetRadius: CGFloat = 16
     static let menuRowSpacing: CGFloat = 14
@@ -76,7 +78,12 @@ enum Orientation {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        _ = DownloadStore.shared
         return true
+    }
+
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        DownloadStore.shared.backgroundCompletion = completionHandler
     }
 
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {

@@ -192,7 +192,7 @@ struct LibraryView: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionTitle(title: "Playlists", count: shownPlaylists.count)
             if isLoadingPlaylists {
-                loadingRows(isCircular: false)
+                LoadingMediaRows(isCircular: false)
             }
             LazyVStack(spacing: 0) {
                 ForEach(shownPlaylists, id: \.playlistId) { playlist in
@@ -224,7 +224,7 @@ struct LibraryView: View {
             SectionTitle(title: "Channels", count: subscriptions.channels.count)
             if subscriptions.channels.isEmpty {
                 if subscriptions.isLoading {
-                    loadingRows(isCircular: true)
+                    LoadingMediaRows(isCircular: true)
                 } else {
                     Text("YouTube didn't send your channels. Pull down to try again.")
                         .font(.subheadline)
@@ -268,22 +268,6 @@ struct LibraryView: View {
             }
         }
         .padding(.bottom, Layout.sectionGap)
-    }
-
-    private func loadingRows(isCircular: Bool) -> some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            ForEach(0..<4, id: \.self) { _ in
-                HStack(spacing: Layout.menuRowSpacing) {
-                    ShimmerBlock(width: Layout.artSmall, height: Layout.artSmall, radius: isCircular ? Layout.artSmall / 2 : Layout.cardRadius)
-                    VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                        ShimmerBlock(width: 160, height: 16)
-                        ShimmerBlock(width: 100, height: 13)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, Layout.screenPadding)
-        .shimmerClock()
     }
 }
 
@@ -538,6 +522,7 @@ struct PlaylistPage: View {
                     }
                 }
                 FeedRows(model: model, isCompact: true, editablePlaylistId: allowsRemoving ? playlistId : nil, playlistTitle: shownTitle)
+                    .environment(\.playlistVideos, videos)
             }
         }
         .toolbar {

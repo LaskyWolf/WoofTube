@@ -28,6 +28,11 @@ private struct VideoMenuModifier: ViewModifier {
     }
 }
 
+extension EnvironmentValues {
+    /// The playlist a row belongs to, for downloading its neighbours.
+    @Entry var playlistVideos: [YouTubeVideo] = []
+}
+
 struct VideoMenuItems: View {
     let video: YouTubeVideo
     var feedback: [FeedbackAction] = []
@@ -36,14 +41,14 @@ struct VideoMenuItems: View {
     var onRemoveFromPlaylist: (() -> Void)?
     let router: Router
     @Binding var showsPlaylists: Bool
+    @Environment(\.playlistVideos) private var playlistVideos
 
     var body: some View {
         ControlGroup {
             Button("Like", systemImage: "hand.thumbsup") {
-                DownloadStore.shared.downloadIfLikesSave(video, maxHeight: router.maxHeight)
                 router.run { _ = try await InnerTubeClient.wooftube.like(videoId: video.videoId) }
             }
-            Button("Save to Playlist", systemImage: "text.badge.plus") { showsPlaylists = true }
+            Button("Add to Playlist", systemImage: "text.badge.plus") { showsPlaylists = true }
             if let url = URL(string: "https://www.youtube.com/watch?v=\(video.videoId)") {
                 ShareLink(item: url) {
                     Label("Share", systemImage: "square.and.arrow.up")
@@ -67,7 +72,7 @@ struct VideoMenuItems: View {
                 }
             } else {
                 Button("Download", systemImage: "arrow.down.to.line") {
-                    router.run { try await DownloadStore.shared.download(video, maxHeight: router.maxHeight) }
+                    router.run { try await DownloadStore.shared.download(video, from: playlistVideos, maxHeight: router.maxHeight) }
                 }
             }
             if let onRemoveFromPlaylist {
@@ -107,6 +112,8 @@ struct VideoMenuItems: View {
 struct PlaylistOption: Identifiable {
     let id: String
     let title: String
+    var thumbnail: String?
+    var count: String?
     var containsVideo: Bool
 }
 
@@ -138,53 +145,98 @@ enum PlaylistActions {
     }
 }
 
+/// Woof Music's Add to Playlist sheet. Tapping a playlist again takes the video out.
 struct PlaylistPickerSheet: View {
     let video: YouTubeVideo
     @EnvironmentObject private var router: Router
     @Environment(\.dismiss) private var dismiss
     @State private var playlists: [PlaylistOption] = []
     @State private var isLoading = true
+    @State private var isCreating = false
+    @State private var newTitle = ""
 
     var body: some View {
         NavigationStack {
-            List(playlists) { playlist in
-                Button {
-                    toggle(playlist)
-                } label: {
-                    HStack {
-                        Text(playlist.title).foregroundStyle(.primary)
-                        Spacer()
-                        if playlist.containsVideo {
-                            Image(systemName: "checkmark").foregroundStyle(.tint)
+            Group {
+                if isLoading {
+                    LoadingMediaRows(isCircular: false)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else if playlists.isEmpty {
+                    ContentUnavailableView("No Playlists", systemImage: "list.bullet.rectangle", description: Text("Create one to start collecting videos."))
+                } else {
+                    List(playlists) { playlist in
+                        Button {
+                            toggle(playlist)
+                        } label: {
+                            HStack(spacing: Layout.rowSpacing) {
+                                MediaListRow(url: playlist.thumbnail, title: playlist.title, subtitle: playlist.count)
+                                if playlist.containsVideo {
+                                    Image(systemName: "checkmark")
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.green)
+                                }
+                            }
                         }
+                        .accessibilityAddTraits(playlist.containsVideo ? .isSelected : [])
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Layout.screenPadding, bottom: 0, trailing: Layout.screenPadding))
                     }
-                    .contentShape(.rect)
+                    .listStyle(.plain)
                 }
             }
-            .overlay {
-                if playlists.isEmpty {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        ContentUnavailableView("No Playlists", systemImage: "list.bullet.rectangle")
-                    }
-                }
-            }
-            .navigationTitle("Save to Playlist")
+            .navigationTitle("Add to Playlist")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                Button("Close", systemImage: "xmark") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New Playlist", systemImage: "plus") {
+                        newTitle = ""
+                        isCreating = true
+                    }
+                }
+            }
+            .alert("New Playlist", isPresented: $isCreating) {
+                TextField("Playlist name", text: $newTitle)
+                Button("Cancel", role: .cancel) {}
+                Button("Create") { createAndAdd() }
+            } message: {
+                Text("Adds “\(video.title)” once created.")
             }
         }
         .presentationDetents([.medium, .large])
-        .task {
-            playlists = await PlaylistActions.options(for: video.videoId)
-            if playlists.isEmpty, let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation") {
-                playlists = YouTubeFeedParser.playlists(in: json).map {
-                    PlaylistOption(id: $0.playlistId, title: $0.title, containsVideo: false)
-                }
+        .presentationDragIndicator(.visible)
+        .task { await load() }
+    }
+
+    /// YouTube says which playlists have the video, and the Library page has their covers.
+    private func load() async {
+        let options = await PlaylistActions.options(for: video.videoId)
+        let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
+        let library = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+        if options.isEmpty {
+            playlists = library.map { PlaylistOption(id: $0.playlistId, title: $0.title, thumbnail: $0.thumbnailURL, count: $0.videoCountText, containsVideo: false) }
+        } else {
+            playlists = options.map { option in
+                var option = option
+                let match = library.first { $0.playlistId == option.id }
+                option.thumbnail = match?.thumbnailURL
+                option.count = match?.videoCountText
+                return option
             }
-            isLoading = false
+        }
+        isLoading = false
+    }
+
+    private func createAndAdd() {
+        let title = newTitle
+        router.run {
+            let json = try await InnerTubeClient.wooftube.createPlaylist(title: title)
+            guard let id = JSON.string("playlistId", in: json) else { return }
+            try await PlaylistActions.add(video.videoId, to: id)
+            playlists.insert(PlaylistOption(id: id, title: title, count: "1 video", containsVideo: true), at: 0)
         }
     }
 

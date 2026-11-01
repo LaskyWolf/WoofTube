@@ -137,6 +137,7 @@ final class ShortsModel: ObservableObject {
 /// Swipe sideways for the next Short. Hold to stop the video, and move while holding to scrub.
 /// Swipe down to send it to the floating card.
 struct ShortsView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The fingers' scrub: where it started, and whether to carry on playing after.
     private struct Scrub {
         let start: Double
@@ -351,7 +352,6 @@ struct ShortsView: View {
         let isDisliked = details?.likeStatus == "DISLIKE"
         return VStack(spacing: Layout.screenPadding) {
             Button {
-                if !isLiked { DownloadStore.shared.downloadIfLikesSave(video, maxHeight: 1080) }
                 Task { await model.setLike(isLiked ? "INDIFFERENT" : "LIKE", video: video) }
             } label: {
                 RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like")
@@ -367,12 +367,14 @@ struct ShortsView: View {
                     SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
                 } label: {
                     RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus")
+                        .contentTransition(.symbolEffect(.replace))
                         .background {
                             Circle()
                                 .fill(details.isSubscribed ? AnyShapeStyle(.white.opacity(0.2)) : AnyShapeStyle(.tint))
                                 .frame(width: 44, height: 44)
                         }
                 }
+                .animation(reduceMotion ? nil : .snappy, value: details.isSubscribed)
                 .accessibilityLabel(details.isSubscribed ? "Unsubscribe" : "Subscribe")
                 .sensoryFeedback(.selection, trigger: details.isSubscribed)
             }

@@ -9,6 +9,8 @@ struct LoadedStream {
     /// Separate files, which downloads and audio tracks need. HLS and combined streams have none.
     var videoURL: String?
     var audioURL: String?
+    var videoSize: Int64?
+    var audioSize: Int64?
     var duration: Int?
     var client: YouTubeClient?
 }
@@ -137,6 +139,8 @@ enum StreamLoader {
                         trackingURL: tracking,
                         videoURL: videoURL,
                         audioURL: audioURL,
+                        videoSize: video.contentLength.flatMap(Int64.init),
+                        audioSize: audio.contentLength.flatMap(Int64.init),
                         duration: duration,
                         client: client
                     )

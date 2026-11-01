@@ -707,12 +707,11 @@ private struct PlayerProgress: View {
                 StoryboardPreview(storyboard: storyboard, seconds: position * total)
             }
             HStack {
-                Text(shownTime.clockText)
+                Text("\(shownTime.clockText) | \(duration.clockText)")
                 if let chapter {
                     chapterMenu(current: chapter)
                 }
                 Spacer(minLength: 0)
-                Text(duration.clockText)
                 RoutePicker().frame(width: 44, height: 44)
                 Button(isFullscreen ? "Exit Full Screen" : "Full Screen", systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
                     Orientation.setFullscreen(!isFullscreen)
@@ -871,7 +870,6 @@ private struct PlayerControls: View {
                 if player.speed != 1 {
                     speedMenu
                 }
-                captionsMenu
                 optionsMenu
             }
             Spacer(minLength: 0)
@@ -982,34 +980,15 @@ private struct PlayerControls: View {
                         }
                     }
                 }
-                translateButton
             } label: {
                 Label("Captions", systemImage: router.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill")
             }
         }
     }
 
-    /// YouTube translates any track, so this offers the phone's language when it differs.
-    @ViewBuilder
-    private var translateButton: some View {
-        let language = Locale.current.language.languageCode?.identifier
-        if let track = router.captions.first(where: { $0.languageCode == router.selectedCaption }),
-           let language, track.languageCode != language,
-           let name = Locale.current.localizedString(forLanguageCode: language) {
-            Button {
-                router.selectCaption(track, translated: !router.isCaptionTranslated)
-            } label: {
-                if router.isCaptionTranslated {
-                    Label("Translate to \(name)", systemImage: "checkmark")
-                } else {
-                    Label("Translate to \(name)", systemImage: "translate")
-                }
-            }
-        }
-    }
-
     private var optionsMenu: some View {
         Menu {
+            captionsMenu
             if router.audioTracks.count > 1 {
                 Menu("Audio Track") {
                     ForEach(router.audioTracks) { track in
@@ -1252,12 +1231,12 @@ private struct WatchDetailsView: View {
                     } label: {
                         HeaderRoundIcon(systemImage: "text.badge.plus")
                     }
-                    .accessibilityLabel("Save to Playlist")
+                    .accessibilityLabel("Add to Playlist")
                     if let video = router.current {
                         let isSaved = downloads.isDownloaded(id)
-                        let isSaving = downloads.active.contains { $0.id == id }
+                        let isSaving = downloads.isQueued(id)
                         Button {
-                            router.run { try await downloads.download(video, maxHeight: router.maxHeight) }
+                            router.run { try await downloads.download(video, from: router.playlistVideos, maxHeight: router.maxHeight) }
                         } label: {
                             if isSaving {
                                 ProgressView()
@@ -1338,9 +1317,6 @@ private struct WatchDetailsView: View {
     private func setLike(_ status: String) {
         guard let id = router.current?.videoId, let previous = router.details?.likeStatus else { return }
         router.setDetails { $0.likeStatus = status }
-        if status == "LIKE", let video = router.current {
-            downloads.downloadIfLikesSave(video, maxHeight: router.maxHeight)
-        }
         Task {
             do {
                 let tube = InnerTubeClient.wooftube
@@ -1469,6 +1445,7 @@ struct SubscribeButton: View {
     var isLarge = false
     let onChange: (Bool) -> Void
     @EnvironmentObject private var settings: AppSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button {
@@ -1479,27 +1456,24 @@ struct SubscribeButton: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .foregroundStyle(isSubscribed ? Color.primary : Color.white)
+                    .contentTransition(.symbolEffect(.replace))
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
-                    .glassEffect(isSubscribed ? Glass.regular : Glass.regular.tint(settings.accentColor), in: .capsule)
+                    .glassEffect(Glass.regular.tint(isSubscribed ? nil : settings.accentColor), in: .capsule)
                     .contentShape(.capsule)
             } else {
                 Text(isSubscribed ? "Subscribed" : "Subscribe")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(isSubscribed ? Color.primary : Color.white)
+                    .contentTransition(.interpolate)
                     .padding(.horizontal, Layout.screenPadding)
                     .frame(height: 38)
-                    .background {
-                        if isSubscribed {
-                            Capsule().fill(Color.primary.opacity(0.1))
-                        } else {
-                            Capsule().fill(.tint)
-                        }
-                    }
+                    .background(isSubscribed ? AnyShapeStyle(Color.primary.opacity(0.1)) : AnyShapeStyle(.tint), in: .capsule)
                     .contentShape(.capsule)
             }
         }
         .buttonStyle(ZoomPressStyle(scale: 0.92))
+        .animation(reduceMotion ? nil : .snappy, value: isSubscribed)
         .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
         .sensoryFeedback(.selection, trigger: isSubscribed)
     }

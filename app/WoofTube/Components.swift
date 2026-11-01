@@ -93,6 +93,27 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
     }
 }
 
+/// The shape of a list of `MediaListRow`s while it loads.
+struct LoadingMediaRows: View {
+    let isCircular: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            ForEach(0..<4, id: \.self) { _ in
+                HStack(spacing: Layout.menuRowSpacing) {
+                    ShimmerBlock(width: Layout.artSmall, height: Layout.artSmall, radius: isCircular ? Layout.artSmall / 2 : Layout.cardRadius)
+                    VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                        ShimmerBlock(width: 160, height: 16)
+                        ShimmerBlock(width: 100, height: 13)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+        .shimmerClock()
+    }
+}
+
 /// `DetailHeaderCard` already shows the title, so the bar repeats it only once the
 /// header has scrolled away. A pinned title always shows.
 private struct DetailBarTitle: ViewModifier {

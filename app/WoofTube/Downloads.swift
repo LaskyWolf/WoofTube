@@ -5,12 +5,15 @@ import SwiftyTube
 
 enum DownloadSettings {
     static let wifiOnlyKey = "downloads.wifiOnly"
-    static let autoOnLikeKey = "downloads.autoOnLike"
+    /// How many videos on each side of a playlist video to save with it. 0 saves only that video.
+    static let adjacentKey = "downloads.adjacent"
     /// 0 follows the player's quality.
     static let maxHeightKey = "downloads.maxHeight"
 }
 
 /// Saves a video's separate video and audio files, so offline playback keeps the chosen quality.
+/// The system does the transfers, so they go on while the app is suspended. A job's state is on
+/// disk, because the system can also close the app and reopen it when the transfers end.
 @MainActor
 final class DownloadStore: ObservableObject {
     static let shared = DownloadStore()
@@ -41,8 +44,8 @@ final class DownloadStore: ObservableObject {
         var errorDescription: String? { "Downloads are set to Wi-Fi only." }
     }
 
-    /// A run of several videos, followed by the card in the Library.
-    struct Batch {
+    /// A run of videos, followed by the card in the Library.
+    struct Batch: Codable {
         var total = 0
         var completed = 0
         var failed = 0
@@ -50,18 +53,63 @@ final class DownloadStore: ObservableObject {
         var isDone: Bool { completed + failed >= total }
     }
 
+    /// One range of a file. YouTube slows down long requests, so files are fetched in short ones.
+    struct Chunk: Codable {
+        let name: String
+        let url: URL
+        let range: String
+        let size: Int64
+    }
+
+    /// The video being saved.
+    private struct Job: Codable {
+        let video: YouTubeVideo
+        let videoFile: String
+        let audioFile: String
+        let chunks: [Chunk]
+        var finished: Set<String> = []
+        let started: Date
+
+        var isComplete: Bool { finished.count == chunks.count }
+    }
+
+    private struct Pending: Codable {
+        var job: Job?
+        var waiting: [YouTubeVideo]
+        var batch: Batch?
+        var maxHeight: Int
+    }
+
     @Published private(set) var items: [Item] = []
     @Published private(set) var active: [Active] = []
     @Published private(set) var waiting: [YouTubeVideo] = []
     @Published private(set) var batch: Batch?
+    /// For Diagnostics.
+    private(set) var lastReport: String?
 
-    private var isRunningQueue = false
+    /// Given by the system when it reopens the app, and called once the next job is on its way.
+    var backgroundCompletion: (() -> Void)?
+
+    private var job: Job?
+    /// Popped from the queue, its stream address still loading.
+    private var starting: YouTubeVideo?
+    private var isJoining = false
+    private var queueHeight = 1080
+    private var written: [String: Int64] = [:]
+    private var retries: [String: Int] = [:]
+    private var waiters: [String: CheckedContinuation<Void, Error>] = [:]
     private let network = NWPathMonitor()
+
+    /// Same size yt-dlp asks YouTube for.
+    private nonisolated static let chunkSize: Int64 = 10 << 20
+    private static let retryLimit = 3
 
     private static var folder: URL { ProfileStorage.downloadsFolder }
     private static var index: URL { folder.appending(path: "index.json") }
+    private static var pendingFile: URL { folder.appending(path: "pending.json") }
 
     private init() {
+        Self.selfCheck()
         network.start(queue: DispatchQueue(label: "downloads.network"))
         reloadForActiveProfile()
     }
@@ -75,48 +123,39 @@ final class DownloadStore: ObservableObject {
         next.total += new.count
         batch = next
         waiting += new
-        guard !isRunningQueue else { return }
-        isRunningQueue = true
-        Task {
-            while !waiting.isEmpty {
-                let video = waiting.removeFirst()
-                do {
-                    try await save(video, maxHeight: maxHeight)
-                    batch?.completed += 1
-                } catch {
-                    batch?.failed += 1
-                    batch?.failureReason = error.localizedDescription
-                }
-            }
-            isRunningQueue = false
-        }
+        queueHeight = maxHeight
+        savePending()
+        advance()
     }
 
-    /// One video, whose failure the caller shows. The Library's card follows it too.
-    func download(_ video: YouTubeVideo, maxHeight: Int) async throws {
+    /// One video, whose failure the caller shows, plus its neighbours in the playlist if the setting asks for them.
+    func download(_ video: YouTubeVideo, from playlist: [YouTubeVideo] = [], maxHeight: Int) async throws {
         let id = video.videoId
-        guard !isDownloaded(id), !active.contains(where: { $0.id == id }), !waiting.contains(where: { $0.videoId == id }) else { return }
-        var next = batch.flatMap { $0.isDone ? nil : $0 } ?? Batch()
-        next.total += 1
-        batch = next
-        do {
-            try await save(video, maxHeight: maxHeight)
-            batch?.completed += 1
-        } catch {
-            batch?.failed += 1
-            batch?.failureReason = error.localizedDescription
-            throw error
+        let count = UserDefaults.standard.integer(forKey: DownloadSettings.adjacentKey)
+        download([video] + Self.adjacent(to: id, in: playlist, count: count), maxHeight: maxHeight)
+        guard isQueued(id), waiters[id] == nil else { return }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            waiters[id] = continuation
         }
     }
 
-    func downloadIfLikesSave(_ video: YouTubeVideo, maxHeight: Int) {
-        if UserDefaults.standard.bool(forKey: DownloadSettings.autoOnLikeKey) {
-            download([video], maxHeight: maxHeight)
+    func isQueued(_ videoId: String) -> Bool {
+        active.contains { $0.id == videoId } || waiting.contains { $0.videoId == videoId }
+    }
+
+    /// The videos on both sides of this one, nearest first.
+    static func adjacent(to videoId: String, in playlist: [YouTubeVideo], count: Int) -> [YouTubeVideo] {
+        guard count > 0, let index = playlist.firstIndex(where: { $0.videoId == videoId }) else { return [] }
+        return (1...count).flatMap { step in
+            [index + step, index - step].filter { playlist.indices.contains($0) }.map { playlist[$0] }
         }
     }
 
     func clearFinishedBatch() {
-        if batch?.isDone == true { batch = nil }
+        if batch?.isDone == true {
+            batch = nil
+            savePending()
+        }
     }
 
     /// From 0 to 1, counting how far the current video got.
@@ -133,8 +172,10 @@ final class DownloadStore: ObservableObject {
 
     func deleteAll() {
         waiting = []
+        if job != nil { end(failure: CancellationError()) }
         for item in items { delete(item) }
         batch = nil
+        savePending()
     }
 
     /// Accounts can't change while something downloads, so nothing lands in the wrong folder.
@@ -142,6 +183,13 @@ final class DownloadStore: ObservableObject {
         try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
         let data = try? Data(contentsOf: Self.index)
         items = data.flatMap { try? JSONDecoder().decode([Item].self, from: $0) } ?? []
+        let pending = (try? Data(contentsOf: Self.pendingFile)).flatMap { try? JSONDecoder().decode(Pending.self, from: $0) }
+        job = pending?.job
+        waiting = pending?.waiting ?? []
+        batch = pending?.batch
+        queueHeight = pending?.maxHeight ?? queueHeight
+        active = job.map { [Active(video: $0.video)] } ?? []
+        Task { await resumeJob() }
     }
 
     func isDownloaded(_ videoId: String) -> Bool {
@@ -158,34 +206,6 @@ final class DownloadStore: ObservableObject {
         )
     }
 
-    private func save(_ video: YouTubeVideo, maxHeight: Int) async throws {
-        let id = video.videoId
-        guard !isDownloaded(id), !active.contains(where: { $0.id == id }) else { return }
-        if UserDefaults.standard.bool(forKey: DownloadSettings.wifiOnlyKey), network.currentPath.usesInterfaceType(.cellular) {
-            throw NeedsWiFi()
-        }
-        active.append(Active(video: video))
-        defer { active.removeAll { $0.id == id } }
-
-        let chosen = UserDefaults.standard.integer(forKey: DownloadSettings.maxHeightKey)
-        let stream = try await StreamLoader.load(videoId: id, maxHeight: chosen > 0 ? chosen : maxHeight)
-        guard let videoURL = stream.videoURL.flatMap(URL.init(string:)),
-              let audioURL = stream.audioURL.flatMap(URL.init(string:)) else { throw NotDownloadable() }
-        let videoFile = id + "-video"
-        let audioFile = id + "-audio"
-        do {
-            // The audio is the smaller part, so the video counts for most of the bar.
-            try await fetch(videoURL, to: videoFile, videoId: id, from: 0, span: 0.9)
-            try await fetch(audioURL, to: audioFile, videoId: id, from: 0.9, span: 0.1)
-        } catch {
-            try? FileManager.default.removeItem(at: Self.folder.appending(path: videoFile))
-            try? FileManager.default.removeItem(at: Self.folder.appending(path: audioFile))
-            throw error
-        }
-        items.insert(Item(video: video, videoFile: videoFile, audioFile: audioFile), at: 0)
-        save()
-    }
-
     func delete(_ item: Item) {
         try? FileManager.default.removeItem(at: Self.folder.appending(path: item.videoFile))
         try? FileManager.default.removeItem(at: Self.folder.appending(path: item.audioFile))
@@ -193,72 +213,299 @@ final class DownloadStore: ObservableObject {
         save()
     }
 
-    private func fetch(_ url: URL, to name: String, videoId: String, from start: Double, span: Double) async throws {
-        let file = FileDownload(destination: Self.folder.appending(path: name)) { [weak self] fraction in
-            Task { @MainActor in
-                guard let self, let index = self.active.firstIndex(where: { $0.id == videoId }) else { return }
-                self.active[index].fraction = start + fraction * span
+    // MARK: The queue
+
+    private func advance() {
+        guard job == nil, starting == nil, let video = waiting.first else {
+            settleBackground()
+            return
+        }
+        waiting.removeFirst()
+        starting = video
+        active = [Active(video: video)]
+        // Long enough to get the next video going when this runs with the phone locked.
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
+        Task {
+            defer { UIApplication.shared.endBackgroundTask(backgroundTask) }
+            do {
+                let new = try await makeJob(video)
+                starting = nil
+                job = new
+                savePending()
+                for chunk in new.chunks { DownloadSession.shared.start(chunk) }
+                settleBackground()
+            } catch {
+                starting = nil
+                conclude(video, failure: error)
             }
         }
-        try await file.run(url)
+    }
+
+    private func makeJob(_ video: YouTubeVideo) async throws -> Job {
+        let id = video.videoId
+        if UserDefaults.standard.bool(forKey: DownloadSettings.wifiOnlyKey), network.currentPath.usesInterfaceType(.cellular) {
+            throw NeedsWiFi()
+        }
+        let chosen = UserDefaults.standard.integer(forKey: DownloadSettings.maxHeightKey)
+        let stream = try await StreamLoader.load(videoId: id, maxHeight: chosen > 0 ? chosen : queueHeight)
+        guard let videoURL = stream.videoURL.flatMap(URL.init(string:)),
+              let audioURL = stream.audioURL.flatMap(URL.init(string:)) else { throw NotDownloadable() }
+        let videoFile = id + "-video"
+        let audioFile = id + "-audio"
+        return Job(
+            video: video,
+            videoFile: videoFile,
+            audioFile: audioFile,
+            chunks: Self.chunks(of: videoFile, url: videoURL, size: stream.videoSize) + Self.chunks(of: audioFile, url: audioURL, size: stream.audioSize),
+            started: Date()
+        )
+    }
+
+    /// A whole file in one request when YouTube doesn't say how big it is.
+    nonisolated static func chunks(of file: String, url: URL, size: Int64?) -> [Chunk] {
+        guard let size, size > 0 else {
+            return [Chunk(name: file + ".0", url: url, range: "bytes=0-", size: 0)]
+        }
+        return stride(from: Int64(0), to: size, by: chunkSize).enumerated().map { index, start in
+            let end = min(start + chunkSize, size)
+            return Chunk(name: "\(file).\(index)", url: url, range: "bytes=\(start)-\(end - 1)", size: end - start)
+        }
+    }
+
+    /// After a relaunch: whatever isn't on disk or on its way is asked for again.
+    private func resumeJob() async {
+        guard var job else {
+            advance()
+            return
+        }
+        let running = await DownloadSession.shared.runningNames()
+        for chunk in job.chunks where FileManager.default.fileExists(atPath: Self.folder.appending(path: chunk.name).path) {
+            job.finished.insert(chunk.name)
+        }
+        self.job = job
+        if job.isComplete {
+            join(job)
+            return
+        }
+        for chunk in job.chunks where !job.finished.contains(chunk.name) && !running.contains(chunk.name) {
+            DownloadSession.shared.start(chunk)
+        }
+        settleBackground()
+    }
+
+    func chunkProgressed(_ name: String, written bytes: Int64) {
+        guard job != nil else { return }
+        written[name] = bytes
+        publishFraction()
+    }
+
+    func chunkFinished(_ name: String) {
+        guard var job, job.chunks.contains(where: { $0.name == name }) else {
+            // From a job that's gone.
+            try? FileManager.default.removeItem(at: Self.folder.appending(path: name))
+            return
+        }
+        guard job.finished.insert(name).inserted else { return }
+        written[name] = nil
+        self.job = job
+        savePending()
+        publishFraction()
+        if job.isComplete { join(job) }
+    }
+
+    func chunkFailed(_ name: String, error: Error) {
+        guard let job, let chunk = job.chunks.first(where: { $0.name == name }), !job.finished.contains(name) else { return }
+        let tries = retries[name, default: 0] + 1
+        retries[name] = tries
+        if tries < Self.retryLimit {
+            DownloadSession.shared.start(chunk)
+        } else {
+            end(failure: error)
+        }
+    }
+
+    /// Only on visible changes, because every view showing downloads redraws with this.
+    private func publishFraction() {
+        guard let job, !active.isEmpty else { return }
+        let total = job.chunks.reduce(Int64(0)) { $0 + $1.size }
+        let fraction: Double
+        if total > 0 {
+            let done = job.chunks.filter { job.finished.contains($0.name) }.reduce(Int64(0)) { $0 + $1.size }
+            fraction = Double(done + written.values.reduce(0, +)) / Double(total)
+        } else {
+            fraction = Double(job.finished.count) / Double(job.chunks.count)
+        }
+        if abs(fraction - active[0].fraction) >= 0.005 || job.isComplete {
+            active[0].fraction = min(fraction, 1)
+        }
+    }
+
+    private func join(_ job: Job) {
+        guard !isJoining else { return }
+        isJoining = true
+        let folder = Self.folder
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
+        Task {
+            defer { UIApplication.shared.endBackgroundTask(backgroundTask) }
+            do {
+                try await Task.detached {
+                    try Self.join(job.chunks, into: job.videoFile, in: folder)
+                    try Self.join(job.chunks, into: job.audioFile, in: folder)
+                }.value
+                let seconds = Date().timeIntervalSince(job.started)
+                let bytes = job.chunks.reduce(Int64(0)) { $0 + $1.size }
+                lastReport = "Last download: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) in \(Int(seconds)) s"
+                items.insert(Item(video: job.video, videoFile: job.videoFile, audioFile: job.audioFile), at: 0)
+                save()
+                isJoining = false
+                end(failure: nil)
+            } catch {
+                isJoining = false
+                end(failure: error)
+            }
+        }
+    }
+
+    private nonisolated static func join(_ chunks: [Chunk], into file: String, in folder: URL) throws {
+        let destination = folder.appending(path: file)
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: destination)
+        defer { try? handle.close() }
+        for chunk in chunks where chunk.name.hasPrefix(file + ".") {
+            let part = folder.appending(path: chunk.name)
+            try handle.write(contentsOf: Data(contentsOf: part, options: .mappedIfSafe))
+            try FileManager.default.removeItem(at: part)
+        }
+    }
+
+    /// Clears the current job. Its partial files go, and a failure takes the output with it.
+    private func end(failure: Error?) {
+        guard let job else { return }
+        DownloadSession.shared.cancelAll()
+        for chunk in job.chunks { try? FileManager.default.removeItem(at: Self.folder.appending(path: chunk.name)) }
+        if failure != nil {
+            try? FileManager.default.removeItem(at: Self.folder.appending(path: job.videoFile))
+            try? FileManager.default.removeItem(at: Self.folder.appending(path: job.audioFile))
+        }
+        self.job = nil
+        conclude(job.video, failure: failure)
+    }
+
+    private func conclude(_ video: YouTubeVideo, failure: Error?) {
+        active = []
+        written = [:]
+        retries = [:]
+        if let failure {
+            batch?.failed += 1
+            batch?.failureReason = failure.localizedDescription
+        } else {
+            batch?.completed += 1
+        }
+        let waiter = waiters.removeValue(forKey: video.videoId)
+        if let failure {
+            waiter?.resume(throwing: failure)
+        } else {
+            waiter?.resume()
+        }
+        savePending()
+        advance()
+    }
+
+    private func settleBackground() {
+        guard starting == nil, !isJoining else { return }
+        backgroundCompletion?()
+        backgroundCompletion = nil
+    }
+
+    func backgroundEventsDelivered() {
+        settleBackground()
+    }
+
+    private func savePending() {
+        let queue = (starting.map { [$0] } ?? []) + waiting
+        let pending = Pending(job: job, waiting: queue, batch: batch, maxHeight: queueHeight)
+        try? JSONEncoder().encode(pending).write(to: Self.pendingFile)
     }
 
     private func save() {
         try? JSONEncoder().encode(items).write(to: Self.index)
     }
+
+    private static func selfCheck() {
+        let url = URL(filePath: "/x")
+        let parts = chunks(of: "a", url: url, size: chunkSize + 1)
+        assert(parts.map(\.range) == ["bytes=0-\(chunkSize - 1)", "bytes=\(chunkSize)-\(chunkSize)"])
+        assert(parts.reduce(0) { $0 + $1.size } == chunkSize + 1)
+        assert(chunks(of: "a", url: url, size: nil).map(\.range) == ["bytes=0-"])
+        let list = ["a", "b", "c", "d"].map { YouTubeVideo(videoId: $0, title: $0) }
+        assert(adjacent(to: "a", in: list, count: 2).map(\.videoId) == ["b", "c"])
+        assert(adjacent(to: "b", in: list, count: 1).map(\.videoId) == ["c", "a"])
+        assert(adjacent(to: "z", in: list, count: 1).isEmpty)
+        assert(adjacent(to: "b", in: list, count: 0).isEmpty)
+    }
 }
 
-/// One file, with progress. The async URLSession calls don't report any.
-private final class FileDownload: NSObject, URLSessionDownloadDelegate {
-    private let destination: URL
-    private let onProgress: @Sendable (Double) -> Void
-    private var continuation: CheckedContinuation<Void, Error>?
-    private var failure: Error?
+/// The system's download queue, which keeps running while the app isn't.
+private final class DownloadSession: NSObject, URLSessionDownloadDelegate {
+    static let shared = DownloadSession()
 
-    init(destination: URL, onProgress: @escaping @Sendable (Double) -> Void) {
-        self.destination = destination
-        self.onProgress = onProgress
+    private lazy var session: URLSession = {
+        let id = (Bundle.main.bundleIdentifier ?? "wooftube") + ".downloads"
+        let configuration = URLSessionConfiguration.background(withIdentifier: id)
+        configuration.isDiscretionary = false
+        configuration.sessionSendsLaunchEvents = true
+        configuration.httpMaximumConnectionsPerHost = 4
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    func start(_ chunk: DownloadStore.Chunk) {
+        // The same request mpv makes when it plays the file.
+        var request = URLRequest(url: chunk.url)
+        request.setValue(MpvPlayer.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(chunk.range, forHTTPHeaderField: "Range")
+        request.allowsCellularAccess = !UserDefaults.standard.bool(forKey: DownloadSettings.wifiOnlyKey)
+        let task = session.downloadTask(with: request)
+        task.taskDescription = chunk.name
+        task.resume()
     }
 
-    func run(_ url: URL) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
-            // The same request mpv makes when it plays the file.
-            var request = URLRequest(url: url)
-            request.setValue(MpvPlayer.userAgent, forHTTPHeaderField: "User-Agent")
-            request.setValue("bytes=0-", forHTTPHeaderField: "Range")
-            session.downloadTask(with: request).resume()
-            session.finishTasksAndInvalidate()
-        }
+    func runningNames() async -> Set<String> {
+        Set(await session.allTasks.compactMap(\.taskDescription))
+    }
+
+    func cancelAll() {
+        session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0 else { return }
-        onProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+        guard let name = downloadTask.taskDescription else { return }
+        Task { @MainActor in DownloadStore.shared.chunkProgressed(name, written: totalBytesWritten) }
     }
 
     /// The temporary file is deleted when this returns, so it moves here.
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let name = downloadTask.taskDescription else { return }
         if let status = (downloadTask.response as? HTTPURLResponse)?.statusCode, status >= 400 {
-            failure = DownloadStore.Refused(status: status)
+            Task { @MainActor in DownloadStore.shared.chunkFailed(name, error: DownloadStore.Refused(status: status)) }
             return
         }
+        let destination = ProfileStorage.downloadsFolder.appending(path: name)
         do {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: location, to: destination)
+            Task { @MainActor in DownloadStore.shared.chunkFinished(name) }
         } catch {
-            failure = error
+            Task { @MainActor in DownloadStore.shared.chunkFailed(name, error: error) }
         }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error ?? failure {
-            continuation?.resume(throwing: error)
-        } else {
-            continuation?.resume()
-        }
-        continuation = nil
+        guard let name = task.taskDescription, let error, (error as? URLError)?.code != .cancelled else { return }
+        Task { @MainActor in DownloadStore.shared.chunkFailed(name, error: error) }
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        Task { @MainActor in DownloadStore.shared.backgroundEventsDelivered() }
     }
 }
 
@@ -401,19 +648,19 @@ struct DownloadsView: View {
 
     private var videos: [YouTubeVideo] { store.items.map(\.video) }
     private var cover: String? { videos.first.map { "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" } }
+    private var size: String { ByteCountFormatter.string(fromByteCount: store.storageBytes, countStyle: .file) }
 
     private var meta: String {
         let total = videos.compactMap(\.durationSeconds).reduce(0, +)
         let count = "\(videos.count) \(videos.count == 1 ? "video" : "videos")"
-        return total > 0 ? count + " · " + Double(total).clockText : count
+        guard !videos.isEmpty else { return "Downloads" }
+        return ([count] + (total > 0 ? [Double(total).clockText] : []) + [size]).joined(separator: " · ")
     }
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if !videos.isEmpty {
-                    header
-                }
+                header
                 if store.items.isEmpty, store.active.isEmpty, store.waiting.isEmpty {
                     ContentUnavailableView {
                         Label("No Downloads", systemImage: "arrow.down.to.line")
@@ -451,23 +698,13 @@ struct DownloadsView: View {
                     }
                 }
                 ForEach(store.items) { item in
-                    Button {
-                        router.play(item.video)
-                    } label: {
-                        CompactVideoRow(video: item.video)
-                    }
-                    .buttonStyle(RowPressStyle())
-                    .padding(.horizontal, Layout.screenPadding)
-                    .padding(.vertical, Layout.rowPadding)
-                    .contextMenu {
-                        Button("Delete Download", systemImage: "trash", role: .destructive) {
-                            store.delete(item)
-                        }
-                    }
+                    VideoButton(video: item.video, isCompact: true)
+                        .padding(.horizontal, Layout.screenPadding)
+                        .padding(.vertical, Layout.rowPadding)
                 }
             }
         }
-        .detailBarTitle("Downloads", pinnedTitle: videos.isEmpty ? "Downloads" : nil)
+        .detailBarTitle("Downloads")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
@@ -499,18 +736,18 @@ struct DownloadsView: View {
             CoverImage(url: cover)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
         } secondary: {
-            Text(ByteCountFormatter.string(fromByteCount: store.storageBytes, countStyle: .file))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            EmptyView()
         } buttons: {
-            Button { router.playAll(videos, shuffled: true) } label: {
-                HeaderRoundIcon(systemImage: "shuffle")
+            if !videos.isEmpty {
+                Button { router.playAll(videos, shuffled: true) } label: {
+                    HeaderRoundIcon(systemImage: "shuffle")
+                }
+                .accessibilityLabel("Shuffle")
+                Button { router.playAll(videos) } label: {
+                    HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
+                }
+                .accessibilityLabel("Play All")
             }
-            .accessibilityLabel("Shuffle")
-            Button { router.playAll(videos) } label: {
-                HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
-            }
-            .accessibilityLabel("Play All")
         }
         .padding(.vertical, Layout.screenPadding)
         .frame(maxWidth: .infinity)
@@ -525,7 +762,7 @@ struct DownloadSettingsView: View {
     @ObservedObject private var store = DownloadStore.shared
     @AppStorage(DownloadSettings.maxHeightKey) private var maxHeight = 0
     @AppStorage(DownloadSettings.wifiOnlyKey) private var wifiOnly = false
-    @AppStorage(DownloadSettings.autoOnLikeKey) private var autoOnLike = false
+    @AppStorage(DownloadSettings.adjacentKey) private var adjacent = 0
 
     private static let heights = [1080, 720, 480, 360]
 
@@ -555,13 +792,16 @@ struct DownloadSettingsView: View {
                 Toggle(isOn: $wifiOnly) {
                     Label("Wi-Fi Only", systemImage: "wifi")
                 }
-                Toggle(isOn: $autoOnLike) {
-                    Label("Auto-Download on Like", systemImage: "hand.thumbsup.fill")
+                Picker(selection: $adjacent) {
+                    Text("Off").tag(0)
+                    ForEach(1...3, id: \.self) { Text("\($0) Each Side").tag($0) }
+                } label: {
+                    Label("Adjacent Episodes", systemImage: "list.number")
                 }
             } header: {
                 Text("Preferences")
             } footer: {
-                Text("Auto-download saves videos you like for offline watching. Wi-Fi Only blocks downloads on cellular data.")
+                Text("Adjacent Episodes also saves the videos before and after the one you download from a playlist. Wi-Fi Only blocks downloads on cellular data.")
             }
         }
         .navigationTitle("Downloads")

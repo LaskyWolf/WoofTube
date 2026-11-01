@@ -58,7 +58,6 @@ final class Router: ObservableObject {
     @Published var skipsSponsors: Bool {
         didSet { UserDefaults.standard.set(skipsSponsors, forKey: Self.skipsSponsorsKey) }
     }
-    @Published private(set) var isCaptionTranslated = false
     @Published private(set) var audioTracks: [AudioTrack] = []
     @Published private(set) var selectedAudioTrack: String?
     @Published private(set) var storyboard: Storyboard?
@@ -98,6 +97,8 @@ final class Router: ObservableObject {
     private var sponsorSegments: [ClosedRange<Double>] = []
     private var currentStream: LoadedStream?
     private var playlistModel: FeedModel?
+    /// What the current video was started from, for downloading its neighbours.
+    var playlistVideos: [YouTubeVideo] { playlistModel?.videos ?? [] }
     private var backgroundTask: Task<Void, Never>?
     /// Long enough for iOS to open the window by itself when the app leaves the screen.
     private static let windowStartDelay = Duration.seconds(1)
@@ -300,15 +301,14 @@ final class Router: ObservableObject {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
-    func selectCaption(_ track: YouTubeCaptionTrack?, translated: Bool = false) {
+    func selectCaption(_ track: YouTubeCaptionTrack?) {
         selectedCaption = track?.languageCode
-        isCaptionTranslated = translated
         captionCues = []
         UserDefaults.standard.set(track?.languageCode, forKey: Self.captionLanguageKey)
         guard let track else { return }
         Task {
             do {
-                let cues = try await CaptionLoader.cues(for: track, translated: translated)
+                let cues = try await CaptionLoader.cues(for: track)
                 guard selectedCaption == track.languageCode else { return }
                 captionCues = cues
                 if cues.isEmpty { actionMessage = "YouTube returned no captions for this language." }
@@ -376,7 +376,9 @@ final class Router: ObservableObject {
                 return
             }
             do {
+                let started = Date()
                 let stream = try await StreamLoader.load(videoId: videoId, maxHeight: maxHeight)
+                player.note("Stream found in \(Date().timeIntervalSince(started).formatted(.number.precision(.fractionLength(1)))) s")
                 guard !Task.isCancelled else { return }
                 currentStream = stream
                 selectedAudioTrack = nil

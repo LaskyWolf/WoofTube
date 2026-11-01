@@ -19,6 +19,7 @@ final class MpvPlayer: ObservableObject {
     @Published private(set) var isBuffering = false
     @Published private(set) var errorText: String?
     @Published private(set) var recentLog: [String] = []
+    private var loadStarted: Date?
 
     /// mpv puts its frames here. It's the kind of layer Apple's Picture in Picture window can show.
     let videoLayer: AVSampleBufferDisplayLayer = {
@@ -48,6 +49,7 @@ final class MpvPlayer: ObservableObject {
     }
 
     func load(url: String, start: Double = 0) {
+        loadStarted = Date()
         errorText = nil
         isBuffering = true
         isPaused = false
@@ -179,6 +181,11 @@ final class MpvPlayer: ObservableObject {
         }
     }
 
+    /// A line in Diagnostics, for measuring what can only be measured on the phone.
+    func note(_ line: String) {
+        addLog(line)
+    }
+
     private func addLog(_ line: String) {
         recentLog = Array((recentLog + [line]).suffix(Self.logLimit))
     }
@@ -285,6 +292,10 @@ final class MpvPlayer: ObservableObject {
                 player?.publish { $0.addLog(line) }
             case MPV_EVENT_PLAYBACK_RESTART:
                 player?.publish {
+                    if let started = $0.loadStarted {
+                        $0.addLog("First frame after \(Date().timeIntervalSince(started).formatted(.number.precision(.fractionLength(1)))) s")
+                        $0.loadStarted = nil
+                    }
                     $0.isBuffering = false
                     $0.isVideoReady = true
                 }

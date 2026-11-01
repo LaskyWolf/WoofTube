@@ -344,7 +344,7 @@ private struct SearchResults: View {
             router.openChannelPage(id)
         } label: {
             HStack(spacing: 14) {
-                Avatar(url: channel.thumbnailURL, size: Layout.avatarSmall)
+                Avatar(url: channel.thumbnailURL, size: Layout.artMedium)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Channel")
                         .font(.caption.weight(.semibold))

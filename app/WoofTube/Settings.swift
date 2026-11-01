@@ -319,7 +319,8 @@ private struct DiagnosticsView: View {
     private var report: String {
         let feedTypes = "Feed content types: " + FeedParser.seenContentTypes.sorted().joined(separator: ", ")
         let homePosts = "Home posts: YouTube sent \(FeedParser.homePostsSent), app shows \(FeedParser.homePostsShown), in \(FeedParser.homePages) pages"
-        return ([stream ?? "No stream", state, feedTypes, homePosts] + player.recentLog).joined(separator: "\n")
+        let download = DownloadStore.shared.lastReport.map { [$0] } ?? []
+        return ([stream ?? "No stream", state, feedTypes, homePosts] + download + player.recentLog).joined(separator: "\n")
     }
 
     var body: some View {

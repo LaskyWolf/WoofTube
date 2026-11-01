@@ -46,6 +46,7 @@ struct SleepTimerSheet: View {
     @ObservedObject var timer: SleepTimer
     @Environment(\.dismiss) private var dismiss
     @State private var duration: TimeInterval
+    @State private var contentHeight: CGFloat = 0
 
     private static let lastMinutesKey = "sleepTimerLastMinutes"
     private static let defaultMinutes = 15
@@ -102,7 +103,12 @@ struct SleepTimerSheet: View {
             .controlSize(.large)
         }
         .padding(20)
-        .presentationDetents([.medium, .large])
+        // Below the sheet's handle.
+        .padding(.top, Layout.chipSpacing)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        // Taller than the medium size, which pushed the title under the handle.
+        .presentationDetents(contentHeight > 0 ? [.height(contentHeight)] : [.large])
         .presentationDragIndicator(.visible)
     }
 
