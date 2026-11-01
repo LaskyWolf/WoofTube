@@ -92,6 +92,7 @@ final class Session: ObservableObject {
         guard storage != ProfileStorage.active else { return }
         ProfileStorage.activate(storage)
         WatchPositions.reload()
+        SeenVideos.reload()
         DownloadStore.shared.reloadForActiveProfile()
     }
 

@@ -93,6 +93,11 @@ final class Router: ObservableObject {
     private static let captionLanguageKey = "captionLanguage"
     private var loadTask: Task<Void, Never>?
     private var didCreateShortsWindow = false
+    private var wasInBackground = false
+    private var pendingWatchtime: String?
+    private static let watchedAfterSeconds = 30.0
+    @Published private(set) var isLive = false
+    @Published private(set) var liveChatToken: String?
     private var nowPlayingSubscriptions: [Any] = []
     private var sponsorSegments: [ClosedRange<Double>] = []
     private var currentStream: LoadedStream?
@@ -121,7 +126,9 @@ final class Router: ObservableObject {
             return
         }
         closeShorts()
+        SeenVideos.mark(video.videoId)
         current = video
+        liveChatToken = nil
         channelRoute = nil
         if expand { isExpanded = true }
         updateAutomaticWindow()
@@ -136,7 +143,7 @@ final class Router: ObservableObject {
         player.prepareForNewVideo()
         startStream(videoId: video.videoId, start: WatchPositions.start(for: video), isNewPlayback: true)
         Task { await loadDetails(videoId: video.videoId) }
-        if skipsSponsors {
+        if skipsSponsors, !SearchSettings.isIncognito {
             Task {
                 let segments = await SponsorBlock.segments(videoId: video.videoId)
                 if current?.videoId == video.videoId { sponsorSegments = segments }
@@ -204,6 +211,7 @@ final class Router: ObservableObject {
         shortsRoute = nil
         guard let model = shortsModel else { return }
         shortsPictureInPicture.stop()
+        model.cancel()
         model.player.stop()
         shortsModel = nil
         updateAutomaticWindow()
@@ -224,6 +232,10 @@ final class Router: ObservableObject {
     /// iOS takes the video decoder away in the background unless the window is open.
     func sceneChanged(isBackground: Bool) {
         backgroundTask?.cancel()
+        if isBackground {
+            wasInBackground = true
+            SeenVideos.save()
+        }
         let shorts = shortsModel == nil ? nil : shortsPictureInPicture
         guard isBackground else {
             player.setVideoEnabled(true)
@@ -235,6 +247,19 @@ final class Router: ObservableObject {
             guard !Task.isCancelled else { return }
             if !pictureInPicture.isActive { player.setVideoEnabled(false) }
             if shorts?.isActive == false { shortsModel?.player.setVideoEnabled(false) }
+        }
+    }
+
+    /// Coming back to the app takes the video back from the floating window.
+    func sceneBecameActive() {
+        guard wasInBackground else { return }
+        wasInBackground = false
+        if pictureInPicture.isActive {
+            pictureInPicture.stop()
+            isExpanded = true
+        } else if didCreateShortsWindow, shortsPictureInPicture.isActive {
+            shortsPictureInPicture.stop()
+            expandShorts()
         }
     }
 
@@ -349,8 +374,14 @@ final class Router: ObservableObject {
     private func playbackTick(_ time: Double) {
         guard let current, player.duration > 0 else { return }
         WatchPositions.save(videoId: current.videoId, time: time, duration: player.duration)
-        if let segment = sponsorSegments.first(where: { $0.contains(time) }) {
+        // Leaves out the end, because the seek below lands there and calls this again at once.
+        if let segment = sponsorSegments.first(where: { time >= $0.lowerBound && time < $0.upperBound }) {
             player.seek(to: segment.upperBound)
+        }
+        if time >= Self.watchedAfterSeconds, let url = pendingWatchtime {
+            pendingWatchtime = nil
+            let seconds = Int(time)
+            Task { try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: "\(url)&st=0&et=\(seconds)&cmt=\(seconds)&el=detailpage", client: .web) }
         }
     }
 
@@ -367,6 +398,8 @@ final class Router: ObservableObject {
         streamSummary = nil
         loadError = nil
         captions = []
+        isLive = false
+        if isNewPlayback { pendingWatchtime = nil }
         loadTask = Task {
             if let local = DownloadStore.shared.stream(videoId: videoId) {
                 streamSummary = "Downloaded"
@@ -383,6 +416,8 @@ final class Router: ObservableObject {
                 currentStream = stream
                 selectedAudioTrack = nil
                 streamSummary = stream.summary
+                isLive = stream.isLive
+                if isNewPlayback, !SearchSettings.isIncognito { pendingWatchtime = stream.watchtimeURL }
                 captions = stream.captions
                 restoreCaption()
                 player.load(url: stream.url, start: start)
@@ -394,6 +429,11 @@ final class Router: ObservableObject {
                     guard !Task.isCancelled else { return }
                     audioTracks = extras.tracks
                     storyboard = extras.storyboard
+                }
+                if storyboard == nil, !stream.isLive {
+                    let found = await StreamLoader.storyboard(videoId: videoId)
+                    guard !Task.isCancelled else { return }
+                    storyboard = found
                 }
                 if isNewPlayback, !SearchSettings.isIncognito, let tracking = stream.trackingURL {
                     try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: tracking, client: .web)
@@ -421,6 +461,7 @@ final class Router: ObservableObject {
         guard current?.videoId == videoId else { return }
         let loaded = WatchDetails(json: json, videoId: videoId)
         details = loaded
+        liveChatToken = JSON.string("continuation", in: JSON.first("liveChatRenderer", in: json))
         async let dislikes = DislikeCounts.fetch(videoId: videoId)
         async let comment = CommentsPage.topComment(token: loaded.commentsToken)
         async let options = PlaylistActions.options(for: videoId)
@@ -496,6 +537,11 @@ enum WatchPositions {
         positions[video.videoId] ?? 0
     }
 
+    /// YouTube's own progress, for a video this phone has no position for.
+    static func seed(videoId: String, time: Double) {
+        if positions[videoId] == nil { positions[videoId] = time }
+    }
+
     /// From 0 to 1, for the line on a thumbnail.
     static func progress(of video: YouTubeVideo) -> Double? {
         guard let position = positions[video.videoId], let duration = video.durationSeconds, duration > 0 else { return nil }
@@ -533,6 +579,7 @@ enum DislikeCounts {
     }
 
     static func votes(videoId: String) async -> VoteCounts? {
+        guard !SearchSettings.isIncognito else { return nil }
         if let known = cache[videoId] { return known }
         guard UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true, Date() > pausedUntil,
               let url = URL(string: "https://returnyoutubedislikeapi.com/votes?videoId=\(videoId)"),

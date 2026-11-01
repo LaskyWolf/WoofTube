@@ -320,11 +320,19 @@ private struct DiagnosticsView: View {
         let feedTypes = "Feed content types: " + FeedParser.seenContentTypes.sorted().joined(separator: ", ")
         let homePosts = "Home posts: YouTube sent \(FeedParser.homePostsSent), app shows \(FeedParser.homePostsShown), in \(FeedParser.homePages) pages"
         let download = DownloadStore.shared.lastReport.map { [$0] } ?? []
-        return ([stream ?? "No stream", state, feedTypes, homePosts] + download + player.recentLog).joined(separator: "\n")
+        let crashes = "Crash and hang reports: \(CrashReports.saved.count)"
+        return ([stream ?? "No stream", state, crashes, feedTypes, homePosts] + download + player.recentLog).joined(separator: "\n")
     }
 
     var body: some View {
         ScrollView {
+            ForEach(CrashReports.saved, id: \.self) { file in
+                ShareLink(item: file) {
+                    Label(file.deletingPathExtension().lastPathComponent, systemImage: "exclamationmark.triangle")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .padding(.horizontal, Layout.screenPadding)
+            }
             Text(report)
                 .font(.caption.monospaced())
                 .textSelection(.enabled)

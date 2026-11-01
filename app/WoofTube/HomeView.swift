@@ -40,7 +40,10 @@ final class FeedModel: ObservableObject {
     @Published private(set) var errorText: String?
     private var nextToken: String?
     private var nextQuery: String?
-    private var isHome = false
+    private(set) var isHome = false
+    /// Home keeps asking for pages until this many rows are new to the person.
+    private static let freshRowsWanted = 8
+    private static let pagesToSkip = 3
 
     var hasMore: Bool { nextToken != nil }
 
@@ -52,6 +55,16 @@ final class FeedModel: ObservableObject {
             case .shelf(_, let videos), .shorts(_, let videos): return videos
             default: return []
             }
+        }
+    }
+
+    /// History videos the person stopped partway through, by YouTube's count or this phone's.
+    var unfinished: [(video: YouTubeVideo, extras: VideoExtras)] {
+        items.compactMap { item in
+            guard case .video(let video, let extras) = item,
+                  let progress = extras.progress ?? WatchPositions.progress(of: video),
+                  progress > 0, progress < WatchPositions.finishedFraction else { return nil }
+            return (video, extras)
         }
     }
 
@@ -71,11 +84,17 @@ final class FeedModel: ObservableObject {
         defer { isLoading = false }
         do {
             let json = try await source.fetch()
-            items = FeedParser.items(in: json)
+            var page = FeedParser.items(in: json)
             isHome = source == .browse(YouTubeFeeds.home)
-            if isHome { FeedParser.noteHomePage(json, items: items) }
+            if isHome { FeedParser.noteHomePage(json, items: page) }
             if !keepChips { chips = Self.parseChips(json) }
             nextToken = YouTubeFeedParser.continuation(in: json)
+            if isHome { page = await freshHomeRows(from: page) }
+            if items.isEmpty {
+                withAnimation(.easeOut(duration: 0.25)) { items = page }
+            } else {
+                items = page
+            }
             if case .search(let query, _) = source { nextQuery = query } else { nextQuery = nil }
             errorText = nil
         } catch {
@@ -84,19 +103,41 @@ final class FeedModel: ObservableObject {
     }
 
     func loadMore(after item: FeedItem) async {
-        guard item.id == items.last?.id, !isLoading, let token = nextToken else { return }
+        guard item.id == items.last?.id, !isLoading, nextToken != nil else { return }
         isLoading = true
         defer { isLoading = false }
-        nextToken = nil
         let tube = InnerTubeClient.wooftube
-        guard let json = try? await (nextQuery != nil
-            ? tube.search(query: nextQuery ?? "", continuation: token)
-            : tube.browse(continuation: token)) else { return }
-        let known = Set(items.map(\.id))
-        let page = FeedParser.items(in: json)
-        if isHome { FeedParser.noteHomePage(json, items: page) }
-        items += page.filter { !known.contains($0.id) }
-        nextToken = YouTubeFeedParser.continuation(in: json)
+        // A page of Home can hold only seen videos, and an empty result would stop the scrolling.
+        for _ in 0...Self.pagesToSkip {
+            guard let token = nextToken else { return }
+            nextToken = nil
+            guard let json = try? await (nextQuery != nil
+                ? tube.search(query: nextQuery ?? "", continuation: token)
+                : tube.browse(continuation: token)) else { return }
+            let known = Set(items.map(\.id))
+            let page = FeedParser.items(in: json)
+            if isHome { FeedParser.noteHomePage(json, items: page) }
+            let added = (isHome ? SeenVideos.removing(from: page) : page).filter { !known.contains($0.id) }
+            items += added
+            nextToken = YouTubeFeedParser.continuation(in: json)
+            if !added.isEmpty { return }
+        }
+    }
+
+    /// Falls back to the page as it came, rather than showing nothing to someone who has seen it all.
+    private func freshHomeRows(from page: [FeedItem]) async -> [FeedItem] {
+        var fresh = SeenVideos.removing(from: page)
+        var skipped = 0
+        while fresh.count < Self.freshRowsWanted, skipped < Self.pagesToSkip, let token = nextToken,
+              let json = try? await InnerTubeClient.wooftube.browse(continuation: token) {
+            skipped += 1
+            let more = FeedParser.items(in: json)
+            FeedParser.noteHomePage(json, items: more)
+            nextToken = YouTubeFeedParser.continuation(in: json)
+            let known = Set(fresh.map(\.id))
+            fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) }
+        }
+        return fresh.isEmpty ? page : fresh
     }
 
     func remove(_ item: FeedItem) {
@@ -305,26 +346,32 @@ struct FilterChips: View {
 struct HomeView: View {
     @EnvironmentObject private var session: Session
     @StateObject private var model = FeedModel()
+    @StateObject private var history = FeedModel()
     @State private var selectedChip: String?
 
     var body: some View {
         NavigationStack {
             FeedContent(model: model, retry: { await reload() }) {
+                KeepWatchingCard(history: history)
                 if !model.chips.isEmpty {
                     FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
+                } else if model.isLoading {
+                    LoadingChips()
                 }
             }
             .tabRoot(title: "Home", tab: .home)
-            .task {
-                await session.refreshUnseenNotifications()
-                if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.home)) }
-            }
+            // Separate tasks, so each part of the page appears as soon as its own answer arrives.
+            .task { await session.refreshUnseenNotifications() }
+            .task { if model.items.isEmpty { await model.load(.browse(YouTubeFeeds.home)) } }
+            .task { if history.items.isEmpty { await history.load(.browse(YouTubeFeeds.history)) } }
         }
     }
 
     private func reload() async {
         selectedChip = nil
-        await model.load(.browse(YouTubeFeeds.home))
+        async let feed: Void = model.load(.browse(YouTubeFeeds.home))
+        async let watched: Void = history.load(.browse(YouTubeFeeds.history))
+        _ = await (feed, watched)
     }
 
     /// Tapping the selected chip clears it.
@@ -339,6 +386,140 @@ struct HomeView: View {
                 await model.load(.browse(YouTubeFeeds.home), keepChips: true)
             }
         }
+    }
+}
+
+/// Resumes the latest unfinished video. The small covers swap into the large slot.
+private struct KeepWatchingCard: View {
+    @ObservedObject var history: FeedModel
+    @EnvironmentObject private var router: Router
+    @State private var selectedId: String?
+
+    private static let shown = 8
+    private static let thumbWidth: CGFloat = 144
+    private static let smallThumbWidth: CGFloat = 78
+    private static let playSize: CGFloat = 44
+    private static let radius: CGFloat = 18
+
+    private var videos: [(video: YouTubeVideo, extras: VideoExtras)] {
+        Array(history.unfinished.prefix(Self.shown))
+    }
+
+    var body: some View {
+        Group {
+            if history.items.isEmpty, history.isLoading {
+                loading
+            } else if let main = videos.first(where: { $0.video.videoId == selectedId }) ?? videos.first {
+                card(main: main)
+            }
+        }
+        .onChange(of: router.current?.videoId) { _, videoId in
+            if videoId == nil { Task { await history.load(.browse(YouTubeFeeds.history)) } }
+        }
+    }
+
+    private func card(main: (video: YouTubeVideo, extras: VideoExtras)) -> some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            Text("Keep Watching").font(.headline)
+            Button { resume(main) } label: {
+                HStack(spacing: Layout.rowSpacing) {
+                    thumb(main).frame(width: Self.thumbWidth)
+                    VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                        Text(main.video.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Text(timeLeft(main))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: Self.playSize, height: Self.playSize)
+                        .background(.tint, in: .circle)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(RowPressStyle())
+            .accessibilityLabel("Resume \(main.video.title), \(timeLeft(main))")
+            .videoMenu(main.video)
+
+            let others = videos.filter { $0.video.videoId != main.video.videoId }
+            if !others.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Layout.chipSpacing) {
+                        ForEach(others, id: \.video.videoId) { entry in
+                            Button {
+                                withAnimation(.snappy) { selectedId = entry.video.videoId }
+                            } label: {
+                                thumb(entry).frame(width: Self.smallThumbWidth)
+                            }
+                            .buttonStyle(RowPressStyle())
+                            .accessibilityLabel("Show \(entry.video.title)")
+                        }
+                    }
+                }
+            }
+        }
+        .padding(Layout.rowSpacing)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.bottom, Layout.sectionGap)
+    }
+
+    private func thumb(_ entry: (video: YouTubeVideo, extras: VideoExtras)) -> some View {
+        Thumbnail(url: entry.video.thumbnailURL, videoId: entry.video.videoId)
+            .overlay { WatchProgressLine(video: entry.video, extras: entry.extras) }
+            .clipShape(.rect(cornerRadius: Layout.tileRadius))
+    }
+
+    private func timeLeft(_ entry: (video: YouTubeVideo, extras: VideoExtras)) -> String {
+        guard let duration = entry.video.durationSeconds,
+              let progress = entry.extras.progress ?? WatchPositions.progress(of: entry.video) else { return "Continue" }
+        return "\(max(1, Int((1 - progress) * Double(duration) / 60))) min left"
+    }
+
+    private func resume(_ entry: (video: YouTubeVideo, extras: VideoExtras)) {
+        if let duration = entry.video.durationSeconds, let progress = entry.extras.progress {
+            WatchPositions.seed(videoId: entry.video.videoId, time: progress * Double(duration))
+        }
+        router.play(entry.video)
+    }
+
+    private var loading: some View {
+        HStack(spacing: Layout.rowSpacing) {
+            ShimmerFill(radius: Layout.tileRadius)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(width: Self.thumbWidth)
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                ShimmerBlock(width: 120, height: 14)
+                ShimmerBlock(width: 70, height: 12)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Layout.rowSpacing)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.bottom, Layout.sectionGap)
+        .shimmerClock()
+        .accessibilityHidden(true)
+    }
+}
+
+/// The shape of the filter row while Home loads.
+private struct LoadingChips: View {
+    var body: some View {
+        HStack(spacing: Layout.chipSpacing) {
+            ForEach([56, 84, 70, 92], id: \.self) { width in
+                ShimmerBlock(width: CGFloat(width), height: 34, radius: 17)
+            }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.bottom, Layout.rowSpacing)
+        .shimmerClock()
+        .accessibilityHidden(true)
     }
 }
 
@@ -457,21 +638,6 @@ struct ScopedSearchPage: View {
     }
 }
 
-/// A list that loads itself from one source.
-struct FeedList: View {
-    let source: FeedSource
-    var isCompact = false
-    @StateObject private var model = FeedModel()
-
-    var body: some View {
-        FeedContent(model: model, retry: { await model.load(source) }, isCompact: isCompact) { EmptyView() }
-            .toolbar(.visible, for: .navigationBar)
-            .task(id: source) {
-                if model.items.isEmpty { await model.load(source) }
-            }
-    }
-}
-
 /// A ScrollView like Woof Music's pages: a List row fires every link inside it at once.
 struct FeedContent<Header: View>: View {
     @ObservedObject var model: FeedModel
@@ -500,7 +666,7 @@ struct FeedContent<Header: View>: View {
             LoadingRows(isCompact: isCompact)
         } else {
             ContentUnavailableView {
-                Label(model.errorText == nil ? "Nothing Here" : "Couldn't Load", systemImage: "play.rectangle")
+                Label(model.errorText == nil ? "Nothing Here" : "Couldn't Load", systemImage: model.errorText == nil ? "play.rectangle" : "exclamationmark.triangle")
             } description: {
                 Text(model.errorText ?? "YouTube returned nothing here.")
             } actions: {
@@ -526,6 +692,9 @@ struct FeedRows: View {
         let shown = keeps.map { model.items.filter($0) } ?? model.items
         ForEach(shown) { item in
             row(item)
+                .onScrollVisibilityChange(threshold: 0.6) { isVisible in
+                    if isVisible, model.isHome { SeenVideos.mark(item) }
+                }
                 .task {
                     // The next page follows the last row shown, which a filter can move up.
                     if item.id == shown.last?.id, let last = model.items.last { await model.loadMore(after: last) }

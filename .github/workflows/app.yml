@@ -45,3 +45,10 @@ jobs:
           name: WoofTube-native
           path: app/WoofTube.ipa
           retention-days: 1
+
+      # Turns the addresses in a crash report back into function names.
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: WoofTube-dSYM
+          path: app/build/Build/Products/Release-iphoneos/WoofTube.app.dSYM
+          retention-days: 30

@@ -33,16 +33,6 @@ struct LibraryView: View {
         }
     }
 
-    /// History videos the person stopped partway through, by YouTube's count or this phone's.
-    private var unfinished: [(video: YouTubeVideo, extras: VideoExtras)] {
-        history.items.compactMap { item in
-            guard case .video(let video, let extras) = item,
-                  let progress = extras.progress ?? WatchPositions.progress(of: video),
-                  progress > 0, progress < WatchPositions.finishedFraction else { return nil }
-            return (video, extras)
-        }
-    }
-
     private func shows(_ filter: Filter) -> Bool {
         selectedFilter == nil || selectedFilter == filter
     }
@@ -74,7 +64,7 @@ struct LibraryView: View {
                         )
                     }
                     if selectedFilter == .inProgress {
-                        videoSection(title: "In Progress", videos: unfinished, emptyText: "Videos you stop partway through show up here.")
+                        videoSection(title: "In Progress", videos: history.unfinished, emptyText: "Videos you stop partway through show up here.")
                     }
                 }
             }

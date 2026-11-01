@@ -8,9 +8,7 @@ enum Layout {
     static let cardSpacing: CGFloat = 4
     static let chipSpacing: CGFloat = 8
     static let rowPadding: CGFloat = 6
-    static let thumbRadius: CGFloat = 4
     static let tileRadius: CGFloat = 12
-    static let thumbSmall: CGFloat = 40
     /// A channel's picture: large on its own page, medium in the Library, small everywhere else.
     static let avatarSmall: CGFloat = 36
     static let avatarMedium: CGFloat = 60
@@ -50,7 +48,9 @@ enum Orientation {
 
     /// Holds the requested orientation, so the sensor can't undo the button straight away.
     static func setFullscreen(_ isFullscreen: Bool) {
-        apply(isFullscreen ? .landscape : .portrait, request: isFullscreen ? .landscapeRight : .portrait)
+        // The device and the interface name their landscape sides the opposite way round.
+        let side: UIInterfaceOrientationMask = UIDevice.current.orientation == .landscapeRight ? .landscapeLeft : .landscapeRight
+        apply(isFullscreen ? .landscape : .portrait, request: isFullscreen ? side : .portrait)
         unlockIfHeldUpright()
     }
 
@@ -79,6 +79,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         _ = DownloadStore.shared
+        CrashReports.shared.start()
         return true
     }
 

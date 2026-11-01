@@ -13,6 +13,12 @@ struct LoadedStream {
     var audioSize: Int64?
     var duration: Int?
     var client: YouTubeClient?
+    var isLive = false
+    /// Tells YouTube how much was watched, which is what shapes the recommendations.
+    var watchtimeURL: String?
+    var title: String?
+    var channelTitle: String?
+    var channelId: String?
 }
 
 struct AudioTrack: Identifiable, Hashable {
@@ -92,6 +98,12 @@ enum StreamLoader {
         return (tracks, JSON.string("spec", in: json["storyboards"]).flatMap(Storyboard.init(spec:)))
     }
 
+    /// The clients tried first for streams can return no storyboard, so this asks the iOS client.
+    static func storyboard(videoId: String) async -> Storyboard? {
+        guard let json = try? await InnerTubeClient.wooftube.player(videoId: videoId, client: .iOS) else { return nil }
+        return JSON.string("spec", in: json["storyboards"]).flatMap(Storyboard.init(spec:))
+    }
+
     /// The clients tried first for streams can return no captions at all, so these come from the iOS client.
     static func captions(videoId: String) async -> [YouTubeCaptionTrack] {
         let response: PlayerResponse? = try? await InnerTubeClient.wooftube.playerResponse(videoId: videoId, client: .iOS, options: PlayerRequestOptions(signatureTimestamp: nil))
@@ -108,6 +120,7 @@ enum StreamLoader {
         }
 
         var attempts: [String] = []
+        var isLive = false
         for entry in ClientFallbackChain.youtube {
             let client = entry.client
             do {
@@ -124,6 +137,16 @@ enum StreamLoader {
                 }
                 let captions = YouTubeWatchParser.captionTracks(from: response)
                 let tracking = response.playbackTracking?.videostatsPlaybackUrl?.baseUrl
+                let details = response.videoDetails
+                // A live stream has no length, and mpv can only play it through HLS.
+                if details?.lengthSeconds == "0" {
+                    isLive = true
+                    guard let hls = data.hlsManifestUrl else {
+                        attempts.append("\(client.clientName): live, but no HLS address")
+                        continue
+                    }
+                    return LoadedStream(url: hls, summary: "\(client.clientName) · Live HLS", captions: captions, trackingURL: tracking, isLive: true, title: details?.title, channelTitle: details?.author, channelId: details?.channelId)
+                }
                 // The short side, so a vertical 1080x1920 Short counts as 1080p.
                 let formats = ((data.formats ?? []) + (data.adaptiveFormats ?? []))
                     .filter { min($0.width ?? 0, $0.height ?? 0) <= maxHeight }
@@ -142,17 +165,24 @@ enum StreamLoader {
                         videoSize: video.contentLength.flatMap(Int64.init),
                         audioSize: audio.contentLength.flatMap(Int64.init),
                         duration: duration,
-                        client: client
+                        client: client,
+                        watchtimeURL: response.playbackTracking?.videostatsWatchtimeUrl?.baseUrl,
+                        title: details?.title,
+                        channelTitle: details?.author,
+                        channelId: details?.channelId
                     )
                 }
                 if let hls = data.hlsManifestUrl {
-                    return LoadedStream(url: hls, summary: "\(client.clientName) · HLS", captions: captions, trackingURL: tracking)
+                    return LoadedStream(url: hls, summary: "\(client.clientName) · HLS", captions: captions, trackingURL: tracking, title: details?.title, channelTitle: details?.author, channelId: details?.channelId)
                 }
                 attempts.append("\(client.clientName): no direct streams")
             } catch {
                 attempts.append("\(client.clientName): \(error.localizedDescription)")
             }
         }
+
+        // The fallback below only finds files, which a live stream doesn't have.
+        if isLive { throw StreamFailure(attempts: attempts) }
 
         // Web clients return encrypted URLs. This path decrypts them, but only gives a combined stream.
         do {

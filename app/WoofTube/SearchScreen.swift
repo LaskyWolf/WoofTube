@@ -175,7 +175,7 @@ private struct SearchStart: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if isIncognito {
-                    Label("Incognito is on. Searches and watch progress aren't saved, and videos stay out of your YouTube history.", systemImage: "eyeglasses")
+                    Label("Incognito is on. This phone saves no searches or watch progress, and videos stay out of your YouTube history. YouTube still sees your searches while you're signed in.", systemImage: "eyeglasses")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, Layout.screenPadding)

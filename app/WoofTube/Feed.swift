@@ -131,7 +131,7 @@ final class Subscriptions: ObservableObject {
         }
         guard !found.isEmpty else { return }
         channels = found.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        ids.formUnion(found.compactMap(\.channelId))
+        ids = Set(found.compactMap(\.channelId))
     }
 
     func add(_ newIds: [String]) {

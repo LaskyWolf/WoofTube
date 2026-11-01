@@ -181,6 +181,10 @@ final class DownloadStore: ObservableObject {
     /// Accounts can't change while something downloads, so nothing lands in the wrong folder.
     func reloadForActiveProfile() {
         try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
+        var folder = Self.folder
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? folder.setResourceValues(values)
         let data = try? Data(contentsOf: Self.index)
         items = data.flatMap { try? JSONDecoder().decode([Item].self, from: $0) } ?? []
         let pending = (try? Data(contentsOf: Self.pendingFile)).flatMap { try? JSONDecoder().decode(Pending.self, from: $0) }
@@ -424,11 +428,11 @@ final class DownloadStore: ObservableObject {
     private func savePending() {
         let queue = (starting.map { [$0] } ?? []) + waiting
         let pending = Pending(job: job, waiting: queue, batch: batch, maxHeight: queueHeight)
-        try? JSONEncoder().encode(pending).write(to: Self.pendingFile)
+        try? JSONEncoder().encode(pending).write(to: Self.pendingFile, options: .atomic)
     }
 
     private func save() {
-        try? JSONEncoder().encode(items).write(to: Self.index)
+        try? JSONEncoder().encode(items).write(to: Self.index, options: .atomic)
     }
 
     private static func selfCheck() {

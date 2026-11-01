@@ -1,34 +1,16 @@
 import SwiftUI
 import SwiftyTube
 
-/// Woof Music's ZoomPressStyle: stays shrunk briefly, so a quick tap still shows it.
+/// Dims and shrinks at the touch, then eases back with no bounce.
 struct ZoomPressStyle: ButtonStyle {
-    var scale: CGFloat = 0.94
+    var scale: CGFloat = 0.97
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        ZoomPressLabel(configuration: configuration, scale: scale)
-    }
-}
-
-private struct ZoomPressLabel: View {
-    let configuration: ButtonStyleConfiguration
-    let scale: CGFloat
-    @State private var zoomed = false
-
-    var body: some View {
         configuration.label
-            .scaleEffect(zoomed ? scale : 1)
-            .animation(.spring(duration: 0.2, bounce: 0.3), value: zoomed)
-            .onChange(of: configuration.isPressed) { _, pressed in
-                if pressed {
-                    zoomed = true
-                } else {
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(200))
-                        if !configuration.isPressed { zoomed = false }
-                    }
-                }
-            }
+            .scaleEffect(configuration.isPressed && !reduceMotion ? scale : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(configuration.isPressed ? .easeOut(duration: 0.1) : .smooth(duration: 0.26), value: configuration.isPressed)
     }
 }
 
@@ -85,7 +67,7 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
                     Spacer(minLength: 0)
                     buttons()
                 }
-                .buttonStyle(ZoomPressStyle(scale: 0.92))
+                .buttonStyle(ZoomPressStyle())
             }
             .frame(maxWidth: .infinity, minHeight: artSize, alignment: .leading)
         }
@@ -200,43 +182,6 @@ struct VideoPoster: View {
         if !player.isVideoReady, let video {
             CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
         }
-    }
-}
-
-/// Woof Music's rounded card that stacks menu rows.
-struct MenuCard<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(spacing: 0) {
-            content
-        }
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius, style: .continuous))
-    }
-}
-
-/// Woof Music's menu row: accent icon, title and an optional subtitle.
-struct MenuRowLabel: View {
-    let icon: String
-    let title: String
-
-    var body: some View {
-        HStack(spacing: Layout.menuRowSpacing) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundStyle(.tint)
-                .frame(width: 26)
-            Text(title)
-                .font(.body)
-                .foregroundStyle(.primary)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.vertical, Layout.rowSpacing)
-        .contentShape(.rect)
     }
 }
 
@@ -358,7 +303,12 @@ struct CachedImage: View {
 
     private func load() async {
         didFail = false
-        guard let url, ImageStore.image(for: url) == nil else { return }
+        guard let url else { return }
+        // Kept here too, because the store can drop an image while this view still shows it.
+        if let stored = ImageStore.image(for: url) {
+            loaded = (url, stored)
+            return
+        }
         var retryDelays: [Duration] = [.seconds(1), .seconds(3)]
         while !Task.isCancelled {
             do {

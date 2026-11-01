@@ -187,7 +187,9 @@ final class MpvPlayer: ObservableObject {
     }
 
     private func addLog(_ line: String) {
-        recentLog = Array((recentLog + [line]).suffix(Self.logLimit))
+        // Stream addresses carry the phone's IP, and this log can be shared.
+        let safe = line.replacingOccurrences(of: #"(https?://[^/\s]+)\S*"#, with: "$1/…", options: .regularExpression)
+        recentLog = Array((recentLog + [safe]).suffix(Self.logLimit))
     }
 
     private func publish(_ change: @escaping (MpvPlayer) -> Void) {

@@ -80,6 +80,20 @@ struct PlayerOverlay: View {
         let shape = RoundedRectangle(cornerRadius: Self.cardRadius, style: .circular)
         let isShort = short != nil
         return ZStack(alignment: .topLeading) {
+            AmbientImage(
+                clock: miniPlayerObject.clock,
+                poster: miniVideo.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" },
+                storyboard: isShort ? nil : router.storyboard
+            )
+            .frame(width: miniCardWidth, height: miniCardHeight)
+            .clipped()
+            .blur(radius: 24, opaque: true)
+            .saturation(1.4)
+            .opacity(0.7)
+            .clipShape(shape)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+
             Color.clear.glassEffect(.regular, in: shape)
 
             MpvVideoView(player: miniPlayerObject, isActive: isShort ? !router.isShortsPageOnScreen : !router.isWatchPageOnScreen)
@@ -197,7 +211,7 @@ struct WatchPage: View {
                     Color(.systemBackground)
                     AmbientBackdrop(
                         clock: router.player.clock,
-                        poster: router.current.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" },
+                        poster: poster,
                         storyboard: router.storyboard
                     )
                 }
@@ -226,6 +240,10 @@ struct WatchPage: View {
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
+    private var poster: String? {
+        router.current.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" }
+    }
+
     private var video: some View {
         VideoArea(isFullscreen: isFullscreen) {
             ZStack {
@@ -234,6 +252,17 @@ struct WatchPage: View {
                     .background(.black)
                     .allowsHitTesting(false)
                     .ignoresSafeArea(edges: isFullscreen ? .all : [])
+                // ponytail: a low-resolution frame fills the zoom back to the card, because the video
+                // layer turns black during it. Replace it if a way to keep the live layer turns up.
+                Color.clear
+                    .overlay {
+                        AmbientImage(clock: router.player.clock, poster: poster, storyboard: router.storyboard)
+                    }
+                    .clipped()
+                    .opacity(router.isExpanded ? 0 : 1)
+                    .animation(nil, value: router.isExpanded)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                 CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen)
@@ -330,28 +359,16 @@ struct PlayerDismissGesture: UIGestureRecognizerRepresentable {
 /// and fading into the page. The frames come from the storyboard, because reading them from
 /// the Metal video layer would cost far more.
 private struct AmbientBackdrop: View {
-    @ObservedObject var clock: PlayerClock
+    let clock: PlayerClock
     let poster: String?
     let storyboard: Storyboard?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var frame: UIImage?
 
     private static let height: CGFloat = 560
     /// Reaches under the status bar and fills the pull-down overscroll.
     private static let overflow: CGFloat = 300
-    /// Seconds between changes of light. A slow pace keeps it calm and easy on the battery.
-    private static let refresh = 8.0
-
-    private var moment: Double { (clock.time / Self.refresh).rounded(.down) * Self.refresh }
 
     var body: some View {
-        ZStack {
-            if let frame {
-                Image(uiImage: frame).resizable().scaledToFill().transition(.opacity).id(frame)
-            } else {
-                CachedImage(url: poster)
-            }
-        }
+        AmbientImage(clock: clock, poster: poster, storyboard: storyboard)
         .frame(height: Self.height + Self.overflow)
         .frame(maxWidth: .infinity)
         .clipped()
@@ -362,6 +379,38 @@ private struct AmbientBackdrop: View {
         .padding(.top, -Self.overflow)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// A frame of the video that follows the picture, or the poster until one loads.
+struct AmbientImage: View {
+    @ObservedObject var clock: PlayerClock
+    let poster: String?
+    let storyboard: Storyboard?
+
+    /// Seconds between frames. The clock ticks far more often, so only this view redraws with it.
+    private static let refresh = 3.0
+
+    var body: some View {
+        AmbientFrame(moment: (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
+    }
+}
+
+private struct AmbientFrame: View {
+    let moment: Double
+    let poster: String?
+    let storyboard: Storyboard?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var frame: UIImage?
+
+    var body: some View {
+        ZStack {
+            if let frame {
+                Image(uiImage: frame).resizable().scaledToFill().transition(.opacity).id(frame)
+            } else {
+                CachedImage(url: poster)
+            }
+        }
         .onChange(of: poster) { frame = nil }
         .task(id: "\(poster ?? "")|\(moment)|\(storyboard?.urlTemplate ?? "")") { await loadFrame() }
     }
@@ -376,7 +425,7 @@ private struct AmbientBackdrop: View {
         let size = storyboard.frameSize
         let area = CGRect(x: size.width * CGFloat(spot.column), y: size.height * CGFloat(spot.row), width: size.width, height: size.height)
         guard let cropped = sheet.cropping(to: area) else { return }
-        withAnimation(.easeInOut(duration: 1.5)) { frame = UIImage(cgImage: cropped) }
+        withAnimation(.easeInOut(duration: 1)) { frame = UIImage(cgImage: cropped) }
     }
 }
 
@@ -1050,6 +1099,8 @@ private struct WatchDetailsView: View {
     @ObservedObject private var downloads = DownloadStore.shared
     @State private var showsDescription = false
     @State private var showsPlaylists = false
+    @State private var showsChat = false
+    @State private var confirmsDeleteDownload = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
@@ -1062,6 +1113,23 @@ private struct WatchDetailsView: View {
             }
             if let details = router.details {
                 descriptionCard(details)
+                if router.isLive, router.liveChatToken != nil {
+                    Button { showsChat = true } label: {
+                        HStack {
+                            Label("Live Chat", systemImage: "bubble.left.and.bubble.right")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(Layout.rowSpacing)
+                        .frame(minHeight: 44)
+                        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.tileRadius))
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(RowPressStyle())
+                }
                 if details.commentsToken != nil {
                     CommentsCard(details: details) { showsComments = true }
                 }
@@ -1089,6 +1157,11 @@ private struct WatchDetailsView: View {
             }
         }
         .padding(Layout.screenPadding)
+        .sheet(isPresented: $showsChat) {
+            if let token = router.liveChatToken {
+                LiveChatSheet(token: token)
+            }
+        }
         .sheet(isPresented: $showsPlaylists) {
             if let video = router.current {
                 PlaylistPickerSheet(video: video)
@@ -1150,10 +1223,10 @@ private struct WatchDetailsView: View {
                                 Button("Open Channel", systemImage: "person.crop.circle") {
                                     router.openChannelPage(creator.channelId)
                                 }
-                                Button("Subscribe", systemImage: "bell") {
+                                Button("Subscribe", systemImage: "person.badge.plus") {
                                     router.run { _ = try await InnerTubeClient.wooftube.subscribe(channelId: creator.channelId) }
                                 }
-                                Button("Unsubscribe", systemImage: "bell.slash") {
+                                Button("Unsubscribe", systemImage: "person.badge.minus") {
                                     router.run { _ = try await InnerTubeClient.wooftube.unsubscribe(channelId: creator.channelId) }
                                 }
                             } label: {
@@ -1236,7 +1309,11 @@ private struct WatchDetailsView: View {
                         let isSaved = downloads.isDownloaded(id)
                         let isSaving = downloads.isQueued(id)
                         Button {
-                            router.run { try await downloads.download(video, from: router.playlistVideos, maxHeight: router.maxHeight) }
+                            if isSaved {
+                                confirmsDeleteDownload = true
+                            } else {
+                                router.run { try await downloads.download(video, from: router.playlistVideos, maxHeight: router.maxHeight) }
+                            }
                         } label: {
                             if isSaving {
                                 ProgressView()
@@ -1246,12 +1323,17 @@ private struct WatchDetailsView: View {
                                 HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down.to.line")
                             }
                         }
-                        .disabled(isSaved || isSaving)
-                        .accessibilityLabel(isSaved ? "Downloaded" : isSaving ? "Downloading" : "Download")
+                        .disabled(isSaving)
+                        .accessibilityLabel(isSaved ? "Delete Download" : isSaving ? "Downloading" : "Download")
+                        .confirmationDialog("Delete this download?", isPresented: $confirmsDeleteDownload, titleVisibility: .visible) {
+                            Button("Delete Download", role: .destructive) {
+                                if let item = downloads.items.first(where: { $0.id == id }) { downloads.delete(item) }
+                            }
+                        }
                     }
                 }
             }
-            .buttonStyle(ZoomPressStyle(scale: 0.92))
+            .buttonStyle(ZoomPressStyle())
             .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
             .sensoryFeedback(.success, trigger: details.isInWatchLater) { _, saved in saved }
         }
@@ -1472,7 +1554,7 @@ struct SubscribeButton: View {
                     .contentShape(.capsule)
             }
         }
-        .buttonStyle(ZoomPressStyle(scale: 0.92))
+        .buttonStyle(ZoomPressStyle())
         .animation(reduceMotion ? nil : .snappy, value: isSubscribed)
         .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
         .sensoryFeedback(.selection, trigger: isSubscribed)
@@ -1624,7 +1706,11 @@ struct ChannelView: View {
     private func content(topInset: CGFloat) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header(topInset: topInset)
+                if page == nil, isLoading {
+                    loadingHeader
+                } else {
+                    header(topInset: topInset)
+                }
                 if let featured {
                     SectionTitle(title: isFeaturedPinned ? "Pinned Video" : "Latest Video")
                     VideoButton(video: featured)
@@ -1649,6 +1735,22 @@ struct ChannelView: View {
             }
         }
         .detailBarTitle(page?.channel?.title ?? "")
+    }
+
+    /// Stands in for the whole header, so the real buttons only ever appear in their final place.
+    private var loadingHeader: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ShimmerBlock(width: Layout.avatarLarge, height: Layout.avatarLarge, radius: Layout.avatarLarge / 2)
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                ShimmerBlock(width: 90, height: 13)
+                ShimmerBlock(width: 160, height: 22)
+                ShimmerBlock(width: 110, height: 15)
+            }
+        }
+        .padding(Layout.screenPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .shimmerClock()
+        .accessibilityHidden(true)
     }
 
     private func header(topInset: CGFloat) -> some View {

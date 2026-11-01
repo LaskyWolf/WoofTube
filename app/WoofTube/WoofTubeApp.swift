@@ -140,6 +140,9 @@ struct RootTabs: View {
         }
         .routerPresentations(router, isActive: !router.isExpanded)
         .task { await Subscriptions.shared.load() }
-        .onChange(of: scenePhase) { router.sceneChanged(isBackground: scenePhase == .background) }
+        .onChange(of: scenePhase) {
+            router.sceneChanged(isBackground: scenePhase == .background)
+            if scenePhase == .active { router.sceneBecameActive() }
+        }
     }
 }

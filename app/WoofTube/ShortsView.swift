@@ -6,7 +6,11 @@ import SwiftyTube
 /// so the Short carries on in the floating card.
 @MainActor
 final class ShortsModel: ObservableObject {
-    private static let shortsSearchFilter = "EgIYAQ%3D%3D"
+    /// The opening request of YouTube's own Shorts sequence.
+    private static let firstSequence = "CA8%3D"
+    /// Fetches more while this many Shorts are still ahead, so the swipe never reaches the end.
+    private static let shortsAhead = 3
+    private static let pagesToSkip = 3
 
     @Published private(set) var shorts: [YouTubeVideo]
     @Published var currentId: String?
@@ -21,7 +25,7 @@ final class ShortsModel: ObservableObject {
     @Published private(set) var captionCues: [CaptionCue] = []
     let player: MpvPlayer
     private var nextToken: String?
-    private var didLoadMore = false
+    private var isLoadingMore = false
     private var loadTask: Task<Void, Never>?
 
     var currentVideo: YouTubeVideo? { shorts.first { $0.videoId == currentId } }
@@ -41,7 +45,12 @@ final class ShortsModel: ObservableObject {
         loadTask = Task { await play(video) }
     }
 
+    func cancel() {
+        loadTask?.cancel()
+    }
+
     private func play(_ video: YouTubeVideo) async {
+        SeenVideos.mark(video.videoId)
         player.prepareForNewVideo()
         playingId = video.videoId
         details = nil
@@ -56,6 +65,12 @@ final class ShortsModel: ObservableObject {
             let stream = try await StreamLoader.load(videoId: video.videoId, maxHeight: 1080)
             guard !Task.isCancelled else { return }
             captions = stream.captions
+            // Shorts from the sequence arrive as bare IDs.
+            if video.title.isEmpty, let index = shorts.firstIndex(where: { $0.videoId == video.videoId }) {
+                shorts[index].title = stream.title ?? ""
+                shorts[index].channelTitle = stream.channelTitle
+                shorts[index].channelId = stream.channelId
+            }
             player.load(url: stream.url)
             if captions.isEmpty {
                 let found = await StreamLoader.captions(videoId: video.videoId)
@@ -115,22 +130,21 @@ final class ShortsModel: ObservableObject {
     }
 
     private func loadMoreIfNeeded(after video: YouTubeVideo) async {
-        guard video.videoId == shorts.last?.videoId else { return }
-        let tube = InnerTubeClient.wooftube
-        let json: [String: Any]?
-        if let token = nextToken {
-            nextToken = nil
-            json = try? await tube.search(query: "shorts", continuation: token)
-        } else if !didLoadMore {
-            didLoadMore = true
-            json = try? await tube.search(query: "shorts", params: Self.shortsSearchFilter)
-        } else {
-            json = nil
+        guard shorts.suffix(Self.shortsAhead).contains(where: { $0.videoId == video.videoId }), !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        for _ in 0...Self.pagesToSkip {
+            guard let json = try? await YouTubeAPI.post("reel/reel_watch_sequence", body: ["sequenceParams": nextToken ?? Self.firstSequence]) else { return }
+            nextToken = JSON.string("token", in: json["continuationEndpoint"])
+            let entries = json["entries"] as? [[String: Any]] ?? []
+            var known = Set(shorts.map(\.videoId))
+            let added = entries
+                .compactMap { JSON.string("videoId", in: $0["command"]) }
+                .filter { !SeenVideos.contains($0) && known.insert($0).inserted }
+                .map { YouTubeVideo(videoId: $0, title: "", thumbnailURL: "https://i.ytimg.com/vi/\($0)/frame0.jpg", isShort: true) }
+            shorts += added
+            if !added.isEmpty || nextToken == nil { return }
         }
-        guard let json else { return }
-        var known = Set(shorts.map(\.videoId))
-        shorts += YouTubeFeedParser.videos(in: json).filter { $0.isShort && known.insert($0.videoId).inserted }
-        nextToken = YouTubeFeedParser.continuation(in: json)
     }
 }
 
