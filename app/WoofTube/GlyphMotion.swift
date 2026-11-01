@@ -72,6 +72,7 @@ struct GlyphScript {
     var anchor = UnitPoint.center
     var rings: [Ring] = []
     var bits: [Bit] = []
+    var ringSize = 28.0
 
     var duration: Double {
         let moves = keys.last?.time ?? 0
@@ -122,36 +123,23 @@ struct GlyphScript {
 // The icons' movements. Pressed often means short, and pressed rarely can celebrate.
 extension GlyphScript {
     // Playback
-    static let pauseStamp = GlyphScript(keys: [Key(0, s: 1.3, y: -7), Key(0.14, sx: 1.12, sy: 0.82), Key(0.28, s: 1)])
-    static let playShoot = GlyphScript(
-        keys: [Key(0, sx: 1.25, sy: 0.7, x: -8), Key(0.16, sx: 0.92, sy: 1.1, x: 3), Key(0.3, s: 1)],
-        rings: [Ring(ink: .color(.white))]
-    )
-    static let spinBack = GlyphScript(keys: [Key(0, s: 0.8, r: 0, x: 8), Key(0.25, s: 1.2, r: -300, x: -4), Key(0.42, s: 1, r: -360)])
-    static let spinForward = GlyphScript(keys: [Key(0, s: 0.8, r: 0, x: -8), Key(0.25, s: 1.2, r: 300, x: 4), Key(0.42, s: 1, r: 360)])
-    static let needleRev = GlyphScript(keys: [Key(0, r: 0), Key(0.08, r: 7), Key(0.16, r: -6), Key(0.24, r: 5), Key(0.32, r: -3), Key(0.42, r: 0)], bits: burst(5, inks: [.color(.orange), .accent], around: 0, spread: 70, reach: 22, delay: 0.1, life: 0.45, size: 3))
-    static let captionsOn = GlyphScript(
-        keys: [Key(0, s: 0.8), Key(0.18, s: 1.12), Key(0.34, s: 1)],
-        bits: [
-            Bit(shape: .text("C"), ink: .color(.white), angle: 180, reach: 7, delay: 0.1, life: 0.5, size: 9),
-            Bit(shape: .text("C"), ink: .color(.white), angle: 0, reach: 7, delay: 0.26, life: 0.5, size: 9)
-        ]
-    )
-    static let captionsOff = GlyphScript(keys: [Key(0, y: -4), Key(0.12, y: 3), Key(0.26, y: 0)])
+    /// Woof Music's: the distances follow the icon's size, and the ring wraps around it.
+    static func pauseStamp(size: Double) -> GlyphScript {
+        GlyphScript(keys: [Key(0, s: 1.3, y: -0.24 * size), Key(0.14, sx: 1.12, sy: 0.82), Key(0.28, s: 1)])
+    }
+
+    static func playShoot(size: Double) -> GlyphScript {
+        GlyphScript(
+            keys: [Key(0, sx: 1.25, sy: 0.7, x: -0.2 * size), Key(0.16, sx: 0.92, sy: 1.1, x: 0.07 * size), Key(0.3, s: 1)],
+            rings: [Ring()],
+            ringSize: size * 1.05
+        )
+    }
     static let qualitySparkle = GlyphScript(
         keys: [Key(0, s: 0.9), Key(0.2, s: 1.08), Key(0.4, s: 1)],
         bits: burst(4, shape: .symbol("sparkle"), inks: [.color(.yellow), .color(.white)], spread: 120, reach: 18, stagger: 0.1, life: 0.55, size: 7)
     )
-    static let audioPulse = GlyphScript(keys: [Key(0, sx: 1, sy: 0.5), Key(0.14, sx: 1, sy: 1.3), Key(0.28, sx: 1, sy: 0.8), Key(0.42, sx: 1, sy: 1.12), Key(0.56, s: 1)])
     static let nextCard = GlyphScript(keys: [Key(0, s: 0.85, y: 8), Key(0.22, s: 1.05, y: -3), Key(0.42, s: 1)])
-    static let sleepRock = GlyphScript(
-        keys: [Key(0, r: -14), Key(0.4, r: 10), Key(0.8, r: -5), Key(1.2, r: 0)],
-        bits: [
-            Bit(shape: .text("z"), ink: .color(.white), angle: -60, reach: 14, delay: 0.1, life: 0.8, size: 8),
-            Bit(shape: .text("z"), ink: .color(.white), angle: -55, reach: 20, delay: 0.35, life: 0.8, size: 10),
-            Bit(shape: .text("z"), ink: .color(.white), angle: -50, reach: 26, delay: 0.6, life: 0.8, size: 12)
-        ]
-    )
     static let quarterTurn = GlyphScript(keys: [Key(0, s: 1), Key(0.14, s: 0.75, r: 60), Key(0.25, s: 1, r: 90)])
 
     // The video page
@@ -230,8 +218,8 @@ extension GlyphScript {
 
     static func selfCheck() {
         let all: [GlyphScript] = [
-            .pauseStamp, .playShoot, .spinBack, .spinForward, .needleRev, .captionsOn, .captionsOff,
-            .qualitySparkle, .audioPulse, .nextCard, .sleepRock, .like(emojis: []), .deflate, .dislike, .rise, .subscribed,
+            .pauseStamp(size: 20), .playShoot(size: 20),
+            .qualitySparkle, .nextCard, .like(emojis: []), .deflate, .dislike, .rise, .subscribed,
             .unsubscribed, .arrowDrop, .checkStamp, .bubblePop, .lensZoom, .bellRing, .glassesOn,
             .glassesOff, .crossSwap, .dashAhead, .sunRise, .moonRise, .pop
         ]
@@ -295,7 +283,6 @@ private struct GlyphRunner<Trigger: Equatable>: ViewModifier {
 
 private struct GlyphExtras: View {
     static let ringLife = 0.6
-    private static let ringSize: CGFloat = 28
 
     let script: GlyphScript
     let time: Double
@@ -306,7 +293,7 @@ private struct GlyphExtras: View {
                 let progress = min(max((time - ring.delay) / Self.ringLife, 0), 1)
                 Circle()
                     .stroke(style(ring.ink), lineWidth: 1.5)
-                    .frame(width: Self.ringSize, height: Self.ringSize)
+                    .frame(width: script.ringSize, height: script.ringSize)
                     .scaleEffect(0.6 + progress * 1.3)
                     .opacity(progress > 0 && progress < 1 ? 0.8 * (1 - progress) : 0)
             }
@@ -383,11 +370,9 @@ struct SpeedGauge: View {
                 .frame(width: size * 0.12, height: size * 0.42)
                 .offset(y: -size * 0.2)
                 .rotationEffect(.degrees(needleAngle))
-                .animation(.spring(duration: 0.6, bounce: 0.5), value: speed)
             Circle().frame(width: size * 0.2, height: size * 0.2)
         }
         .frame(width: size, height: size)
-        .glyphMotion(speed >= (Router.speeds.last ?? 2) ? .needleRev : nil, trigger: speed)
         .accessibilityHidden(true)
     }
 }
@@ -434,54 +419,14 @@ enum VideoFlavor {
     }
 }
 
-/// Four corners that fly outward going into full screen, and inward coming out of it.
-struct FullscreenGlyph: View {
-    let isFullscreen: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private static let size: CGFloat = 17
-    private static let corners: [(x: CGFloat, y: CGFloat)] = [(-1, -1), (1, -1), (-1, 1), (1, 1)]
-
-    private struct Corner: Shape {
-        let pointsInward: Bool
-
-        func path(in rect: CGRect) -> Path {
-            let length = rect.width * 0.32
-            var path = Path()
-            if pointsInward {
-                path.move(to: CGPoint(x: length, y: rect.minY))
-                path.addLine(to: CGPoint(x: length, y: length))
-                path.addLine(to: CGPoint(x: rect.minX, y: length))
-            } else {
-                path.move(to: CGPoint(x: rect.minX, y: length))
-                path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-                path.addLine(to: CGPoint(x: length, y: rect.minY))
-            }
-            return path
-        }
-    }
+/// Woof Music's PlayPauseGlyph.
+struct PlayPauseGlyph: View {
+    let isPaused: Bool
+    let size: Double
 
     var body: some View {
-        KeyframeAnimator(initialValue: 0.0, trigger: isFullscreen) { spread in
-            ZStack {
-                ForEach(0..<Self.corners.count, id: \.self) { index in
-                    let corner = Self.corners[index]
-                    Corner(pointsInward: isFullscreen)
-                        .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                        // The shape is drawn for the top left, and mirrored for the others.
-                        .scaleEffect(x: -corner.x, y: -corner.y)
-                        .offset(x: corner.x * spread, y: corner.y * spread)
-                }
-            }
-            .frame(width: Self.size, height: Self.size)
-        } keyframes: { _ in
-            let direction: Double = reduceMotion ? 0 : (isFullscreen ? 1 : -1)
-            KeyframeTrack {
-                LinearKeyframe(-5 * direction, duration: 0.01)
-                SpringKeyframe(3 * direction, duration: 0.24)
-                SpringKeyframe(0, duration: 0.26)
-            }
-        }
+        MorphingGlyph(systemName: isPaused ? "play.fill" : "pause.fill")
+            .glyphMotion(isPaused ? .playShoot(size: size) : .pauseStamp(size: size), trigger: isPaused)
     }
 }
 
@@ -500,12 +445,14 @@ struct ClockGlyph: View {
             if isSaved {
                 Circle().fill(.tint)
             } else {
-                Circle().stroke(.primary, lineWidth: 2)
+                Circle().stroke(Color.primary, lineWidth: 2)
             }
             hand(length: Self.size * 0.36, angle: minuteAngle)
             hand(length: Self.size * 0.24, angle: 120 + minuteAngle / 12)
         }
         .frame(width: Self.size, height: Self.size)
+        // Liquid Glass lets what's under it show through hierarchical styles, so the clock is drawn as one piece.
+        .compositingGroup()
         .onChange(of: trigger) {
             guard !reduceMotion else { return }
             withAnimation(.easeOut(duration: 0.7)) { minuteAngle += isSaved ? Self.spin : -Self.spin }
@@ -514,7 +461,7 @@ struct ClockGlyph: View {
 
     private func hand(length: CGFloat, angle: Double) -> some View {
         Capsule()
-            .fill(isSaved ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .fill(isSaved ? Color.white : Color.primary)
             .frame(width: 2, height: length)
             .offset(y: -length / 2)
             .rotationEffect(.degrees(angle))

@@ -132,7 +132,7 @@ struct LibraryView: View {
             ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
             } label: {
-                ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .pink, covers: likedCovers)
+                ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .lime, covers: likedCovers)
             }
             ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
@@ -146,7 +146,7 @@ struct LibraryView: View {
                     title: "Downloads",
                     subtitle: downloads.items.isEmpty ? "Offline" : "\(downloads.items.count) \(downloads.items.count == 1 ? "video" : "videos")",
                     icon: "arrow.down.circle.fill",
-                    tint: .blue,
+                    tint: .violet,
                     covers: covers(downloads.items.map(\.video))
                 )
             }
@@ -316,6 +316,11 @@ enum LibraryPlaylists {
 }
 
 /// Woof Music's shortcut tile: two fanned covers over a large symbol the corner crops.
+private extension Color {
+    static let lime = Color(red: 0.48, green: 0.74, blue: 0.08)
+    static let violet = Color(red: 0.55, green: 0.36, blue: 0.96)
+}
+
 private struct ShortcutTile: View {
     let title: String
     let subtitle: String?
@@ -426,7 +431,12 @@ private struct HistoryStrip: View {
                     LazyHStack(alignment: .top, spacing: 10) {
                         if model.videosAndShorts.isEmpty {
                             ForEach(0..<3, id: \.self) { _ in
-                                ShimmerBlock(width: Self.coverWidth, height: Self.coverWidth * 9 / 16, radius: Layout.tileRadius)
+                                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                                    ShimmerBlock(width: Self.coverWidth, height: Self.coverWidth * 9 / 16, radius: Layout.tileRadius)
+                                    LoadingLine(height: 12)
+                                    LoadingLine(height: 12, shortBy: 40)
+                                }
+                                .frame(width: Self.coverWidth)
                             }
                         }
                         ForEach(Array(model.videosAndShorts.prefix(Self.shown)), id: \.videoId) { video in
@@ -435,6 +445,7 @@ private struct HistoryStrip: View {
                     }
                     .padding(.horizontal, Self.padding)
                 }
+                .shimmerClock()
             }
             .padding(.vertical, Self.padding)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -456,7 +467,8 @@ private struct HistoryStrip: View {
                     .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
                 Text(video.title)
                     .font(.caption.weight(.medium))
-                    .lineLimit(2)
+                    // Every tile the same height: a lazy row measures only the tiles it has drawn so far.
+                    .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.leading)
             }
             .frame(width: Self.coverWidth, alignment: .leading)
@@ -504,7 +516,7 @@ struct PlaylistPage: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
                 if videos.isEmpty, model.isLoading {
-                    LoadingRows(isCompact: true)
+                    LoadingRows(kind: .compact)
                 }
                 if videos.isEmpty, !model.isLoading {
                     ContentUnavailableView {

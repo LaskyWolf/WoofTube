@@ -132,9 +132,9 @@ enum PlaylistActions {
         )
     }
 
-    /// Your playlists, Watch Later included, and whether each one has this video.
+    /// Your playlists, and whether each one has this video.
     static func options(for videoId: String) async -> [PlaylistOption] {
-        guard let json = try? await YouTubeAPI.post("playlist/get_add_to_playlist", body: ["videoIds": [videoId], "excludeWatchLater": false]),
+        guard let json = try? await YouTubeAPI.post("playlist/get_add_to_playlist", body: ["videoIds": [videoId], "excludeWatchLater": true]),
               let rows = JSON.first("playlists", in: json) as? [[String: Any]] else { return [] }
         return rows.compactMap { row in
             guard let option = row["playlistAddToOptionRenderer"] as? [String: Any],
@@ -227,7 +227,14 @@ struct PlaylistPickerSheet: View {
                 return option
             }
         }
+        // The Library's rule: no Watch Later or Liked, which have buttons of their own, and no music playlists.
+        playlists.removeAll { LibraryPlaylists.isHidden($0.id) }
         isLoading = false
+        for playlist in library where !LibraryPlaylists.isHidden(playlist.playlistId) {
+            if await LibraryPlaylists.isMusicOnly(playlist) {
+                playlists.removeAll { $0.id == playlist.playlistId }
+            }
+        }
     }
 
     private func createAndAdd() {
@@ -249,9 +256,6 @@ struct PlaylistPickerSheet: View {
                 try await PlaylistActions.add(video.videoId, to: playlist.id)
             } else {
                 try await PlaylistActions.remove(video.videoId, from: playlist.id)
-            }
-            if playlist.id == YouTubeFeeds.watchLaterPlaylistId, router.current?.videoId == video.videoId {
-                router.setDetails { $0.isInWatchLater = target }
             }
         }
     }

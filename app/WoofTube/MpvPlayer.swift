@@ -391,7 +391,14 @@ final class MpvVideoUIView: UIView {
     private let player: MpvPlayer
     var fills = false {
         didSet {
-            if fills != oldValue { setNeedsLayout() }
+            guard fills != oldValue else { return }
+            if isActive {
+                CATransaction.begin()
+                CATransaction.setAnimationDuration(0.25)
+                player.videoLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
+                CATransaction.commit()
+            }
+            setNeedsLayout()
         }
     }
     var isActive = true {

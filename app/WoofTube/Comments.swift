@@ -92,11 +92,14 @@ final class CommentsModel: ObservableObject {
     @Published private(set) var title: String?
     @Published private(set) var isLoading = true
     @Published var errorText: String?
+    @Published private(set) var didFailLoading = false
     private(set) var createParams: String?
     private var nextToken: String?
 
     func load(token: String) async {
         defer { isLoading = false }
+        didFailLoading = false
+        isLoading = true
         do {
             let page = CommentsPage(json: try await InnerTubeClient.wooftube.next(continuation: token))
             comments = page.comments
@@ -104,14 +107,17 @@ final class CommentsModel: ObservableObject {
             createParams = page.createParams
             nextToken = page.nextToken
         } catch {
-            errorText = error.localizedDescription
+            didFailLoading = true
         }
     }
 
     func loadMore(after comment: Comment) async {
         guard comment.id == comments.last?.id, let token = nextToken else { return }
         nextToken = nil
-        guard let json = try? await InnerTubeClient.wooftube.next(continuation: token) else { return }
+        guard let json = try? await InnerTubeClient.wooftube.next(continuation: token) else {
+            nextToken = token
+            return
+        }
         let page = CommentsPage(json: json)
         comments += page.comments
         nextToken = page.nextToken
@@ -205,9 +211,16 @@ struct CommentsSheet: View {
             .overlay {
                 if model.comments.isEmpty {
                     if model.isLoading {
-                        LoadingMediaRows(isCircular: true)
+                        LoadingTextRows()
                             .frame(maxHeight: .infinity, alignment: .top)
                             .padding(.top, Layout.rowSpacing)
+                    } else if model.didFailLoading {
+                        ContentUnavailableView {
+                            Label("Couldn't Load", systemImage: "exclamationmark.triangle")
+                        } actions: {
+                            Button("Try Again") { Task { await model.load(token: token) } }
+                                .buttonStyle(.bordered)
+                        }
                     } else {
                         ContentUnavailableView("No Comments", systemImage: "bubble.left")
                     }
@@ -303,20 +316,32 @@ private struct CommentRow: View {
                             Image(systemName: comment.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
                                 .glyphMotion(comment.isLiked ? .pop : .deflate, trigger: comment.isLiked)
                         }
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                     }
+                    .accessibilityLabel("Like")
+                    .accessibilityValue(comment.isLiked ? comment.likeCountLiked : comment.likeCount)
+                    .accessibilityAddTraits(comment.isLiked ? .isSelected : [])
                     if comment.replyParams != nil {
-                        Button("Reply") { onReply(comment) }
+                        Button {
+                            onReply(comment)
+                        } label: {
+                            Text("Reply").frame(minHeight: 44).contentShape(.rect)
+                        }
                     }
                     if comment.repliesToken != nil, comment.replies.isEmpty {
-                        Button("\(comment.replyCount) replies") {
+                        Button {
                             Task { await model.loadReplies(of: comment) }
+                        } label: {
+                            Text(comment.replyCount == 1 ? "1 reply" : "\(comment.replyCount) replies")
+                                .frame(minHeight: 44)
+                                .contentShape(.rect)
                         }
                     }
                 }
                 .font(.footnote.weight(.medium))
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
-                .frame(minHeight: 32)
                 .sensoryFeedback(.impact(weight: .light), trigger: comment.isLiked)
             }
         }

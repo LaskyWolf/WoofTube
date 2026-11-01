@@ -210,9 +210,11 @@ private struct SearchStart: View {
             HStack {
                 Text("Recently searched").font(.headline)
                 Spacer()
-                Button("Clear") { history.clear() }
-                    .font(.subheadline)
-                    .frame(minHeight: 44)
+                Button {
+                    history.clear()
+                } label: {
+                    Text("Clear").font(.subheadline).frame(minHeight: 44).contentShape(.rect)
+                }
             }
             .padding(.horizontal, Layout.screenPadding)
             ForEach(history.entries, id: \.self) { historyRow($0) }
@@ -231,13 +233,17 @@ private struct SearchStart: View {
     private func historyRow(_ query: String) -> some View {
         queryRow(query, systemImage: Self.historyIcon, iconStyle: .tint)
             .overlay(alignment: .trailing) {
-                Button("Remove from History", systemImage: "xmark") { history.delete(query) }
-                    .labelStyle(.iconOnly)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
-                    .buttonStyle(.plain)
+                Button {
+                    history.delete(query)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove from History")
                     .padding(.trailing, Layout.chipSpacing)
             }
             .contextMenu {

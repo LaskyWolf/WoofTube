@@ -109,6 +109,7 @@ final class FeedModel {
             errorText = nil
         } catch {
             errorText = error.localizedDescription
+            if isSwitching { items = [] }
         }
     }
 
@@ -123,7 +124,10 @@ final class FeedModel {
             nextToken = nil
             guard let json = try? await (nextQuery != nil
                 ? tube.search(query: nextQuery ?? "", continuation: token)
-                : tube.browse(continuation: token)) else { return }
+                : tube.browse(continuation: token)) else {
+                nextToken = token
+                return
+            }
             let known = Set(items.map(\.id))
             let page = await offMain { FeedParser.items(in: json) }
             let added = (isHome ? SeenVideos.removing(from: page) : page).filter { !known.contains($0.id) }
@@ -380,7 +384,7 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            FeedContent(model: model, retry: { await reload() }) {
+            FeedContent(model: model, retry: { await reload() }, loading: .home) {
                 if !model.chips.isEmpty {
                     FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
                 } else if model.isLoading {
@@ -524,15 +528,26 @@ private struct KeepWatchingCard: View {
     }
 
     private var loading: some View {
-        HStack(spacing: Layout.rowSpacing) {
-            ShimmerFill(radius: Layout.tileRadius)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(width: Self.thumbWidth)
-            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                ShimmerBlock(width: 120, height: 14)
-                ShimmerBlock(width: 70, height: 12)
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            ShimmerBlock(width: 120, height: 18)
+            HStack(spacing: Layout.rowSpacing) {
+                ShimmerFill(radius: Layout.tileRadius)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(width: Self.thumbWidth)
+                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                    LoadingLine(height: 14)
+                    LoadingLine(height: 14, shortBy: 20)
+                    LoadingLine(height: 11, shortBy: 40)
+                }
+                ShimmerBlock(width: Self.playSize, height: Self.playSize, radius: Self.playSize / 2)
             }
-            Spacer(minLength: 0)
+            HStack(spacing: Layout.chipSpacing) {
+                ForEach(0..<3, id: \.self) { _ in
+                    ShimmerFill(radius: Layout.tileRadius)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .frame(width: Self.smallThumbWidth)
+                }
+            }
         }
         .padding(Layout.rowSpacing)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
@@ -548,11 +563,11 @@ private struct LoadingChips: View {
     var body: some View {
         HStack(spacing: Layout.chipSpacing) {
             ForEach([56, 84, 70, 92], id: \.self) { width in
-                ShimmerBlock(width: CGFloat(width), height: 34, radius: 17)
+                ShimmerBlock(width: CGFloat(width), height: Layout.controlHeight, radius: Layout.controlHeight / 2)
             }
         }
         .padding(.horizontal, Layout.screenPadding)
-        .padding(.bottom, Layout.rowSpacing)
+        .padding(.vertical, Layout.chipSpacing)
         .shimmerClock()
         .accessibilityHidden(true)
     }
@@ -578,10 +593,23 @@ struct SubsView: View {
     private static let channelsWithPosts = 30
     private static let newVideosShown = 12
 
+    /// YouTube's Most relevant: the first shelf of videos on this page, whatever the language calls it.
+    /// The New Videos card shows it, so it doesn't appear twice.
+    private var relevantShelf: FeedItem? {
+        model.items.first { if case .shelf = $0 { return true } else { return false } }
+    }
+
+    private var relevantVideos: [YouTubeVideo] {
+        if case .shelf(_, let videos)? = relevantShelf { return videos }
+        return []
+    }
+
     private var keeps: ((FeedItem) -> Bool)? {
+        let relevantId = relevantShelf?.id
         switch filter {
         case .videos:
             return {
+                guard $0.id != relevantId else { return false }
                 switch $0 {
                 case .video, .shelf: return true
                 default: return false
@@ -589,20 +617,34 @@ struct SubsView: View {
             }
         case .shorts:
             return { if case .shorts = $0 { return true } else { return false } }
-        case .posts, nil:
+        case nil:
+            return { $0.id != relevantId }
+        case .posts:
             return nil
+        }
+    }
+
+    private var loadingKind: LoadingKind {
+        switch filter {
+        case .shorts: .shorts
+        case .posts: .posts
+        case .videos, nil: .videos
         }
     }
 
     var body: some View {
         NavigationStack {
-            FeedContent(model: filter == .posts ? posts : model, retry: reload, keeps: keeps) {
+            FeedContent(model: filter == .posts ? posts : model, retry: reload, keeps: keeps, loading: loadingKind) {
                 FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
                     let tapped = Filter(rawValue: title)
                     filter = filter == tapped ? nil : tapped
                 }
-                if !newVideos.isEmpty, filter == nil || filter == .videos {
-                    NewVideosCard(videos: newVideos)
+                if filter == nil || filter == .videos {
+                    if !newVideos.isEmpty {
+                        NewVideosCard(videos: newVideos)
+                    } else if model.items.isEmpty, model.isLoading {
+                        LoadingNewVideos()
+                    }
                 }
             }
             .tabRoot(title: "Subs", tab: .subs)
@@ -627,7 +669,11 @@ struct SubsView: View {
     }
 
     private func refreshNewVideos() {
-        let fresh = model.videos.filter { $0.isRecent && !$0.isLive && !SeenVideos.contains($0.videoId) }
+        var known = Set<String>()
+        // YouTube's own choice first, then whatever else came out today.
+        let fresh = (relevantVideos + model.videos.filter(\.isRecent)).filter {
+            !$0.isLive && !SeenVideos.contains($0.videoId) && known.insert($0.videoId).inserted
+        }
         withAnimation { newVideos = Array(fresh.prefix(Self.newVideosShown)) }
     }
 
@@ -694,7 +740,11 @@ struct FeedContent<Header: View>: View {
     var isCompact = false
     /// Leaves out what a filter doesn't want.
     var keeps: ((FeedItem) -> Bool)?
+    /// What the loading rows look like, when it isn't simply a list of videos.
+    var loading: LoadingKind?
     @ViewBuilder let header: () -> Header
+
+    private var loadingKind: LoadingKind { loading ?? (isCompact ? .compact : .videos) }
 
     /// Woof Music's filters: loading rows at once, then the new rows fade up into place.
     private var shownIds: [String] {
@@ -706,9 +756,9 @@ struct FeedContent<Header: View>: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header()
                 if model.isSwitching {
-                    LoadingRows(isCompact: isCompact).transition(.opacity)
+                    LoadingRows(kind: loadingKind).transition(.opacity)
                 } else {
-                    if model.items.isEmpty {
+                    if shownIds.isEmpty {
                         emptyState
                     }
                     FeedRows(model: model, isCompact: isCompact, keeps: keeps)
@@ -723,7 +773,7 @@ struct FeedContent<Header: View>: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.isLoading {
-            LoadingRows(isCompact: isCompact)
+            LoadingRows(kind: loadingKind)
         } else {
             ContentUnavailableView {
                 if model.errorText != nil {
@@ -1108,41 +1158,158 @@ struct CompactVideoRow: View {
     }
 }
 
+/// What a feed is about to show.
+enum LoadingKind {
+    case videos, compact, home, shorts, posts
+}
+
 /// The shape of the feed while it loads, so the page doesn't jump when the videos arrive.
 struct LoadingRows: View {
-    var isCompact = false
+    var kind = LoadingKind.videos
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isCompact ? Layout.rowSpacing : Layout.rowSpacing * 2) {
-            ForEach(0..<(isCompact ? 8 : 4), id: \.self) { _ in
-                if isCompact {
-                    HStack(spacing: Layout.rowSpacing) {
-                        ShimmerBlock(width: 112, height: 63, radius: Layout.cardRadius)
-                        lines
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-                        ShimmerFill(radius: Layout.tileRadius).aspectRatio(16 / 9, contentMode: .fit)
-                        HStack(alignment: .top, spacing: Layout.rowSpacing) {
-                            ShimmerBlock(width: 36, height: 36, radius: 18)
-                            lines
-                        }
-                    }
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            switch kind {
+            case .videos:
+                ForEach(0..<4, id: \.self) { _ in videoRow }
+            case .compact:
+                ForEach(0..<8, id: \.self) { _ in compactRow }
+            case .home:
+                videoRow
+                shortsShelf
+                videoRow
+            case .shorts:
+                shortsShelf
+                shortsShelf
+            case .posts:
+                ForEach(0..<3, id: \.self) { _ in postCard }
             }
         }
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.vertical, Layout.rowSpacing)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .shimmerClock()
     }
 
-    private var lines: some View {
-        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-            ShimmerBlock(width: isCompact ? 170 : 240, height: 14)
-            ShimmerBlock(width: 110, height: 12)
+    private var videoRow: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            ShimmerFill(radius: Layout.tileRadius).aspectRatio(16 / 9, contentMode: .fit)
+            HStack(alignment: .top, spacing: Layout.rowSpacing) {
+                ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                    LoadingLine(height: 15)
+                    LoadingLine(height: 15, shortBy: 90)
+                    LoadingLine(height: 11, shortBy: 150)
+                }
+            }
         }
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.rowSpacing)
+    }
+
+    private var compactRow: some View {
+        HStack(spacing: Layout.rowSpacing) {
+            ShimmerBlock(width: 112, height: 63, radius: Layout.cardRadius)
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                LoadingLine(height: 14)
+                LoadingLine(height: 14, shortBy: 50)
+                LoadingLine(height: 11, shortBy: 110)
+            }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.rowPadding)
+    }
+
+    private var shortsShelf: some View {
+        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+            ShimmerBlock(width: 90, height: 20)
+                .padding(.horizontal, Layout.screenPadding)
+                .padding(.top, Layout.chipSpacing)
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: Layout.rowSpacing) {
+                    ForEach(0..<3, id: \.self) { _ in shortCard }
+                }
+                .padding(.horizontal, Layout.screenPadding)
+            }
+            .scrollDisabled(true)
+            .scrollIndicators(.hidden)
+        }
+        .padding(.bottom, Layout.sectionGap)
+    }
+
+    private var shortCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ShimmerFill(radius: Layout.tileRadius).aspectRatio(ShortCard.coverAspect, contentMode: .fit)
+            HStack(spacing: Layout.chipSpacing) {
+                ShimmerBlock(width: ShortCard.avatarSize, height: ShortCard.avatarSize, radius: ShortCard.avatarSize / 2)
+                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                    LoadingLine(height: 11)
+                    LoadingLine(height: 11, shortBy: 30)
+                }
+            }
+            .padding(.horizontal, Layout.rowPadding)
+            .padding(.top, -ShortCard.avatarSize / 2)
+        }
+        .frame(width: ShortCard.width)
+    }
+
+    private var postCard: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            HStack(spacing: Layout.rowSpacing) {
+                ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                    ShimmerBlock(width: 120, height: 14)
+                    ShimmerBlock(width: 70, height: 11)
+                }
+            }
+            LoadingLine(height: 14)
+            LoadingLine(height: 14)
+            LoadingLine(height: 14, shortBy: 120)
+        }
+        .padding(Layout.rowSpacing)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.tileRadius))
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.vertical, Layout.rowSpacing)
+    }
+}
+
+/// A line of text that follows the width it's given, whatever the phone.
+struct LoadingLine: View {
+    let height: CGFloat
+    var shortBy: CGFloat = 0
+
+    var body: some View {
+        ShimmerFill(radius: 4)
+            .frame(height: height)
+            .padding(.trailing, shortBy)
+    }
+}
+
+/// Rows of an avatar and text, for comments and notifications.
+struct LoadingTextRows: View {
+    var showsThumbnail = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing + Layout.rowPadding) {
+            ForEach(0..<6, id: \.self) { _ in
+                HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                    ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+                    VStack(alignment: .leading, spacing: Layout.rowPadding) {
+                        LoadingLine(height: 12, shortBy: 80)
+                        LoadingLine(height: 14)
+                        LoadingLine(height: 14, shortBy: 40)
+                    }
+                    if showsThumbnail {
+                        ShimmerFill(radius: Layout.tileRadius)
+                            .aspectRatio(16 / 9, contentMode: .fit)
+                            .frame(width: 112)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .shimmerClock()
     }
 }
 
@@ -1191,9 +1358,9 @@ private struct ShortCard: View {
     let video: YouTubeVideo
     @State private var avatar: String?
 
-    private static let width: CGFloat = 158
-    private static let coverAspect: CGFloat = 158 / 250
-    private static let avatarSize: CGFloat = 44
+    static let width: CGFloat = 158
+    static let coverAspect: CGFloat = 158 / 250
+    static let avatarSize: CGFloat = 44
     private static let fadeHeight: CGFloat = 64
 
     var body: some View {
@@ -1261,6 +1428,56 @@ private struct NewVideosCard: View {
     }
 }
 
+/// The shape of `NewVideosCard` while the page loads.
+private struct LoadingNewVideos: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            HStack {
+                ShimmerBlock(width: 100, height: 18)
+                Spacer()
+                ShimmerBlock(width: 50, height: 20, radius: 10)
+            }
+            .padding(.horizontal, Layout.rowSpacing)
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                    ForEach(0..<3, id: \.self) { _ in ribbon }
+                }
+                .padding(.horizontal, Layout.rowSpacing)
+            }
+            .scrollDisabled(true)
+            .scrollIndicators(.hidden)
+        }
+        .padding(.vertical, Layout.rowSpacing)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius + 2, style: .continuous))
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.bottom, Layout.sectionGap)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .shimmerClock()
+    }
+
+    private var ribbon: some View {
+        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+            VStack(alignment: .leading, spacing: 0) {
+                ShimmerFill(radius: Layout.cardRadius)
+                    .frame(height: (NewVideoRibbon.width - Layout.rowPadding * 2) * 9 / 16)
+                HStack(spacing: Layout.chipSpacing) {
+                    ShimmerBlock(width: NewVideoRibbon.avatarSize, height: NewVideoRibbon.avatarSize, radius: NewVideoRibbon.avatarSize / 2)
+                    VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                        LoadingLine(height: 11)
+                        LoadingLine(height: 11, shortBy: 20)
+                    }
+                }
+                .padding(.top, -NewVideoRibbon.avatarSize / 2)
+            }
+            LoadingLine(height: 10, shortBy: 50)
+        }
+        .padding(Layout.rowPadding)
+        .frame(width: NewVideoRibbon.width)
+        .background(Color(.systemGray6), in: .rect(cornerRadius: Layout.tileRadius + 2, style: .continuous))
+    }
+}
+
 /// A small upright card in the colour of the video's own cover. Like a Short card,
 /// the avatar and title straddle the cover's lower edge, and the cover fades into the card.
 private struct NewVideoRibbon: View {
@@ -1269,8 +1486,8 @@ private struct NewVideoRibbon: View {
     @State private var tint: Color?
     @State private var avatar: String?
 
-    private static let width: CGFloat = 148
-    private static let avatarSize: CGFloat = 32
+    static let width: CGFloat = 148
+    static let avatarSize: CGFloat = 32
     private static let fadeHeight: CGFloat = 34
 
     private var cover: String { video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg" }
@@ -1399,12 +1616,45 @@ private struct PostRow: View {
     @Environment(Router.self) private var router
     @State private var isExpanded = false
     @State private var isLiked: Bool?
-    @State private var votedChoice: String?
+    /// The choice picked here. It stays nil until the first tap, then `post` no longer decides.
+    @State private var pickedChoice: String??
 
     private var showsLiked: Bool { isLiked ?? post.isLiked }
+    private var shownChoice: String? {
+        pickedChoice ?? post.pollChoices.first(where: \.isSelected)?.title
+    }
 
-    private func perform(_ action: String) {
-        router.run { _ = try await YouTubeAPI.post("comment/perform_comment_action", body: ["actions": [action]]) }
+    /// YouTube counts in words past a thousand, so only an exact number can follow the tap.
+    private var shownLikes: String {
+        guard let likes = post.likes, let count = Int(likes), showsLiked != post.isLiked else { return post.likes ?? "" }
+        return String(count + (showsLiked ? 1 : -1))
+    }
+
+    /// Shows the change at once and takes it back if YouTube refuses.
+    private func perform(_ action: String?, change: () -> Void, undo: @escaping () -> Void) {
+        guard let action else {
+            router.actionMessage = "YouTube didn't offer this action for the post."
+            return
+        }
+        change()
+        Task {
+            do {
+                _ = try await YouTubeAPI.post("comment/perform_comment_action", body: ["actions": [action]])
+            } catch {
+                undo()
+                router.actionMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func vote(_ choice: PollChoice) {
+        let previous = pickedChoice
+        let isVoted = shownChoice == choice.title
+        perform(isVoted ? choice.deselectAction : choice.selectAction) {
+            pickedChoice = .some(isVoted ? nil : choice.title)
+        } undo: {
+            pickedChoice = previous
+        }
     }
 
     var body: some View {
@@ -1436,11 +1686,10 @@ private struct PostRow: View {
                 VideoButton(video: video)
             }
             ForEach(post.pollChoices, id: \.title) { choice in
-                let isVoted = votedChoice == choice.title || (votedChoice == nil && choice.isSelected)
+                let isVoted = shownChoice == choice.title
+                let hasVote = shownChoice != nil
                 Button {
-                    guard let action = choice.action else { return }
-                    votedChoice = choice.title
-                    perform(action)
+                    vote(choice)
                 } label: {
                     HStack {
                         Text(choice.title).multilineTextAlignment(.leading)
@@ -1448,32 +1697,51 @@ private struct PostRow: View {
                         if isVoted {
                             Image(systemName: "checkmark").foregroundStyle(.tint)
                         }
+                        if hasVote, let percent = isVoted ? choice.percentIfSelected : choice.percentIfNotSelected {
+                            Text(percent).foregroundStyle(.secondary).monospacedDigit()
+                        }
                     }
                     .font(.subheadline)
                     .padding(Layout.rowSpacing)
-                    .background(Color(.secondarySystemFill), in: .rect(cornerRadius: Layout.tileRadius))
+                    .frame(minHeight: 44)
+                    .background(alignment: .leading) {
+                        if hasVote, let ratio = isVoted ? choice.ratioIfSelected : choice.ratioIfNotSelected {
+                            GeometryReader { geometry in
+                                Rectangle().fill(.tint.opacity(0.25)).frame(width: geometry.size.width * ratio)
+                            }
+                        }
+                    }
+                    .background(Color(.secondarySystemFill))
+                    .clipShape(.rect(cornerRadius: Layout.tileRadius))
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
+                .sensoryFeedback(.selection, trigger: isVoted)
+                .accessibilityAddTraits(isVoted ? .isSelected : [])
             }
             HStack(spacing: Layout.screenPadding) {
-                if let likes = post.likes {
-                    Button {
-                        guard let action = showsLiked ? post.unlikeAction : post.likeAction else { return }
-                        isLiked = !showsLiked
-                        perform(action)
-                    } label: {
-                        Label {
-                            Text(likes)
-                        } icon: {
-                            Image(systemName: showsLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
-                                .glyphMotion(showsLiked ? .pop : .deflate, trigger: showsLiked)
-                        }
-                            .frame(minHeight: 44)
-                            .contentShape(.rect)
+                Button {
+                    let wasLiked = showsLiked
+                    perform(wasLiked ? post.unlikeAction : post.likeAction) {
+                        isLiked = !wasLiked
+                    } undo: {
+                        isLiked = wasLiked
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    Label {
+                        Text(shownLikes)
+                    } icon: {
+                        Image(systemName: showsLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                            .foregroundStyle(showsLiked ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .glyphMotion(showsLiked ? .pop : .deflate, trigger: showsLiked)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Like")
+                .accessibilityValue(shownLikes)
+                .accessibilityAddTraits(showsLiked ? .isSelected : [])
                 if let comments = post.comments {
                     Label(comments, systemImage: "bubble.left")
                 }

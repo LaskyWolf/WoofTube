@@ -65,8 +65,14 @@ struct VideoExtras {
 
 struct PollChoice {
     let title: String
-    let action: String?
+    let selectAction: String?
+    let deselectAction: String?
     let isSelected: Bool
+    /// YouTube sends both results, since they depend on whether you picked this one.
+    let percentIfSelected: String?
+    let percentIfNotSelected: String?
+    let ratioIfSelected: Double?
+    let ratioIfNotSelected: Double?
 }
 
 struct CommunityPost {
@@ -291,6 +297,11 @@ enum FeedParser {
         return dict.values.flatMap { feedbackActions(in: $0) }
     }
 
+    /// The endpoint's own action: its `clientActions` can hold other keys of the same name.
+    private static func commentAction(in endpoint: Any?) -> String? {
+        (JSON.first("performCommentActionEndpoint", in: endpoint) as? [String: Any])?["action"] as? String
+    }
+
     private static func post(in dict: [String: Any]) -> CommunityPost? {
         guard let post = (JSON.first("backstagePostRenderer", in: dict) ?? JSON.first("postRenderer", in: dict)) as? [String: Any],
               let id = post["postId"] as? String else { return nil }
@@ -313,11 +324,20 @@ enum FeedParser {
             video: (attachment as? [String: Any]).flatMap { YouTubeFeedParser.videos(in: $0).first },
             pollChoices: choices.compactMap { choice in
                 JSON.text(choice["text"]).map {
-                    PollChoice(title: $0, action: JSON.string("action", in: choice["selectServiceEndpoint"]), isSelected: choice["selected"] as? Bool ?? false)
+                    PollChoice(
+                        title: $0,
+                        selectAction: commentAction(in: choice["selectServiceEndpoint"]),
+                        deselectAction: commentAction(in: choice["deselectServiceEndpoint"]),
+                        isSelected: choice["selected"] as? Bool ?? false,
+                        percentIfSelected: JSON.text(choice["votePercentageIfSelected"]),
+                        percentIfNotSelected: JSON.text(choice["votePercentageIfNotSelected"]),
+                        ratioIfSelected: choice["voteRatioIfSelected"] as? Double,
+                        ratioIfNotSelected: choice["voteRatioIfNotSelected"] as? Double
+                    )
                 }
             },
-            likeAction: JSON.string("action", in: likeButton?["defaultServiceEndpoint"]),
-            unlikeAction: JSON.string("action", in: likeButton?["toggledServiceEndpoint"]),
+            likeAction: commentAction(in: likeButton?["defaultServiceEndpoint"]),
+            unlikeAction: commentAction(in: likeButton?["toggledServiceEndpoint"]),
             isLiked: likeButton?["isToggled"] as? Bool ?? false
         )
     }

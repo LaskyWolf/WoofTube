@@ -83,7 +83,8 @@ struct PlayerOverlay: View {
             AmbientImage(
                 player: miniPlayerObject,
                 poster: miniVideo.map { $0.thumbnailURL ?? "https://i.ytimg.com/vi/\($0.videoId)/hqdefault.jpg" },
-                storyboard: isShort ? nil : router.storyboard
+                storyboard: isShort ? nil : router.storyboard,
+                isPaused: isShort ? router.isShortsPageOnScreen : router.isWatchPageOnScreen
             )
             .frame(width: miniCardWidth, height: miniCardHeight)
             .clipped()
@@ -205,19 +206,21 @@ struct WatchPage: View {
             }
         }
         .background(alignment: .top) {
-            if isFullscreen {
-                Color.black.ignoresSafeArea()
-            } else {
-                ZStack(alignment: .top) {
-                    Color(.systemBackground)
-                    AmbientBackdrop(
-                        player: router.player,
-                        poster: poster,
-                        storyboard: router.storyboard
-                    )
+            // It stays in place while resting, so it comes back with its colours instead of the poster's.
+            ZStack(alignment: .top) {
+                Color(.systemBackground)
+                AmbientBackdrop(
+                    player: router.player,
+                    poster: poster,
+                    storyboard: router.storyboard,
+                    isPaused: isFullscreen
+                )
+                .opacity(isFullscreen ? 0 : 1)
+                if isFullscreen {
+                    Color.black
                 }
-                .ignoresSafeArea()
             }
+            .ignoresSafeArea()
         }
         .offset(y: pullDistance)
         .statusBarHidden(isFullscreen)
@@ -232,11 +235,8 @@ struct WatchPage: View {
             Orientation.unlockIfHeldUpright()
         }
         // The phone can lock again while paused, like every other video app.
-        .onChange(of: isFullscreen) { _, fullscreen in
-            UIApplication.shared.isIdleTimerDisabled = fullscreen && !router.player.isPaused
-        }
         .onReceive(router.player.$isPaused.removeDuplicates()) { paused in
-            UIApplication.shared.isIdleTimerDisabled = isFullscreen && !paused
+            UIApplication.shared.isIdleTimerDisabled = !paused
         }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
@@ -257,12 +257,9 @@ struct WatchPage: View {
                     .ignoresSafeArea(edges: isFullscreen ? .all : [])
                 CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
                     .frame(maxHeight: .infinity, alignment: .bottom)
-                PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen)
+                PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen, fillsScreen: $fillsScreen)
             }
         }
-        .simultaneousGesture(MagnifyGesture().onEnded { value in
-            if isFullscreen { fillsScreen = value.magnification > 1 }
-        })
     }
 }
 
@@ -379,21 +376,19 @@ private struct AmbientBackdrop: View {
     let player: MpvPlayer
     let poster: String?
     let storyboard: Storyboard?
+    let isPaused: Bool
 
     private static let height: CGFloat = 560
-    /// Reaches under the status bar and fills the pull-down overscroll.
-    private static let overflow: CGFloat = 300
 
     var body: some View {
-        AmbientImage(player: player, poster: poster, storyboard: storyboard)
-        .frame(height: Self.height + Self.overflow)
+        AmbientImage(player: player, poster: poster, storyboard: storyboard, isPaused: isPaused)
+        .frame(height: Self.height)
         .frame(maxWidth: .infinity)
         .clipped()
         .blur(radius: 50, opaque: true)
         .saturation(1.4)
         .opacity(0.65)
-        .mask(LinearGradient(stops: [.init(color: .black, location: 0.5), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-        .padding(.top, -Self.overflow)
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0.25), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -405,25 +400,28 @@ struct AmbientImage: View {
     private let player: MpvPlayer
     let poster: String?
     let storyboard: Storyboard?
+    /// Nothing can see it, so it keeps the frame it has.
+    let isPaused: Bool
 
     /// Seconds between frames. The clock ticks far more often, so only this view redraws with it.
     private static let refresh = 1.0
 
-    init(player: MpvPlayer, poster: String?, storyboard: Storyboard?) {
+    init(player: MpvPlayer, poster: String?, storyboard: Storyboard?, isPaused: Bool) {
         clock = player.clock
         self.player = player
         self.poster = poster
         self.storyboard = storyboard
+        self.isPaused = isPaused
     }
 
     var body: some View {
-        AmbientFrame(player: player, moment: (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
+        AmbientFrame(player: player, moment: isPaused ? nil : (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
     }
 }
 
 private struct AmbientFrame: View {
     let player: MpvPlayer
-    let moment: Double
+    let moment: Double?
     let poster: String?
     let storyboard: Storyboard?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -441,11 +439,11 @@ private struct AmbientFrame: View {
             }
         }
         .onChange(of: poster) { frame = nil }
-        .task(id: "\(poster ?? "")|\(moment)|\(storyboard?.urlTemplate ?? "")") { await loadFrame() }
+        .task(id: "\(poster ?? "")|\(moment ?? -1)|\(storyboard?.urlTemplate ?? "")") { await loadFrame() }
     }
 
     private func loadFrame() async {
-        guard !reduceMotion, !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
+        guard let moment, !reduceMotion, !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
         let player = player
         if let live = await offMain({ player.currentFrame(width: Self.liveFrameWidth) }) {
             guard !Task.isCancelled else { return }
@@ -505,6 +503,8 @@ struct PlayerTouchSurface: UIViewRepresentable {
     var onDragEnded: ((_ translation: CGSize, _ predicted: CGSize) -> Void)?
     /// When false the drag is left to whatever sits behind, like the system's swipe to close.
     var isDragEnabled = true
+    /// How far two fingers spread: over 1 outward, under 1 inward.
+    var onPinch: ((CGFloat) -> Void)?
 
     private static let holdDuration = 0.35
     /// How far ahead a flick counts, in seconds of its speed.
@@ -529,7 +529,11 @@ struct PlayerTouchSurface: UIViewRepresentable {
         if onDragChanged != nil {
             let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:)))
             pan.delegate = coordinator
+            pan.maximumNumberOfTouches = 1
             view.addGestureRecognizer(pan)
+        }
+        if onPinch != nil {
+            view.addGestureRecognizer(UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.pinched(_:))))
         }
         return view
     }
@@ -574,6 +578,10 @@ struct PlayerTouchSurface: UIViewRepresentable {
             case .ended, .cancelled, .failed: parent.onHold?(false)
             default: break
             }
+        }
+
+        @objc func pinched(_ recognizer: UIPinchGestureRecognizer) {
+            if recognizer.state == .ended { parent.onPinch?(recognizer.scale) }
         }
 
         @objc func panned(_ recognizer: UIPanGestureRecognizer) {
@@ -621,8 +629,7 @@ private struct MiniControls: View {
                     Label {
                         Text(player.isPaused ? "Play" : "Pause")
                     } icon: {
-                        MorphingGlyph(systemName: player.isPaused ? "play.fill" : "pause.fill")
-                            .glyphMotion(player.isPaused ? .playShoot : .pauseStamp, trigger: player.isPaused)
+                        PlayPauseGlyph(isPaused: player.isPaused, size: 15)
                     }
                 }
                 Button("Close", systemImage: "xmark", action: onClose)
@@ -646,7 +653,7 @@ private struct MiniGlyphLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.icon
             .font(.system(size: 15, weight: .semibold))
-            .frame(width: 40, height: 44)
+            .frame(width: 44, height: 44)
             .contentShape(.rect)
     }
 }
@@ -784,6 +791,7 @@ private struct PlayerProgress: View {
     let storyboard: Storyboard?
     let chapters: [Chapter]
     let onScrubbing: (Bool) -> Void
+    private static let timeDrop: CGFloat = 5
     @State private var position = 0.0
     @State private var isEditing = false
 
@@ -795,19 +803,23 @@ private struct PlayerProgress: View {
             if isEditing, let storyboard {
                 StoryboardPreview(storyboard: storyboard, seconds: position * total)
             }
-            HStack {
-                if player.isLiveStream {
-                    Text("LIVE")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, Layout.rowPadding)
-                        .padding(.vertical, 2)
-                        .background(.tint, in: .capsule)
-                } else {
-                    Text("\(shownTime.clockText) | \(duration.clockText)")
+            HStack(alignment: .bottom) {
+                HStack(alignment: .bottom) {
+                    if player.isLiveStream {
+                        Text("LIVE")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, Layout.rowPadding)
+                            .padding(.vertical, 2)
+                            .background(.tint, in: .capsule)
+                    } else {
+                        Text("\(shownTime.clockText) | \(duration.clockText)")
+                    }
+                    if let chapter {
+                        chapterMenu(current: chapter)
+                    }
                 }
-                if let chapter {
-                    chapterMenu(current: chapter)
-                }
+                // The buttons beside it need their 44 pt, so this reaches into the bar's empty space.
+                .offset(y: Self.timeDrop)
                 Spacer(minLength: 0)
                 RoutePicker().frame(width: 44, height: 44)
                 Button {
@@ -816,7 +828,7 @@ private struct PlayerProgress: View {
                     Label {
                         Text(isFullscreen ? "Exit Full Screen" : "Full Screen")
                     } icon: {
-                        FullscreenGlyph(isFullscreen: isFullscreen)
+                        Image(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     }
                 }
                 .buttonStyle(PlayerPressStyle())
@@ -867,7 +879,7 @@ private struct PlayerProgress: View {
                 Image(systemName: "chevron.right").imageScale(.small)
             }
             .font(.caption2.weight(.semibold))
-            .frame(minHeight: 44)
+            .frame(minHeight: 44, alignment: .bottom)
             .contentShape(.rect)
         }
         .accessibilityLabel("Chapter: \(current.title)")
@@ -881,15 +893,6 @@ private struct SeekHint {
     let seconds: Int
 }
 
-/// Says what was just picked in a menu. The system draws menus and their icons stay still, so the movement happens here.
-private struct PlayerNotice {
-    let id = UUID()
-    let text: String
-    var symbol: String?
-    var speed: Double?
-    let script: GlyphScript
-}
-
 /// A moon with a ring that shrinks as the time runs out.
 private struct SleepGlyph: View {
     @ObservedObject var timer: SleepTimer
@@ -898,7 +901,6 @@ private struct SleepGlyph: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 15)) { context in
             Image(systemName: "moon.zzz.fill")
-                .glyphMotion(.sleepRock, trigger: timer.isActive, playsOnAppear: true)
                 .background {
                     if let endsAt = timer.endsAt, let minutes = timer.minutes {
                         Circle()
@@ -914,14 +916,16 @@ private struct SleepGlyph: View {
 
 private struct PlayerControls: View {
     private static let skipSeconds = 10
-    private static let noticeTime = Duration.milliseconds(1400)
     private static let exitFullscreenDistance: CGFloat = 60
+    /// A pinch smaller than this is two fingers resting on the screen.
+    private static let pinchMargin: CGFloat = 0.05
     /// mpv often waits a moment for data with no visible effect, so the spinner waits longer.
     private static let spinnerDelay = Duration.milliseconds(600)
 
     @ObservedObject var player: MpvPlayer
     @ObservedObject var sleepTimer: SleepTimer
     let isFullscreen: Bool
+    @Binding var fillsScreen: Bool
 
     @Environment(Router.self) private var router
     @State private var showsControls = true
@@ -929,8 +933,6 @@ private struct PlayerControls: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
     @State private var showsSpinner = false
-    @State private var notice: PlayerNotice?
-    @State private var optionsTaps = 0
 
     /// Nothing to show yet, so the spinner appears at once.
     private var isStarting: Bool {
@@ -959,7 +961,11 @@ private struct PlayerControls: View {
                 onDragEnded: { translation, _ in
                     if translation.height > Self.exitFullscreenDistance { Orientation.setFullscreen(false) }
                 },
-                isDragEnabled: isFullscreen
+                isDragEnabled: isFullscreen,
+                onPinch: { scale in
+                    guard isFullscreen, abs(scale - 1) > Self.pinchMargin else { return }
+                    fillsScreen = scale > 1
+                }
             )
             .ignoresSafeArea(edges: isFullscreen ? .all : [])
 
@@ -973,7 +979,6 @@ private struct PlayerControls: View {
                 VStack(spacing: Layout.cardSpacing) {
                     Image(systemName: seekHint.isLeading ? "gobackward.10" : "goforward.10")
                         .font(.system(size: 28, weight: .semibold))
-                        .glyphMotion(seekHint.isLeading ? .spinBack : .spinForward, trigger: seekHint.id, playsOnAppear: true)
                     if seekHint.seconds > Self.skipSeconds {
                         Text("\(seekHint.isLeading ? "−" : "+")\(seekHint.seconds)")
                             .font(.subheadline.weight(.bold).monospacedDigit())
@@ -991,9 +996,6 @@ private struct PlayerControls: View {
                         self.seekHint = nil
                     }
             }
-            if let notice {
-                noticeView(notice)
-            }
         }
         .environment(\.colorScheme, .dark)
         .buttonStyle(PlayerPressStyle())
@@ -1001,6 +1003,7 @@ private struct PlayerControls: View {
         .sheet(isPresented: $showsSleepTimer) {
             SleepTimerSheet(timer: sleepTimer)
         }
+        .sensoryFeedback(.selection, trigger: fillsScreen)
         .onAppear(perform: scheduleHide)
         .onChange(of: player.isPaused) { scheduleHide() }
         .task(id: isLoading) {
@@ -1041,8 +1044,7 @@ private struct PlayerControls: View {
                     Label {
                         Text(player.isPaused ? "Play" : "Pause")
                     } icon: {
-                        MorphingGlyph(systemName: player.isPaused ? "play.fill" : "pause.fill")
-                            .glyphMotion(player.isPaused ? .playShoot : .pauseStamp, trigger: player.isPaused)
+                        PlayPauseGlyph(isPaused: player.isPaused, size: 34)
                     }
                 }
                 .labelStyle(PlayerGlyphLabelStyle(size: 34))
@@ -1090,40 +1092,6 @@ private struct PlayerControls: View {
         .accessibilityLabel("Close Video")
     }
 
-    private func noticeView(_ notice: PlayerNotice) -> some View {
-        HStack(spacing: Layout.chipSpacing) {
-            Group {
-                if let speed = notice.speed {
-                    SpeedGauge(speed: speed, size: 18)
-                } else if let symbol = notice.symbol {
-                    Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
-                }
-            }
-            .glyphMotion(notice.script, trigger: notice.id, playsOnAppear: true)
-            Text(notice.text)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .lineLimit(1)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, Layout.rowSpacing)
-        .frame(minHeight: Layout.controlHeight)
-        .glassEffect(.regular, in: .capsule)
-        .id(notice.id)
-        .transition(.opacity)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .padding(.top, Layout.chipSpacing)
-        .allowsHitTesting(false)
-        .task(id: notice.id) {
-            try? await Task.sleep(for: Self.noticeTime)
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { self.notice = nil }
-        }
-    }
-
-    private func show(_ notice: PlayerNotice) {
-        withAnimation(.easeOut(duration: 0.15)) { self.notice = notice }
-    }
-
     /// Woof Music's speed chip: accent filled away from 1x.
     private var speedMenu: some View {
         Menu {
@@ -1153,7 +1121,6 @@ private struct PlayerControls: View {
     private var speedPicker: some View {
         Picker("Speed", selection: Binding(get: { player.speed }, set: { speed in
             player.setSpeed(speed)
-            show(PlayerNotice(text: speed == 1 ? "Normal" : speed.speedText, speed: speed, script: .pop))
         })) {
             ForEach(Router.speeds, id: \.self) { speed in
                 Text(speed == 1 ? "Normal" : speed.speedText).tag(speed)
@@ -1167,12 +1134,10 @@ private struct PlayerControls: View {
             Menu {
                 Button("Off", systemImage: "xmark") {
                     router.selectCaption(nil)
-                    show(PlayerNotice(text: "Captions Off", symbol: "captions.bubble", script: .captionsOff))
                 }
                 ForEach(router.captions, id: \.languageCode) { track in
                     Button {
                         router.selectCaption(track)
-                        show(PlayerNotice(text: track.name ?? "Captions On", symbol: "captions.bubble.fill", script: .captionsOn))
                     } label: {
                         if router.selectedCaption == track.languageCode {
                             Label(track.name ?? track.languageCode ?? "Unknown", systemImage: "checkmark")
@@ -1195,7 +1160,6 @@ private struct PlayerControls: View {
                     ForEach(router.audioTracks) { track in
                         Button {
                             router.selectAudioTrack(track)
-                            show(PlayerNotice(text: track.name, symbol: "waveform", script: .audioPulse))
                         } label: {
                             if router.selectedAudioTrack == track.id {
                                 Label(track.name, systemImage: "checkmark")
@@ -1208,7 +1172,6 @@ private struct PlayerControls: View {
             }
             Picker("Quality", systemImage: "sparkles.tv", selection: Binding(get: { router.maxHeight }, set: { height in
                 router.changeQuality(to: height)
-                show(PlayerNotice(text: "\(height)p", symbol: "sparkles.tv", script: .qualitySparkle))
             })) {
                 ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
             }
@@ -1216,7 +1179,6 @@ private struct PlayerControls: View {
             Menu("Speed", systemImage: player.speed.gaugeSymbol) { speedPicker }
             Toggle("Autoplay", systemImage: "play.square.stack", isOn: Binding(get: { router.autoplay }, set: { isOn in
                 router.autoplay = isOn
-                show(PlayerNotice(text: isOn ? "Autoplay On" : "Autoplay Off", symbol: "play.square.stack", script: isOn ? .nextCard : .pop))
             }))
             Button(sleepTimer.isActive ? "Sleep Timer · On" : "Sleep Timer…", systemImage: sleepTimer.isActive ? "moon.zzz.fill" : "moon.zzz") {
                 showsSleepTimer = true
@@ -1226,9 +1188,9 @@ private struct PlayerControls: View {
             }
         } label: {
             Label("Options", systemImage: "ellipsis")
-                .symbolEffect(.bounce.byLayer, value: optionsTaps)
         }
-        .simultaneousGesture(TapGesture().onEnded { optionsTaps += 1 })
+        // Hiding the controls would take the open menu with them.
+        .simultaneousGesture(TapGesture().onEnded { hideTask?.cancel() })
     }
 
     private func scheduleHide() {
@@ -1272,10 +1234,16 @@ private struct WatchDetailsView: View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
             infoHeader
             if let failure = router.loadError ?? router.player.errorText {
-                Label(failure, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                    Label(failure, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                    if let video = router.current {
+                        Button("Try Again") { router.play(video) }
+                            .buttonStyle(.bordered)
+                    }
+                }
             }
             if let details = router.details {
                 descriptionCard(details)
@@ -1351,14 +1319,25 @@ private struct WatchDetailsView: View {
                 channelRow(details)
                 actions(details)
             } else if !router.detailsUnavailable {
-                HStack(spacing: Layout.rowSpacing) {
-                    ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
-                    VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                        ShimmerBlock(width: 140, height: 14)
-                        ShimmerBlock(width: 90, height: 12)
+                VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+                    HStack(spacing: Layout.rowSpacing) {
+                        ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+                        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                            ShimmerBlock(width: 140, height: 14)
+                            ShimmerBlock(width: 90, height: 12)
+                        }
+                        Spacer(minLength: 0)
+                        ShimmerBlock(width: 96, height: 34, radius: 17)
+                    }
+                    HStack(spacing: 10) {
+                        ShimmerFill(radius: 19).frame(height: 38)
+                        ForEach(0..<4, id: \.self) { _ in
+                            ShimmerBlock(width: 38, height: 38, radius: 19)
+                        }
                     }
                 }
-                ShimmerBlock(width: 220, height: 38, radius: 19)
+                .shimmerClock()
+                .accessibilityHidden(true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1933,7 +1912,7 @@ struct ChannelView: View {
                     FilterChips(titles: tabs.map(\.title), selected: selectedTab, onTap: select)
                 }
                 if model.items.isEmpty, model.isLoading || isLoading {
-                    LoadingRows(isCompact: true)
+                    LoadingRows(kind: .compact)
                 }
                 FeedRows(model: model, isCompact: true)
                 if let description = page?.channel?.description, !description.isEmpty {

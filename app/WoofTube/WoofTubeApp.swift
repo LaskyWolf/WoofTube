@@ -150,12 +150,14 @@ struct RootTabs: View {
         .fullScreenCover(isPresented: Bindable(router).isExpanded) {
             WatchPage()
                 .navigationTransition(.zoom(sourceID: router.zoomSource, in: playerZoom))
+                .presentationBackground(.clear)
                 .onAppear { router.isWatchPageOnScreen = true }
                 .onDisappear { router.isWatchPageOnScreen = false }
         }
         .fullScreenCover(item: Bindable(router).shortsRoute) { route in
             ShortsView(model: route.model)
                 .navigationTransition(.zoom(sourceID: router.zoomSource, in: playerZoom))
+                .presentationBackground(.clear)
                 .onAppear { router.isShortsPageOnScreen = true }
                 .onDisappear { router.isShortsPageOnScreen = false }
         }

@@ -160,6 +160,8 @@ struct ShortsView: View {
     @State private var likeTaps = 0
     @State private var dislikeTaps = 0
     @State private var subscribeTaps = 0
+    @State private var shareTaps = 0
+    @EnvironmentObject private var settings: AppSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The fingers' scrub: where it started, and whether to carry on playing after.
     private struct Scrub {
@@ -202,11 +204,15 @@ struct ShortsView: View {
                     .padding(.top, Layout.controlHeight)
             }
         }
+        .background(.black)
         .offset(y: pullDistance)
         .gesture(PlayerDismissGesture.closing(isEnabled: scrub == nil, distance: $pullDistance) { router.minimizeShorts() })
-        .background(.black)
         .environment(\.colorScheme, .dark)
         .sensoryFeedback(.selection, trigger: scrub != nil)
+        .onReceive(model.player.$isPaused.removeDuplicates()) { paused in
+            UIApplication.shared.isIdleTimerDisabled = !paused
+        }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .sheet(isPresented: $showsComments) {
             if let token = model.details?.commentsToken {
                 CommentsSheet(token: token)
@@ -373,13 +379,25 @@ struct ShortsView: View {
                 likeTaps += 1
                 Task { await model.setLike(isLiked ? "INDIFFERENT" : "LIKE", video: video) }
             } label: {
-                RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like", motion: isLiked ? .deflate : .like(emojis: VideoFlavor.emojis(for: video.title)), trigger: likeTaps)
+                RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like", isActive: isLiked, motion: isLiked ? .deflate : .like(emojis: VideoFlavor.emojis(for: video.title)), trigger: likeTaps)
             }
+            .accessibilityLabel("Like")
+            .accessibilityAddTraits(isLiked ? .isSelected : [])
             Button {
                 dislikeTaps += 1
                 Task { await model.setLike(isDisliked ? "INDIFFERENT" : "DISLIKE", video: video) }
             } label: {
-                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike", motion: isDisliked ? .rise : .dislike, trigger: dislikeTaps)
+                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike", isActive: isDisliked, motion: isDisliked ? .rise : .dislike, trigger: dislikeTaps)
+            }
+            .accessibilityLabel("Dislike")
+            .accessibilityAddTraits(isDisliked ? .isSelected : [])
+            if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
+                ShareLink(item: url) {
+                    RailLabel(icon: "square.and.arrow.up", text: "Share")
+                        .symbolEffect(.bounce.up.byLayer, value: shareTaps)
+                }
+                .simultaneousGesture(TapGesture().onEnded { shareTaps += 1 })
+                .accessibilityLabel("Share")
             }
             ShortsMoreMenu(model: model, player: model.player, video: video, showsDescription: $showsDescription)
             if let details, let id = details.channelId {
@@ -387,13 +405,8 @@ struct ShortsView: View {
                     subscribeTaps += 1
                     SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
                 } label: {
-                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus", motion: details.isSubscribed ? .unsubscribed : .subscribed, trigger: subscribeTaps)
+                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus", glassTint: details.isSubscribed ? nil : settings.accentColor, motion: details.isSubscribed ? .unsubscribed : .subscribed, trigger: subscribeTaps)
                         .contentTransition(.symbolEffect(.replace))
-                        .background {
-                            Circle()
-                                .fill(details.isSubscribed ? AnyShapeStyle(.white.opacity(0.2)) : AnyShapeStyle(.tint))
-                                .frame(width: 44, height: 44)
-                        }
                 }
                 .animation(reduceMotion ? nil : .snappy, value: details.isSubscribed)
                 .accessibilityLabel(details.isSubscribed ? "Unsubscribe" : "Subscribe")
@@ -424,6 +437,21 @@ private struct ShortStartSpinner: View {
     var body: some View {
         if !player.isVideoReady, !hasFailed, player.errorText == nil {
             ProgressView().tint(.white).controlSize(.large).allowsHitTesting(false)
+        } else if let failure = player.errorText, !hasFailed {
+            Text(failure)
+                .font(.footnote)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(Layout.screenPadding)
+                .allowsHitTesting(false)
+        } else if player.isPaused, !hasFailed {
+            // Without this a paused Short looks like one that froze.
+            Image(systemName: "play.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.white.opacity(0.85))
+                .shadow(color: .black.opacity(0.5), radius: 6)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 }
@@ -431,14 +459,19 @@ private struct ShortStartSpinner: View {
 private struct RailLabel: View {
     let icon: String
     var text: String?
+    var isActive = false
+    var glassTint: Color?
     var motion: GlyphScript?
     var trigger: Int = 0
 
     var body: some View {
         VStack(spacing: 2) {
             Image(systemName: icon)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
                 .glyphMotion(motion, trigger: trigger)
+                .frame(width: 44, height: 44)
+                .glassEffect((glassTint.map { Glass.regular.tint($0) } ?? .regular).interactive(), in: .circle)
             if let text {
                 Text(text)
                     .font(.caption2.weight(.semibold))
@@ -462,11 +495,6 @@ private struct ShortsMoreMenu: View {
 
     var body: some View {
         Menu {
-            if let url = URL(string: "https://www.youtube.com/shorts/\(video.videoId)") {
-                ShareLink(item: url) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-            }
             Button("Description", systemImage: "text.alignleft") { showsDescription = true }
             Button("Save to Watch Later", systemImage: "clock") {
                 router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
@@ -478,10 +506,18 @@ private struct ShortsMoreMenu: View {
             }
             .pickerStyle(.menu)
             if !model.captions.isEmpty {
-                Menu("Captions", systemImage: "captions.bubble") {
+                Menu("Captions", systemImage: model.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill") {
                     Button("Off", systemImage: "xmark") { model.selectCaption(nil) }
                     ForEach(model.captions, id: \.languageCode) { track in
-                        Button(track.name ?? track.languageCode ?? "Unknown") { model.selectCaption(track) }
+                        Button {
+                            model.selectCaption(track)
+                        } label: {
+                            if model.selectedCaption == track.languageCode {
+                                Label(track.name ?? track.languageCode ?? "Unknown", systemImage: "checkmark")
+                            } else {
+                                Text(track.name ?? track.languageCode ?? "Unknown")
+                            }
+                        }
                     }
                 }
             }

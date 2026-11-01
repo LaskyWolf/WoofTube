@@ -71,7 +71,7 @@ struct NotificationsView: View {
         .overlay {
             if sections.isEmpty {
                 if isLoading {
-                    LoadingMediaRows(isCircular: true)
+                    LoadingTextRows(showsThumbnail: true)
                         .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, Layout.rowSpacing)
                 } else {
