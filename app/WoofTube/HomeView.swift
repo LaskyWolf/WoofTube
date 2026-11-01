@@ -46,6 +46,7 @@ final class FeedModel: ObservableObject {
     private static let pagesToSkip = 3
 
     var hasMore: Bool { nextToken != nil }
+    var isSearch: Bool { nextQuery != nil }
 
     /// The same in page order, with Shorts too.
     var videosAndShorts: [YouTubeVideo] {
@@ -228,13 +229,14 @@ struct TabHeader: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
             Spacer()
-            HStack(spacing: Layout.rowSpacing) {
+            // The targets are 44 pt, so a small gap keeps the icons as far apart as they look.
+            HStack(spacing: Layout.cardSpacing) {
                 if let onAdd {
                     Button(action: onAdd) {
                         Image(systemName: "plus")
                             .font(.title3)
                             .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                             .contentShape(.rect)
                     }
                     .accessibilityLabel("New Playlist")
@@ -244,7 +246,7 @@ struct TabHeader: View {
                         Image(systemName: "eyeglasses")
                             .font(.title3)
                             .foregroundStyle(incognito.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
                             .contentShape(.rect)
                     }
                     .accessibilityLabel(incognito.wrappedValue ? "Turn Off Incognito" : "Turn On Incognito")
@@ -254,7 +256,7 @@ struct TabHeader: View {
                     Image(systemName: "bell")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .overlay(alignment: .topTrailing) { badge }
                         .contentShape(.rect)
                 }
@@ -262,7 +264,7 @@ struct TabHeader: View {
 
                 NavigationLink(value: HeaderRoute.settings) {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
                 .accessibilityLabel("Settings")
@@ -282,7 +284,7 @@ struct TabHeader: View {
                 .padding(.horizontal, 4)
                 .frame(minWidth: 16, minHeight: 16)
                 .background(.tint, in: .capsule)
-                .offset(x: 2, y: -2)
+                .offset(x: -2, y: 2)
         }
     }
 }
@@ -666,7 +668,13 @@ struct FeedContent<Header: View>: View {
             LoadingRows(isCompact: isCompact)
         } else {
             ContentUnavailableView {
-                Label(model.errorText == nil ? "Nothing Here" : "Couldn't Load", systemImage: model.errorText == nil ? "play.rectangle" : "exclamationmark.triangle")
+                if model.errorText != nil {
+                    Label("Couldn't Load", systemImage: "exclamationmark.triangle")
+                } else if model.isSearch {
+                    Label("No Results", systemImage: "magnifyingglass")
+                } else {
+                    Label("Nothing Here", systemImage: "play.rectangle")
+                }
             } description: {
                 Text(model.errorText ?? "YouTube returned nothing here.")
             } actions: {
@@ -687,6 +695,12 @@ struct FeedRows: View {
     var playlistTitle: String?
     var keeps: ((FeedItem) -> Bool)?
     @EnvironmentObject private var router: Router
+    @State private var pendingRemoval: PendingRemoval?
+
+    private struct PendingRemoval {
+        let item: FeedItem
+        let extras: VideoExtras
+    }
 
     var body: some View {
         let shown = keeps.map { model.items.filter($0) } ?? model.items
@@ -700,12 +714,25 @@ struct FeedRows: View {
                     if item.id == shown.last?.id, let last = model.items.last { await model.loadMore(after: last) }
                 }
         }
+        .confirmationDialog(
+            "Remove from this playlist?",
+            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingRemoval
+        ) { removal in
+            Button("Remove from Playlist", role: .destructive) { remove(removal) }
+        }
     }
 
     private func removal(of item: FeedItem, extras: VideoExtras) -> (() -> Void)? {
-        guard let playlistId = editablePlaylistId, let setVideoId = extras.setVideoId else { return nil }
-        return {
-            model.remove(item)
+        guard editablePlaylistId != nil, extras.setVideoId != nil else { return nil }
+        return { pendingRemoval = PendingRemoval(item: item, extras: extras) }
+    }
+
+    private func remove(_ removal: PendingRemoval) {
+        guard let playlistId = editablePlaylistId, let setVideoId = removal.extras.setVideoId else { return }
+        do {
+            model.remove(removal.item)
             router.run {
                 _ = try await InnerTubeClient.wooftube.editPlaylist(
                     playlistId: playlistId,
@@ -1085,15 +1112,7 @@ private struct ShortsShelf: View {
                         Button {
                             router.openShorts(videos, start: video)
                         } label: {
-                            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                                Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: 9 / 16)
-                                Text(video.title)
-                                    .font(.caption.weight(.medium))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                            }
-                            .frame(width: 150)
-                            .contentShape(.rect)
+                            ShortCard(video: video)
                         }
                         .buttonStyle(RowPressStyle())
                         .videoMenu(video)
@@ -1103,6 +1122,59 @@ private struct ShortsShelf: View {
             }
         }
         .padding(.bottom, Layout.sectionGap)
+    }
+}
+
+/// The avatar and title straddle the cover's lower edge, and the cover fades into the page behind them.
+private struct ShortCard: View {
+    let video: YouTubeVideo
+    @State private var avatar: String?
+
+    private static let width: CGFloat = 158
+    private static let coverAspect: CGFloat = 158 / 250
+    private static let avatarSize: CGFloat = 44
+    private static let fadeHeight: CGFloat = 64
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: Self.coverAspect)
+                .overlay(alignment: .bottom) {
+                    LinearGradient(colors: [.clear, Color(.systemBackground)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: Self.fadeHeight)
+                }
+                .clipShape(.rect(cornerRadius: Layout.tileRadius))
+            HStack(spacing: Layout.chipSpacing) {
+                Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+                Text(video.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: Self.avatarSize)
+            .padding(.horizontal, Layout.rowPadding)
+            .padding(.top, -Self.avatarSize / 2)
+        }
+        .frame(width: Self.width)
+        .contentShape(.rect)
+        .task {
+            if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
+        }
+    }
+}
+
+/// YouTube's Shorts shelves name no creator, so each card asks once, when it comes into view.
+@MainActor
+private enum ShortAvatars {
+    private static var known: [String: String] = [:]
+
+    static func url(of videoId: String) async -> String? {
+        if let url = known[videoId] { return url }
+        guard let json = try? await InnerTubeClient.wooftube.next(videoId: videoId),
+              let url = WatchDetails(json: json, videoId: videoId).channelAvatar else { return nil }
+        known[videoId] = url
+        return url
     }
 }
 

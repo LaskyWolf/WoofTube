@@ -134,6 +134,12 @@ final class Subscriptions: ObservableObject {
         ids = Set(found.compactMap(\.channelId))
     }
 
+    /// Another account took over.
+    func reset() {
+        channels = []
+        ids = []
+    }
+
     func add(_ newIds: [String]) {
         ids.formUnion(newIds)
     }

@@ -59,7 +59,7 @@ struct VideoMenuItems: View {
 
         Section {
             Button("Play Next", systemImage: "text.insert") { router.playNext(video) }
-            Button("Add to Queue", systemImage: "list.bullet") { router.addToQueue(video) }
+            Button("Add to Queue", systemImage: "text.append") { router.addToQueue(video) }
         }
 
         Section {
@@ -91,7 +91,7 @@ struct VideoMenuItems: View {
                 }
             }
             if collaborators.count > 1 {
-                Menu("Go To", systemImage: "arrow.right.circle") {
+                Menu("Go To", systemImage: "arrow.forward.circle") {
                     ForEach(collaborators) { creator in
                         Button(creator.name, systemImage: "person.crop.circle") {
                             router.openChannel(creator.channelId)
@@ -99,7 +99,7 @@ struct VideoMenuItems: View {
                     }
                 }
             } else if let channelId = video.channelId {
-                Menu("Go To", systemImage: "arrow.right.circle") {
+                Menu("Go To", systemImage: "arrow.forward.circle") {
                     Button(video.channelTitle ?? "Channel", systemImage: "person.crop.circle") {
                         router.openChannel(channelId)
                     }
@@ -199,7 +199,7 @@ struct PlaylistPickerSheet: View {
                 }
             }
             .alert("New Playlist", isPresented: $isCreating) {
-                TextField("Playlist name", text: $newTitle)
+                TextField("Playlist Name", text: $newTitle)
                 Button("Cancel", role: .cancel) {}
                 Button("Create") { createAndAdd() }
             } message: {

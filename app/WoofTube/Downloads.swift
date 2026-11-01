@@ -66,7 +66,7 @@ final class DownloadStore: ObservableObject {
         let video: YouTubeVideo
         let videoFile: String
         let audioFile: String
-        let chunks: [Chunk]
+        var chunks: [Chunk]
         var finished: Set<String> = []
         let started: Date
 
@@ -88,12 +88,21 @@ final class DownloadStore: ObservableObject {
     private(set) var lastReport: String?
 
     /// Given by the system when it reopens the app, and called once the next job is on its way.
-    var backgroundCompletion: (() -> Void)?
+    var backgroundCompletion: (() -> Void)? {
+        didSet { DownloadSession.shared.connect() }
+    }
 
     private var job: Job?
     /// Popped from the queue, its stream address still loading.
     private var starting: YouTubeVideo?
     private var isJoining = false
+    /// False until the app has its sign-in, which starting a new video needs.
+    private var isSessionReady = false
+    private var didDeliverBackgroundEvents = false
+    /// Changes when the current work is thrown away, so what's still loading for it can tell.
+    private var generation = 0
+    private var addressRefresh: Task<Void, Never>?
+    private var lastAddressRefresh = Date.distantPast
     private var queueHeight = 1080
     private var written: [String: Int64] = [:]
     private var retries: [String: Int] = [:]
@@ -102,7 +111,13 @@ final class DownloadStore: ObservableObject {
 
     /// Same size yt-dlp asks YouTube for.
     private nonisolated static let chunkSize: Int64 = 10 << 20
+    private nonisolated static let joiningSuffix = "-joining"
     private static let retryLimit = 3
+    private static let retryDelaySeconds = 2.0
+    /// YouTube's addresses last for hours, so one refusal after another doesn't mean they all expired again.
+    private static let refreshPauseSeconds = 60.0
+    /// The system can reopen the app for a download without showing it, and then no sign-in arrives.
+    private static let sessionWait = Duration.seconds(5)
 
     private static var folder: URL { ProfileStorage.downloadsFolder }
     private static var index: URL { folder.appending(path: "index.json") }
@@ -112,6 +127,10 @@ final class DownloadStore: ObservableObject {
         Self.selfCheck()
         network.start(queue: DispatchQueue(label: "downloads.network"))
         reloadForActiveProfile()
+        Task {
+            try? await Task.sleep(for: Self.sessionWait)
+            sessionReady()
+        }
     }
 
     /// One at a time, so a long playlist doesn't take over the connection.
@@ -170,16 +189,49 @@ final class DownloadStore: ObservableObject {
         return files.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
     }
 
-    func deleteAll() {
+    func sessionReady() {
+        guard !isSessionReady else { return }
+        isSessionReady = true
+        advance()
+    }
+
+    /// Stops what's downloading and what's waiting. The saved videos stay.
+    func cancelAll() {
         waiting = []
-        if job != nil { end(failure: CancellationError()) }
-        for item in items { delete(item) }
         batch = nil
+        dropCurrentWork(deletingFiles: true)
         savePending()
     }
 
-    /// Accounts can't change while something downloads, so nothing lands in the wrong folder.
+    func deleteAll() {
+        cancelAll()
+        for item in items { delete(item) }
+    }
+
+    /// Everything in flight stops. Whoever is waiting for a video hears that it was cancelled.
+    private func dropCurrentWork(deletingFiles: Bool) {
+        generation += 1
+        if job != nil || starting != nil { DownloadSession.shared.cancelAll() }
+        if deletingFiles, let job {
+            for chunk in job.chunks { try? FileManager.default.removeItem(at: Self.folder.appending(path: chunk.name)) }
+            for file in [job.videoFile, job.audioFile] where !items.contains(where: { $0.videoFile == file || $0.audioFile == file }) {
+                try? FileManager.default.removeItem(at: Self.folder.appending(path: file))
+                try? FileManager.default.removeItem(at: Self.folder.appending(path: file + Self.joiningSuffix))
+            }
+        }
+        job = nil
+        starting = nil
+        isJoining = false
+        active = []
+        written = [:]
+        retries = [:]
+        for waiter in waiters.values { waiter.resume(throwing: CancellationError()) }
+        waiters = [:]
+    }
+
+    /// Another account's job stays in its own folder, and carries on when that account comes back.
     func reloadForActiveProfile() {
+        dropCurrentWork(deletingFiles: false)
         try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
         var folder = Self.folder
         var values = URLResourceValues()
@@ -220,25 +272,28 @@ final class DownloadStore: ObservableObject {
     // MARK: The queue
 
     private func advance() {
-        guard job == nil, starting == nil, let video = waiting.first else {
+        guard isSessionReady, job == nil, starting == nil, let video = waiting.first else {
             settleBackground()
             return
         }
         waiting.removeFirst()
         starting = video
         active = [Active(video: video)]
+        let startedIn = generation
         // Long enough to get the next video going when this runs with the phone locked.
         let backgroundTask = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
         Task {
             defer { UIApplication.shared.endBackgroundTask(backgroundTask) }
             do {
                 let new = try await makeJob(video)
+                guard generation == startedIn else { return }
                 starting = nil
                 job = new
                 savePending()
                 for chunk in new.chunks { DownloadSession.shared.start(chunk) }
                 settleBackground()
             } catch {
+                guard generation == startedIn else { return }
                 starting = nil
                 conclude(video, failure: error)
             }
@@ -294,7 +349,6 @@ final class DownloadStore: ObservableObject {
         for chunk in job.chunks where !job.finished.contains(chunk.name) && !running.contains(chunk.name) {
             DownloadSession.shared.start(chunk)
         }
-        settleBackground()
     }
 
     func chunkProgressed(_ name: String, written bytes: Int64) {
@@ -318,14 +372,48 @@ final class DownloadStore: ObservableObject {
     }
 
     func chunkFailed(_ name: String, error: Error) {
-        guard let job, let chunk = job.chunks.first(where: { $0.name == name }), !job.finished.contains(name) else { return }
+        guard let job, job.chunks.contains(where: { $0.name == name }), !job.finished.contains(name) else { return }
         let tries = retries[name, default: 0] + 1
         retries[name] = tries
-        if tries < Self.retryLimit {
-            DownloadSession.shared.start(chunk)
-        } else {
+        guard tries < Self.retryLimit else {
             end(failure: error)
+            return
         }
+        let startedIn = generation
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
+        Task {
+            defer { UIApplication.shared.endBackgroundTask(backgroundTask) }
+            try? await Task.sleep(for: .seconds(Self.retryDelaySeconds * Double(tries)))
+            if (error as? Refused)?.status == 403 { await refreshAddresses() }
+            guard generation == startedIn, let job = self.job, !job.finished.contains(name),
+                  let current = job.chunks.first(where: { $0.name == name }) else { return }
+            DownloadSession.shared.start(current)
+        }
+    }
+
+    /// A refused address has usually expired. The parts already saved only fit a file of the same size.
+    private func refreshAddresses() async {
+        if let addressRefresh {
+            await addressRefresh.value
+            return
+        }
+        guard Date().timeIntervalSince(lastAddressRefresh) > Self.refreshPauseSeconds, let job else { return }
+        lastAddressRefresh = Date()
+        let startedIn = generation
+        let refresh = Task {
+            let chosen = UserDefaults.standard.integer(forKey: DownloadSettings.maxHeightKey)
+            guard let stream = try? await StreamLoader.load(videoId: job.video.videoId, maxHeight: chosen > 0 ? chosen : queueHeight),
+                  let videoURL = stream.videoURL.flatMap(URL.init(string:)),
+                  let audioURL = stream.audioURL.flatMap(URL.init(string:)),
+                  generation == startedIn else { return }
+            let chunks = Self.chunks(of: job.videoFile, url: videoURL, size: stream.videoSize) + Self.chunks(of: job.audioFile, url: audioURL, size: stream.audioSize)
+            guard chunks.map(\.range) == job.chunks.map(\.range), chunks.map(\.name) == job.chunks.map(\.name) else { return }
+            self.job?.chunks = chunks
+            savePending()
+        }
+        addressRefresh = refresh
+        await refresh.value
+        addressRefresh = nil
     }
 
     /// Only on visible changes, because every view showing downloads redraws with this.
@@ -348,6 +436,7 @@ final class DownloadStore: ObservableObject {
         guard !isJoining else { return }
         isJoining = true
         let folder = Self.folder
+        let startedIn = generation
         let backgroundTask = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
         Task {
             defer { UIApplication.shared.endBackgroundTask(backgroundTask) }
@@ -356,6 +445,7 @@ final class DownloadStore: ObservableObject {
                     try Self.join(job.chunks, into: job.videoFile, in: folder)
                     try Self.join(job.chunks, into: job.audioFile, in: folder)
                 }.value
+                guard generation == startedIn else { return }
                 let seconds = Date().timeIntervalSince(job.started)
                 let bytes = job.chunks.reduce(Int64(0)) { $0 + $1.size }
                 lastReport = "Last download: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) in \(Int(seconds)) s"
@@ -364,22 +454,26 @@ final class DownloadStore: ObservableObject {
                 isJoining = false
                 end(failure: nil)
             } catch {
+                guard generation == startedIn else { return }
                 isJoining = false
                 end(failure: error)
             }
         }
     }
 
+    /// The parts stay until the whole video is done, so a join cut short by the system simply runs again.
     private nonisolated static func join(_ chunks: [Chunk], into file: String, in folder: URL) throws {
         let destination = folder.appending(path: file)
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destination)
-        defer { try? handle.close() }
+        let joining = folder.appending(path: file + joiningSuffix)
+        FileManager.default.createFile(atPath: joining.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: joining)
         for chunk in chunks where chunk.name.hasPrefix(file + ".") {
             let part = folder.appending(path: chunk.name)
             try handle.write(contentsOf: Data(contentsOf: part, options: .mappedIfSafe))
-            try FileManager.default.removeItem(at: part)
         }
+        try handle.close()
+        try? FileManager.default.removeItem(at: destination)
+        try FileManager.default.moveItem(at: joining, to: destination)
     }
 
     /// Clears the current job. Its partial files go, and a failure takes the output with it.
@@ -388,8 +482,10 @@ final class DownloadStore: ObservableObject {
         DownloadSession.shared.cancelAll()
         for chunk in job.chunks { try? FileManager.default.removeItem(at: Self.folder.appending(path: chunk.name)) }
         if failure != nil {
-            try? FileManager.default.removeItem(at: Self.folder.appending(path: job.videoFile))
-            try? FileManager.default.removeItem(at: Self.folder.appending(path: job.audioFile))
+            for file in [job.videoFile, job.audioFile] {
+                try? FileManager.default.removeItem(at: Self.folder.appending(path: file))
+                try? FileManager.default.removeItem(at: Self.folder.appending(path: file + Self.joiningSuffix))
+            }
         }
         self.job = nil
         conclude(job.video, failure: failure)
@@ -415,13 +511,16 @@ final class DownloadStore: ObservableObject {
         advance()
     }
 
+    /// The system counts this call as the end of the wake-up, so it waits for the session's last event.
     private func settleBackground() {
-        guard starting == nil, !isJoining else { return }
+        guard didDeliverBackgroundEvents, starting == nil, !isJoining else { return }
+        didDeliverBackgroundEvents = false
         backgroundCompletion?()
         backgroundCompletion = nil
     }
 
     func backgroundEventsDelivered() {
+        didDeliverBackgroundEvents = true
         settleBackground()
     }
 
@@ -461,6 +560,11 @@ private final class DownloadSession: NSObject, URLSessionDownloadDelegate {
         configuration.httpMaximumConnectionsPerHost = 4
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
+
+    /// Reattaches the system's session, whose events the reopened app is waiting for.
+    func connect() {
+        _ = session
+    }
 
     func start(_ chunk: DownloadStore.Chunk) {
         // The same request mpv makes when it plays the file.
@@ -664,16 +768,18 @@ struct DownloadsView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                header
                 if store.items.isEmpty, store.active.isEmpty, store.waiting.isEmpty {
                     ContentUnavailableView {
-                        Label("No Downloads", systemImage: "arrow.down.to.line")
+                        Label("No Downloads Yet", systemImage: "arrow.down.to.line")
                     } description: {
                         Text("Long press a video and choose Download.")
                     } actions: {
                         NavigationLink("Download Settings") { DownloadSettingsView() }
+                            .buttonStyle(.borderedProminent)
                     }
                     .padding(.vertical, 48)
+                } else {
+                    header
                 }
                 if !store.active.isEmpty || !store.waiting.isEmpty {
                     SectionTitle(title: "Downloading", count: store.active.count + store.waiting.count)
@@ -700,6 +806,11 @@ struct DownloadsView: View {
                         .padding(.horizontal, Layout.screenPadding)
                         .padding(.vertical, Layout.rowPadding)
                     }
+                    Button("Cancel All", systemImage: "xmark", role: .destructive) { store.cancelAll() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .padding(.horizontal, Layout.screenPadding)
+                        .padding(.vertical, Layout.rowPadding)
                 }
                 ForEach(store.items) { item in
                     VideoButton(video: item.video, isCompact: true)
@@ -713,7 +824,7 @@ struct DownloadsView: View {
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
             Menu("More", systemImage: "ellipsis") {
-                Button("Add to Queue", systemImage: "list.bullet") {
+                Button("Add to Queue", systemImage: "text.append") {
                     for video in videos { router.addToQueue(video) }
                 }
                 .disabled(videos.isEmpty)

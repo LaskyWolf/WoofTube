@@ -71,7 +71,9 @@ struct NotificationsView: View {
         .overlay {
             if sections.isEmpty {
                 if isLoading {
-                    ProgressView()
+                    LoadingMediaRows(isCircular: true)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .padding(.top, Layout.rowSpacing)
                 } else {
                     ContentUnavailableView {
                         Label("No Notifications", systemImage: "bell")

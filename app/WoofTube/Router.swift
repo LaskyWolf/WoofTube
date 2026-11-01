@@ -299,6 +299,8 @@ final class Router: ObservableObject {
             do {
                 try await action()
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch is CancellationError {
+                // The person cancelled it, so there's nothing to report.
             } catch {
                 actionMessage = error.localizedDescription
             }

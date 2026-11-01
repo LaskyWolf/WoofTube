@@ -1284,7 +1284,7 @@ private struct WatchDetailsView: View {
                     .accessibilityLabel("Dislike")
                 }
                 .frame(maxWidth: .infinity)
-                .glassEffect(.regular, in: .capsule)
+                .glassEffect(.regular.interactive(), in: .capsule)
                 if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
                     ShareLink(item: url) {
                         HeaderRoundIcon(systemImage: "square.and.arrow.up")
@@ -1333,7 +1333,7 @@ private struct WatchDetailsView: View {
                     }
                 }
             }
-            .buttonStyle(ZoomPressStyle())
+            .buttonStyle(GlassPressStyle())
             .sensoryFeedback(.impact(weight: .light), trigger: details.likeStatus)
             .sensoryFeedback(.success, trigger: details.isInWatchLater) { _, saved in saved }
         }
@@ -1541,7 +1541,7 @@ struct SubscribeButton: View {
                     .contentTransition(.symbolEffect(.replace))
                     .frame(maxWidth: .infinity)
                     .frame(height: 44)
-                    .glassEffect(Glass.regular.tint(isSubscribed ? nil : settings.accentColor), in: .capsule)
+                    .glassEffect(Glass.regular.tint(isSubscribed ? nil : settings.accentColor).interactive(), in: .capsule)
                     .contentShape(.capsule)
             } else {
                 Text(isSubscribed ? "Subscribed" : "Subscribe")
@@ -1550,11 +1550,11 @@ struct SubscribeButton: View {
                     .contentTransition(.interpolate)
                     .padding(.horizontal, Layout.screenPadding)
                     .frame(height: 38)
-                    .background(isSubscribed ? AnyShapeStyle(Color.primary.opacity(0.1)) : AnyShapeStyle(.tint), in: .capsule)
+                    .glassEffect(Glass.regular.tint(isSubscribed ? nil : settings.accentColor).interactive(), in: .capsule)
                     .contentShape(.capsule)
             }
         }
-        .buttonStyle(ZoomPressStyle())
+        .buttonStyle(GlassPressStyle())
         .animation(reduceMotion ? nil : .snappy, value: isSubscribed)
         .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
         .sensoryFeedback(.selection, trigger: isSubscribed)

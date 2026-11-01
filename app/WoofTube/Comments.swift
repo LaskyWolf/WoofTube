@@ -205,7 +205,9 @@ struct CommentsSheet: View {
             .overlay {
                 if model.comments.isEmpty {
                     if model.isLoading {
-                        ProgressView().controlSize(.large)
+                        LoadingMediaRows(isCircular: true)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .padding(.top, Layout.rowSpacing)
                     } else {
                         ContentUnavailableView("No Comments", systemImage: "bubble.left")
                     }
@@ -221,6 +223,7 @@ struct CommentsSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         .task { await model.load(token: token) }
     }
 

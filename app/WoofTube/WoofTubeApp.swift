@@ -74,7 +74,9 @@ extension View {
             NavigationStack {
                 ChannelView(channelId: route.id)
                     .toolbar {
-                        Button("Close", systemImage: "xmark") { router.channelRoute = nil }
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { router.channelRoute = nil }
+                        }
                     }
             }
             .presentationDragIndicator(.visible)

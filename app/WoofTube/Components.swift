@@ -1,6 +1,13 @@
 import SwiftUI
 import SwiftyTube
 
+/// For a button drawn with interactive Liquid Glass, which reacts to the finger by itself.
+struct GlassPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+    }
+}
+
 /// Dims and shrinks at the touch, then eases back with no bounce.
 struct ZoomPressStyle: ButtonStyle {
     var scale: CGFloat = 0.97
@@ -28,7 +35,7 @@ struct HeaderRoundIcon: View {
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(primary == nil ? tint : .white)
             .frame(width: size, height: size)
-            .glassEffect(primary.map { Glass.regular.tint($0) } ?? .regular, in: .circle)
+            .glassEffect((primary.map { Glass.regular.tint($0) } ?? .regular).interactive(), in: .circle)
             // Reaches 44 pt, using the gap between neighbouring buttons.
             .contentShape(Circle().inset(by: primary == nil ? -3 : 0))
     }
@@ -67,7 +74,7 @@ struct DetailHeaderCard<Cover: View, Secondary: View, Buttons: View>: View {
                     Spacer(minLength: 0)
                     buttons()
                 }
-                .buttonStyle(ZoomPressStyle())
+                .buttonStyle(GlassPressStyle())
             }
             .frame(maxWidth: .infinity, minHeight: artSize, alignment: .leading)
         }

@@ -154,6 +154,7 @@ final class MpvPlayer: ObservableObject {
 
         if let certificates = Bundle.main.path(forResource: "cacert", ofType: "pem") {
             mpv_set_property_string(mpv, "tls-ca-file", certificates)
+            mpv_set_property_string(mpv, "tls-verify", "yes")
         }
         mpv_set_property_string(mpv, "user-agent", Self.userAgent)
         mpv_observe_property(mpv, 0, "time-pos", MPV_FORMAT_DOUBLE)

@@ -25,6 +25,7 @@ final class Session: ObservableObject {
     private let store = SecureStore(service: "com.laskywolf.wooftube.session")
     private let key = "auth"
     private let accountsKey = "accounts"
+    private static let accountRetryDelay = Duration.seconds(2)
 
     /// Google can answer as a guest while the session is stale, and that isn't an account.
     var currentAccountId: String? {
@@ -33,6 +34,7 @@ final class Session: ObservableObject {
     }
 
     func restore() async {
+        defer { DownloadStore.shared.sessionReady() }
         if let data = try? store.load(for: accountsKey) {
             accounts = (try? JSONDecoder().decode([SavedAccount].self, from: data)) ?? []
         }
@@ -52,19 +54,39 @@ final class Session: ObservableObject {
         await InnerTubeClient.wooftube.updateAuth(auth)
         isSignedIn = true
         await loadAccount()
+        if currentAccountId == nil {
+            try? await Task.sleep(for: Self.accountRetryDelay)
+            await loadAccount()
+        }
         openStorageOfCurrentAccount()
-        generation += 1
+        accountChanged()
+        await clearWebCookies()
     }
 
     func switchTo(_ saved: SavedAccount) async {
-        openStorage(of: saved.id)
         account = nil
         unseenNotifications = 0
         save(saved.auth)
+        // Before the storage, so a queued download never starts with the previous account's sign-in.
         await InnerTubeClient.wooftube.updateAuth(saved.auth)
+        openStorage(of: saved.id)
         await refreshIfStale(saved.auth)
         await loadAccount()
+        accountChanged()
+    }
+
+    private func accountChanged() {
         generation += 1
+        Subscriptions.shared.reset()
+        Task { await Subscriptions.shared.load() }
+    }
+
+    /// The app keeps its own copy of the sign-in, so Google's stays nowhere else on the phone.
+    private func clearWebCookies() async {
+        await WKWebsiteDataStore.default().removeData(
+            ofTypes: [WKWebsiteDataTypeCookies],
+            modifiedSince: .distantPast
+        )
     }
 
     /// Google remembers the last sign-in, and this makes it ask for an account again.
@@ -81,7 +103,7 @@ final class Session: ObservableObject {
         unseenNotifications = count as? Int ?? Int(count as? String ?? "") ?? 0
     }
 
-    // ponytail: if Google doesn't answer who signed in, the data stays put until the next launch asks again.
+    // ponytail: if Google still doesn't answer who signed in, the data stays put until the next launch asks again.
     private func openStorageOfCurrentAccount() {
         if let id = currentAccountId { openStorage(of: id) }
     }
@@ -135,6 +157,7 @@ final class Session: ObservableObject {
         isSignedIn = false
         account = nil
         unseenNotifications = 0
+        Subscriptions.shared.reset()
     }
 
     /// Google rotates its tokens, and a stale session answers as a guest instead of failing.

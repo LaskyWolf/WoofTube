@@ -55,7 +55,9 @@ struct AddAccountSheet: View {
             .navigationTitle("Add Account")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                Button("Close", systemImage: "xmark") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
             }
         }
         .task {
