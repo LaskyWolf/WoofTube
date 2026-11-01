@@ -135,6 +135,8 @@ struct SearchScreen: View {
     @AppStorage(SearchSettings.incognitoKey) private var isIncognito = false
     @State private var text = ""
     @State private var submitted: String?
+    /// True while search is active, even with the keyboard down. The system's X sets it back.
+    @State private var isSearching = false
     @FocusState private var isFieldFocused: Bool
 
     var body: some View {
@@ -149,9 +151,17 @@ struct SearchScreen: View {
             }
             .tabRoot(title: "Search", tab: .search, incognito: $isIncognito)
         }
-        .searchable(text: $text, prompt: "Videos and channels")
+        .searchable(text: $text, isPresented: $isSearching, prompt: "Videos and channels")
         .searchFocused($isFieldFocused)
+        .autocorrectionDisabled()
         .onSubmit(of: .search) { submit(text) }
+        .onChange(of: isSearching) { _, searching in
+            // The next visit opens on recent searches.
+            if !searching {
+                text = ""
+                submitted = nil
+            }
+        }
     }
 
     private func submit(_ query: String) {

@@ -444,14 +444,14 @@ struct ClockGlyph: View {
             if isSaved {
                 Circle().fill(.tint)
             } else {
-                Circle().stroke(Color.primary, lineWidth: 2)
+                Circle().stroke(Color(.label), lineWidth: 2)
             }
             hand(length: Self.size * 0.36, angle: minuteAngle)
             hand(length: Self.size * 0.24, angle: 120 + minuteAngle / 12)
         }
         .frame(width: Self.size, height: Self.size)
-        // Liquid Glass lets what's under it show through hierarchical styles, so the clock is drawn as one piece.
-        .compositingGroup()
+        // Liquid Glass lets what's under it show through its label, so the clock is flattened to an image first.
+        .drawingGroup()
         .onChange(of: trigger) {
             guard !reduceMotion else { return }
             withAnimation(.easeOut(duration: 0.7)) { minuteAngle += isSaved ? Self.spin : -Self.spin }
@@ -460,7 +460,7 @@ struct ClockGlyph: View {
 
     private func hand(length: CGFloat, angle: Double) -> some View {
         Capsule()
-            .fill(isSaved ? Color.white : Color.primary)
+            .fill(isSaved ? Color.white : Color(.label))
             .frame(width: 2, height: length)
             .offset(y: -length / 2)
             .rotationEffect(.degrees(angle))

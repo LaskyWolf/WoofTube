@@ -320,9 +320,11 @@ struct PlayerDismissGesture: UIGestureRecognizerRepresentable {
             distance.wrappedValue = max(0, pulled)
         } onEnded: { pulled, velocity in
             if pulled > UIScreen.main.bounds.height * 0.2 || (pulled > 20 && velocity > 800) {
+                // The page stays where the finger left it, so the closing zoom starts from there.
                 onClose()
+            } else {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { distance.wrappedValue = 0 }
             }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { distance.wrappedValue = 0 }
         }
     }
 
@@ -1084,9 +1086,8 @@ private struct PlayerControls: View {
             router.isExpanded = false
         } label: {
             Capsule()
-                .fill(.white.opacity(0.7))
+                .fill(.white.opacity(0.3))
                 .frame(width: 36, height: 5)
-                .shadow(color: .black.opacity(0.4), radius: 2)
                 .frame(width: 80, height: 44)
                 .contentShape(.rect)
         }

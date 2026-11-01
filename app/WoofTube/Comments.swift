@@ -9,13 +9,18 @@ struct Comment: Identifiable {
     let time: String?
     let likeCount: String
     let likeCountLiked: String
-    let replyCount: Int
+    /// YouTube's own words, such as "722 replies". Past a thousand its count is "1.2K", not a number.
+    let repliesLabel: String
     var isLiked: Bool
     let likeAction: String?
     let unlikeAction: String?
     let replyParams: String?
-    let repliesToken: String?
+    var repliesToken: String?
     var replies: [Comment] = []
+    var isLoadingReplies = false
+    var isHearted = false
+    var creatorAvatar: String?
+    var heartLabel: String?
 }
 
 /// Comments are split across "mutations": each view model only holds keys to the
@@ -76,13 +81,39 @@ struct CommentsPage {
             time: properties["publishedTime"] as? String,
             likeCount: toolbar?["likeCountNotliked"] as? String ?? "",
             likeCountLiked: toolbar?["likeCountLiked"] as? String ?? "",
-            replyCount: Int(toolbar?["replyCount"] as? String ?? "") ?? 0,
+            repliesLabel: toolbar?["replyCountA11y"] as? String ?? "Replies",
             isLiked: state?["likeState"] as? String == "TOOLBAR_LIKE_STATE_LIKED",
             likeAction: JSON.string("action", in: surface?["likeCommand"]),
             unlikeAction: JSON.string("action", in: surface?["unlikeCommand"]),
             replyParams: JSON.string("createReplyParams", in: surface),
-            repliesToken: JSON.string("token", in: JSON.first("continuationCommand", in: replies))
+            repliesToken: JSON.string("token", in: JSON.first("continuationCommand", in: replies)),
+            isHearted: state?["heartState"] as? String == "TOOLBAR_HEART_STATE_HEARTED",
+            creatorAvatar: toolbar?["creatorThumbnailUrl"] as? String,
+            heartLabel: toolbar?["heartActiveTooltip"] as? String
         )
+    }
+
+    static func selfCheck() {
+        func thread(_ id: String) -> [String: Any] {
+            let renderer: [String: Any] = [
+                "commentViewModel": ["commentViewModel": ["commentKey": "c" + id, "toolbarStateKey": "s" + id]],
+                "replies": ["continuationCommand": ["token": "t" + id]]
+            ]
+            return ["commentThreadRenderer": renderer]
+        }
+        func payload(_ entity: [String: Any]) -> [String: Any] { ["payload": ["entity": entity]] }
+        func entities(_ id: String, heart: String) -> [[String: Any]] {
+            [
+                payload(["key": "c" + id, "properties": ["commentId": id], "toolbar": ["replyCountA11y": "1.2K replies", "heartActiveTooltip": "by someone"]]),
+                payload(["key": "s" + id, "heartState": heart])
+            ]
+        }
+        let page = CommentsPage(json: [
+            "frameworkUpdates": ["mutations": entities("a", heart: "TOOLBAR_HEART_STATE_HEARTED") + entities("b", heart: "TOOLBAR_HEART_STATE_UNHEARTED")],
+            "onResponseReceivedEndpoints": [["appendContinuationItemsAction": ["continuationItems": [thread("a"), thread("b")]]]]
+        ])
+        assert(page.comments.map(\.isHearted) == [true, false])
+        assert(page.comments[0].repliesLabel == "1.2K replies" && page.comments[0].repliesToken == "ta")
     }
 }
 
@@ -91,7 +122,11 @@ final class CommentsModel: ObservableObject {
     @Published private(set) var comments: [Comment] = []
     @Published private(set) var title: String?
     @Published private(set) var isLoading = true
-    @Published var errorText: String?
+    @Published var errorText: String? {
+        didSet {
+            if let errorText { FileLog.shared.append("comments", "ERROR", errorText) }
+        }
+    }
     @Published private(set) var didFailLoading = false
     private(set) var createParams: String?
     private var nextToken: String?
@@ -124,11 +159,22 @@ final class CommentsModel: ObservableObject {
         nextToken = page.nextToken
     }
 
+    /// Each call adds the next page. A failure is shown, because a silent one looks like a dead button.
     func loadReplies(of comment: Comment) async {
-        guard let token = comment.repliesToken,
-              let json = try? await InnerTubeClient.wooftube.next(continuation: token) else { return }
-        let replies = await offMain { CommentsPage(json: json).comments }
-        update(comment.id) { $0.replies = replies }
+        guard let token = comment.repliesToken, !comment.isLoadingReplies else { return }
+        update(comment.id) { $0.isLoadingReplies = true }
+        defer { update(comment.id) { $0.isLoadingReplies = false } }
+        do {
+            let json = try await InnerTubeClient.wooftube.next(continuation: token)
+            let page = await offMain { CommentsPage(json: json) }
+            if page.comments.isEmpty { errorText = "YouTube returned no replies for this comment." }
+            update(comment.id) {
+                $0.replies += page.comments
+                $0.repliesToken = page.nextToken
+            }
+        } catch {
+            errorText = error.localizedDescription
+        }
     }
 
     func toggleLike(_ comment: Comment) async {
@@ -183,7 +229,7 @@ final class CommentsModel: ObservableObject {
     }
 
     private static func ownComment(_ text: String) -> Comment {
-        Comment(id: UUID().uuidString, author: "You", avatar: nil, text: text, time: "Just now", likeCount: "", likeCountLiked: "", replyCount: 0, isLiked: false, likeAction: nil, unlikeAction: nil, replyParams: nil, repliesToken: nil)
+        Comment(id: UUID().uuidString, author: "You", avatar: nil, text: text, time: "Just now", likeCount: "", likeCountLiked: "", repliesLabel: "", isLiked: false, likeAction: nil, unlikeAction: nil, replyParams: nil, repliesToken: nil)
     }
 }
 
@@ -196,6 +242,8 @@ struct CommentsSheet: View {
     @State private var isSending = false
     @FocusState private var isComposing: Bool
 
+    private static let replyInsets = EdgeInsets(top: Layout.rowPadding, leading: Layout.screenPadding + 44, bottom: Layout.rowPadding, trailing: Layout.screenPadding)
+
     var body: some View {
         NavigationStack {
             List {
@@ -205,7 +253,26 @@ struct CommentsSheet: View {
                         .task { await model.loadMore(after: comment) }
                     ForEach(comment.replies) { child in
                         CommentRow(comment: child, model: model) { reply(to: $0) }
-                            .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.screenPadding + 44, bottom: Layout.rowPadding, trailing: Layout.screenPadding))
+                            .listRowInsets(Self.replyInsets)
+                    }
+                    if !comment.replies.isEmpty, comment.repliesToken != nil {
+                        Button {
+                            Task { await model.loadReplies(of: comment) }
+                        } label: {
+                            Group {
+                                if comment.isLoadingReplies {
+                                    ProgressView()
+                                } else {
+                                    Text("Show More Replies")
+                                }
+                            }
+                            .font(.footnote.weight(.medium))
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.borderless)
+                        .listRowInsets(Self.replyInsets)
+                        .listRowSeparator(.hidden)
                     }
                 }
             }
@@ -243,17 +310,22 @@ struct CommentsSheet: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
             if let replyingTo {
-                HStack {
+                HStack(spacing: Layout.chipSpacing) {
                     Text("Replying to \(replyingTo.author)")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
                     Button("Cancel Reply", systemImage: "xmark.circle.fill") { self.replyingTo = nil }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
                 }
+                .padding(.leading, Layout.screenPadding)
+                .background(.regularMaterial, in: .capsule)
             }
             HStack(alignment: .bottom, spacing: Layout.chipSpacing) {
                 TextField("Add a comment", text: $draft, axis: .vertical)
@@ -298,6 +370,8 @@ private struct CommentRow: View {
     @ObservedObject var model: CommentsModel
     let onReply: (Comment) -> Void
 
+    private static let heartAvatarSize: CGFloat = 24
+
     var body: some View {
         HStack(alignment: .top, spacing: Layout.rowSpacing) {
             Avatar(url: comment.avatar, size: Layout.avatarSmall)
@@ -335,10 +409,27 @@ private struct CommentRow: View {
                         Button {
                             Task { await model.loadReplies(of: comment) }
                         } label: {
-                            Text(comment.replyCount == 1 ? "1 reply" : "\(comment.replyCount) replies")
-                                .frame(minHeight: 44)
-                                .contentShape(.rect)
+                            Group {
+                                if comment.isLoadingReplies {
+                                    ProgressView()
+                                } else {
+                                    Text(comment.repliesLabel)
+                                }
+                            }
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
                         }
+                    }
+                    if comment.isHearted {
+                        ZStack(alignment: .bottomTrailing) {
+                            Avatar(url: comment.creatorAvatar, size: Self.heartAvatarSize)
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.red)
+                                .offset(x: 3, y: 3)
+                        }
+                        .accessibilityElement()
+                        .accessibilityLabel(comment.heartLabel ?? "Hearted by the creator")
                     }
                 }
                 .font(.footnote.weight(.medium))

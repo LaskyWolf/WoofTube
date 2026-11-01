@@ -8,9 +8,9 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
     @Published private(set) var isActive = false
     var onFailure: ((String) -> Void)?
     var onRestore: (() -> Void)?
-    /// Opens the window when the app leaves the screen. iOS allows this for one player at a time.
+    /// Opens the window when the app leaves the screen, if the video is playing. iOS allows this for one player at a time.
     var startsAutomatically = false {
-        didSet { controller?.canStartPictureInPictureAutomaticallyFromInline = startsAutomatically }
+        didSet { updateAutomaticStart(isPaused: player.isPaused) }
     }
 
     private let player: MpvPlayer
@@ -48,6 +48,7 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
             .sink { [weak self] isPaused, speed in
                 guard let self, let timebase else { return }
                 CMTimebaseSetRate(timebase, rate: isPaused ? 0 : speed)
+                updateAutomaticStart(isPaused: isPaused)
                 refreshWindow()
             }
             .store(in: &subscriptions)
@@ -61,6 +62,11 @@ final class PictureInPicture: NSObject, ObservableObject, AVPictureInPictureCont
                 refreshWindow()
             }
             .store(in: &subscriptions)
+    }
+
+    /// Takes the value from the caller, because the player's own property only changes after it announces the new one.
+    private func updateAutomaticStart(isPaused: Bool) {
+        controller?.canStartPictureInPictureAutomaticallyFromInline = startsAutomatically && !isPaused
     }
 
     private func refreshWindow() {

@@ -139,7 +139,7 @@ final class MpvPlayer: ObservableObject {
         return Self.frameContext.createCGImage(small, from: small.extent).map { UIImage(cgImage: $0) }
     }
 
-    /// What mpv is doing right now, for the Diagnostics screen in Settings.
+    /// What mpv is doing right now, for the Diagnostics page.
     func diagnostics() async -> String {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
@@ -211,13 +211,12 @@ final class MpvPlayer: ObservableObject {
 
     /// A line in Diagnostics, for measuring what can only be measured on the phone.
     func note(_ line: String) {
-        addLog(line)
+        addLog(line, level: "NOTICE")
     }
 
-    private func addLog(_ line: String) {
-        // Stream addresses carry the phone's IP, and this log can be shared.
-        let safe = line.replacingOccurrences(of: #"(https?://[^/\s]+)\S*"#, with: "$1/…", options: .regularExpression)
-        recentLog = Array((recentLog + [safe]).suffix(Self.logLimit))
+    private func addLog(_ line: String, level: String = "WARNING") {
+        FileLog.shared.append("player", level, line)
+        recentLog = Array((recentLog + [FileLog.safe(line)]).suffix(Self.logLimit))
     }
 
     private func publish(_ change: @escaping (MpvPlayer) -> Void) {
@@ -325,7 +324,7 @@ final class MpvPlayer: ObservableObject {
             case MPV_EVENT_PLAYBACK_RESTART:
                 player?.publish {
                     if let started = $0.loadStarted {
-                        $0.addLog("First frame after \(Date().timeIntervalSince(started).formatted(.number.precision(.fractionLength(1)))) s")
+                        $0.addLog("First frame after \(Date().timeIntervalSince(started).formatted(.number.precision(.fractionLength(1)))) s", level: "NOTICE")
                         $0.loadStarted = nil
                     }
                     $0.isBuffering = false

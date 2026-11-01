@@ -71,6 +71,11 @@ struct Storyboard {
 struct StreamFailure: LocalizedError {
     let attempts: [String]
     var errorDescription: String? { attempts.joined(separator: "\n") }
+
+    init(attempts: [String]) {
+        self.attempts = attempts
+        FileLog.shared.append("stream", "ERROR", attempts.joined(separator: " | "))
+    }
 }
 
 enum StreamLoader {

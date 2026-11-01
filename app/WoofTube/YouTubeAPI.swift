@@ -69,7 +69,7 @@ enum YouTubeAPI {
         var payload = body
         var user: [String: Any] = ["lockedSafetyMode": false]
         // Without this, an account with several channels answers as its main channel.
-        user["onBehalfOfUser"] = auth.dataSyncId
+        user["onBehalfOfUser"] = secondaryChannel(in: auth.dataSyncId)
         payload["context"] = ["client": clientContext, "user": user]
 
         var request = URLRequest(url: YouTubeService.youtube.baseURL.appendingPathComponent(endpoint))
@@ -83,6 +83,7 @@ enum YouTubeAPI {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200...299).contains(status) else {
             let message = (json["error"] as? [String: Any])?["message"] as? String
+            FileLog.shared.append("api", "ERROR", "\(endpoint): HTTP \(status) \(message ?? "")")
             throw YouTubeAPIError(errorDescription: "\(endpoint): \(message ?? "HTTP \(status)")")
         }
         if JSON.string("status", in: json["actionResult"]) == "STATUS_FAILED" {
@@ -98,6 +99,12 @@ enum YouTubeAPI {
         var request = URLRequest(url: url)
         signIn(&request, auth: await InnerTubeClient.wooftube.currentAuth())
         _ = try await URLSession.shared.data(for: request, delegate: NoRedirects())
+    }
+
+    /// Google writes this as "channel||account" for a secondary channel and "account||" for the main one.
+    static func secondaryChannel(in dataSyncId: String?) -> String? {
+        guard let parts = dataSyncId?.components(separatedBy: "||"), parts.count == 2, !parts[1].isEmpty else { return nil }
+        return parts[0]
     }
 
     private static func isYouTube(_ url: URL) -> Bool {
@@ -120,6 +127,11 @@ enum YouTubeAPI {
         assert(!isYouTube(URL(string: "http://www.youtube.com/")!))
         assert(!isYouTube(URL(string: "https://notyoutube.com/")!))
         assert(!isYouTube(URL(string: "https://youtube.com.example.org/")!))
+
+        assert(secondaryChannel(in: "channel||account") == "channel")
+        assert(secondaryChannel(in: "account||") == nil)
+        assert(secondaryChannel(in: "account") == nil)
+        assert(secondaryChannel(in: nil) == nil)
     }
 
     private static func signIn(_ request: inout URLRequest, auth: AuthState) {
@@ -133,6 +145,7 @@ enum YouTubeAPI {
         request.setValue(origin + "/", forHTTPHeaderField: "Referer")
         request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
+        request.setValue(secondaryChannel(in: auth.dataSyncId), forHTTPHeaderField: "X-Goog-PageId")
         request.setValue(auth.visitorData, forHTTPHeaderField: "X-Goog-Visitor-Id")
         request.setValue(auth.cookies.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         if let sapisid = auth.sapisid {

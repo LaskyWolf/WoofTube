@@ -73,8 +73,8 @@ final class AppSettings: ObservableObject {
 
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
-    @Environment(Router.self) private var router
     @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
+    @State private var showsDiagnostics = false
 
     var body: some View {
         List {
@@ -91,6 +91,10 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, Layout.cardSpacing)
                 }
+                // Hidden: a long press opens Diagnostics.
+                .simultaneousGesture(LongPressGesture(minimumDuration: 0.8).onEnded { _ in showsDiagnostics = true })
+                .sensoryFeedback(.impact(weight: .medium), trigger: showsDiagnostics) { _, isShown in isShown }
+                .accessibilityAction(named: "Diagnostics") { showsDiagnostics = true }
             }
             Section("Appearance") {
                 settingsRow("Appearance", icon: "paintpalette") { AppearanceSettingsView() }
@@ -108,14 +112,10 @@ struct SettingsView: View {
                     }
                 }
             }
-            Section("Support") {
-                settingsRow("Diagnostics", icon: "stethoscope") {
-                    DiagnosticsView(player: router.player, stream: router.streamSummary)
-                }
-            }
         }
         .listSectionSpacing(.compact)
         .scrollBounceBehavior(.basedOnSize)
+        .navigationDestination(isPresented: $showsDiagnostics) { DiagnosticsView() }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -337,40 +337,5 @@ private struct AppearanceSettingsView: View {
         let application = UIApplication.shared
         guard application.supportsAlternateIcons, application.alternateIconName != preset.alternateIconName else { return }
         application.setAlternateIconName(preset.alternateIconName)
-    }
-}
-
-/// Shows what the app is doing, because a phone has no console to read.
-private struct DiagnosticsView: View {
-    @ObservedObject var player: MpvPlayer
-    let stream: String?
-    @State private var state = ""
-
-    private var report: String {
-        let download = DownloadStore.shared.lastReport.map { [$0] } ?? []
-        let crashes = "Crash and hang reports: \(CrashReports.saved.count)"
-        return ([stream ?? "No stream", state, crashes] + download + player.recentLog).joined(separator: "\n")
-    }
-
-    var body: some View {
-        ScrollView {
-            ForEach(CrashReports.saved, id: \.self) { file in
-                ShareLink(item: file) {
-                    Label(file.deletingPathExtension().lastPathComponent, systemImage: "exclamationmark.triangle")
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }
-                .padding(.horizontal, Layout.screenPadding)
-            }
-            Text(report)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Layout.screenPadding)
-        }
-        .navigationTitle("Diagnostics")
-        .toolbar {
-            ShareLink(item: report)
-        }
-        .task { state = await player.diagnostics() }
     }
 }

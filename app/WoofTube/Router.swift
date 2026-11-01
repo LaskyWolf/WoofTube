@@ -60,7 +60,11 @@ final class Router {
     }
     /// The playlist the queue came from.
     private(set) var playlistTitle: String?
-    var actionMessage: String?
+    var actionMessage: String? {
+        didSet {
+            if let actionMessage { FileLog.shared.append("action", "WARNING", actionMessage) }
+        }
+    }
     private(set) var details: WatchDetails?
     private(set) var streamSummary: String?
     private(set) var loadError: String?

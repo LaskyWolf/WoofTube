@@ -28,6 +28,9 @@ struct WoofTubeApp: App {
             .environment(router)
             .environmentObject(settings)
             .task {
+                SwiftyTubeLog.handler = { message, level in
+                    if level == .error { FileLog.shared.append("swiftytube", "ERROR", message) }
+                }
                 await InnerTubeClient.wooftube.updateLocale(YouTubeLocale(
                     gl: Locale.current.region?.identifier ?? "US",
                     hl: Locale.current.language.languageCode?.identifier ?? "en"
@@ -42,6 +45,8 @@ struct WoofTubeApp: App {
                 YouTubeAPI.selfCheck()
                 SponsorBlock.selfCheck()
                 LockupDetails.selfCheck()
+                DiagnosticsSection.selfCheck()
+                CommentsPage.selfCheck()
                 VideoFlavor.selfCheck()
                 #endif
             }
@@ -150,6 +155,8 @@ struct RootTabs: View {
             }
         }
         .tabBarMinimizeBehavior(.never)
+        // Selecting Search activates it, and its X goes back to the previous tab.
+        .tabViewSearchActivation(.searchTabSelection)
         .environment(\.videoZoomSpace, playerZoom)
         .overlay { PlayerOverlay(zoom: playerZoom) }
         .fullScreenCover(isPresented: Bindable(router).isExpanded) {

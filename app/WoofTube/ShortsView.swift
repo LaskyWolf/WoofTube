@@ -264,7 +264,7 @@ struct ShortsView: View {
             router.minimizeShorts()
         } label: {
             Capsule()
-                .fill(.white.opacity(0.5))
+                .fill(.white.opacity(0.3))
                 .frame(width: 36, height: 5)
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
