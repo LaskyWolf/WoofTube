@@ -58,6 +58,7 @@ struct VideoExtras {
     var collaborators: [Collaborator] = []
     /// From 0 to 1. YouTube only sends this when signed in.
     var progress: Double?
+    var startSeconds: Double?
     var isUpcoming = false
     /// Identifies the video's entry in a playlist, which removing it needs.
     var setVideoId: String?
@@ -278,6 +279,7 @@ enum FeedParser {
                     feedback: feedbackActions(in: dict),
                     collaborators: Collaborator.all(in: dict),
                     progress: percent.map { $0 / 100 },
+                    startSeconds: JSON.first("startTimeSeconds", in: dict) as? Double,
                     isUpcoming: JSON.first("upcomingEventData", in: dict) != nil,
                     setVideoId: JSON.string("setVideoId", in: dict)
                 )))

@@ -112,6 +112,9 @@ final class Router {
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
     private static let autoplayKey = "autoplay"
+    private static let handoffWaitSteps = 30
+    private static let handoffLateSteps = 150
+    private static let handoffUntouched = 15.0
     private static let pictureInPictureKey = "allowsPictureInPicture"
     private static let skipsSponsorsKey = "skipsSponsors"
     private static let captionLanguageKey = "captionLanguage"
@@ -455,9 +458,29 @@ final class Router {
         restoreCaption()
     }
 
-    private func handoffStart(from start: Double, isNewPlayback: Bool) async -> Double {
+    /// The video waits a moment for the account, so it usually starts in the right place.
+    private func handoffStart(from start: Double, isNewPlayback: Bool, duration: Int?) async -> Double {
         guard isNewPlayback, let watchReporter else { return start }
-        return await watchReporter.startPosition(local: start, duration: current?.durationSeconds.map(Double.init))
+        await watchReporter.waitForAccount(steps: Self.handoffWaitSteps)
+        return watchReporter.position(local: start, duration: (duration ?? current?.durationSeconds).map(Double.init))
+    }
+
+    /// A slower answer still counts: the video moves there, unless you've already moved it yourself.
+    private func finishHandoff(videoId: String, local: Double, startedAt: Double, duration: Int?) {
+        guard let watchReporter else { return }
+        let seconds = (duration ?? current?.durationSeconds).map(Double.init)
+        Task {
+            await watchReporter.waitForAccount(steps: Self.handoffLateSteps)
+            player.note(watchReporter.summary(local: local, duration: seconds))
+            let target = watchReporter.position(local: local, duration: seconds)
+            guard abs(target - startedAt) > 1 else { return }
+            for _ in 0..<Self.handoffLateSteps where !player.isVideoReady {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard current?.videoId == videoId, player.isVideoReady,
+                  abs(player.time - startedAt) < Self.handoffUntouched else { return }
+            player.seek(to: target)
+        }
     }
 
     private func startStream(videoId: String, start: Double, isNewPlayback: Bool) {
@@ -473,9 +496,10 @@ final class Router {
         loadTask = Task {
             if let local = DownloadStore.shared.stream(videoId: videoId) {
                 streamSummary = "Downloaded"
-                let from = await handoffStart(from: start, isNewPlayback: isNewPlayback)
+                let from = await handoffStart(from: start, isNewPlayback: isNewPlayback, duration: nil)
                 guard !Task.isCancelled else { return }
                 player.load(url: local, start: from)
+                if isNewPlayback { finishHandoff(videoId: videoId, local: start, startedAt: from, duration: nil) }
                 updateNowPlaying()
                 await loadMissingCaptions(videoId: videoId)
                 return
@@ -491,9 +515,10 @@ final class Router {
                 isLive = stream.isLive
                 captions = stream.captions
                 restoreCaption()
-                let from = stream.isLive ? start : await handoffStart(from: start, isNewPlayback: isNewPlayback)
+                let from = stream.isLive ? start : await handoffStart(from: start, isNewPlayback: isNewPlayback, duration: stream.duration)
                 guard !Task.isCancelled else { return }
                 player.load(url: stream.url, start: from)
+                if isNewPlayback, !stream.isLive { finishHandoff(videoId: videoId, local: start, startedAt: from, duration: stream.duration) }
                 updateNowPlaying()
                 await loadMissingCaptions(videoId: videoId)
                 guard !Task.isCancelled else { return }

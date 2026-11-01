@@ -63,36 +63,59 @@ final class WatchReporter {
     private let sessionId = WatchReporter.makeSessionId()
     private var watchtimeURL: String?
     private var segments = WatchSegments()
-    private var accountPosition: Double?
-    private var didAskAccount = SearchSettings.isIncognito
-
-    /// How long a video waits to hear from the account, in steps of 100 ms.
-    private static let answerSteps = 20
+    private var unanswered = SearchSettings.isIncognito ? 0 : 3
+    /// What each place says, in seconds. Exact, unlike the history's whole percent.
+    private var playerSeconds: Double?
+    private var nextSeconds: Double?
+    private var historySeconds: Double?
+    private var historyProgress: Double?
 
     init(videoId: String) {
         guard !SearchSettings.isIncognito else { return }
         Task { await start(videoId: videoId) }
-        Task { await askAccount(videoId: videoId) }
+        Task { await askNext(videoId: videoId) }
+        Task { await askHistory(videoId: videoId) }
+    }
+
+    /// Waits for the account's answers, for at most this many steps of 100 ms.
+    func waitForAccount(steps: Int) async {
+        // ponytail: polls, because waiting on three requests can't be given a time limit as simply.
+        for _ in 0..<steps where unanswered > 0 {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    private func accountPosition(duration: Double?) -> Double? {
+        nextSeconds ?? playerSeconds ?? historySeconds ?? historyProgress.flatMap { progress in duration.map { progress * $0 } }
     }
 
     /// Where to start: this phone's position, or the account's if another device has moved on.
-    func startPosition(local: Double, duration: Double?) async -> Double {
-        // ponytail: polls the answer, because waiting on the request can't be given a time limit as simply.
-        for _ in 0..<Self.answerSteps where !didAskAccount {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        return WatchPositions.handoff(local: local, account: accountPosition, duration: duration)
+    func position(local: Double, duration: Double?) -> Double {
+        WatchPositions.handoff(local: local, account: accountPosition(duration: duration), duration: duration)
+    }
+
+    /// One line for Diagnostics, because only the phone can see what the account answers.
+    func summary(local: Double, duration: Double?) -> String {
+        func text(_ time: Double?) -> String { time?.clockText ?? "–" }
+        let percent = historyProgress.map { "\(Int($0 * 100))%" } ?? "–"
+        return "Handoff: phone \(text(local)), next \(text(nextSeconds)), player \(text(playerSeconds)), "
+            + "history \(text(historySeconds)) \(percent), still waiting \(unanswered), used \(text(position(local: local, duration: duration)))"
+    }
+
+    private func askNext(videoId: String) async {
+        defer { unanswered -= 1 }
+        let json = try? await YouTubeAPI.post("next", body: ["videoId": videoId])
+        nextSeconds = JSON.first("startTimeSeconds", in: json?["currentVideoEndpoint"]) as? Double
     }
 
     /// The watch history is where YouTube keeps every device's progress.
-    private func askAccount(videoId: String) async {
-        defer { didAskAccount = true }
+    private func askHistory(videoId: String) async {
+        defer { unanswered -= 1 }
         guard let json = try? await FeedSource.browse(YouTubeFeeds.history).fetch() else { return }
         let items = await offMain { FeedParser.items(in: json) }
         for case .video(let video, let extras) in items where video.videoId == videoId {
-            if let progress = extras.progress, let duration = video.durationSeconds {
-                accountPosition = progress * Double(duration)
-            }
+            historySeconds = extras.startSeconds
+            historyProgress = extras.progress
             return
         }
     }
@@ -106,8 +129,11 @@ final class WatchReporter {
     }
 
     private func start(videoId: String) async {
+        defer { unanswered -= 1 }
         let body: [String: Any] = ["videoId": videoId, "contentCheckOk": true, "racyCheckOk": true]
-        let tracking = (try? await YouTubeAPI.post("player", body: body))?["playbackTracking"] as? [String: Any]
+        let response = try? await YouTubeAPI.post("player", body: body)
+        playerSeconds = JSON.first("startSeconds", in: response?["playerConfig"]) as? Double
+        let tracking = response?["playbackTracking"] as? [String: Any]
         watchtimeURL = JSON.string("baseUrl", in: tracking?["videostatsWatchtimeUrl"])
         send(JSON.string("baseUrl", in: tracking?["videostatsPlaybackUrl"]), ["cmt": "0"])
     }
