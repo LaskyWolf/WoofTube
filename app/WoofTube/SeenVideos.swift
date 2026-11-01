@@ -1,4 +1,5 @@
 import Foundation
+import SwiftyTube
 
 /// Videos the person has scrolled past or opened, so a reload of Home and Shorts shows something else.
 enum SeenVideos {
@@ -60,5 +61,50 @@ enum SeenVideos {
                 return item
             }
         }
+    }
+}
+
+/// When each channel was last watched, for the Subs filter of channels not seen in a while.
+enum WatchedChannels {
+    private static let key = "watchedChannels"
+    private static let staleAfter: TimeInterval = 30 * 24 * 60 * 60
+
+    private static var dates: [String: Double] {
+        ProfileStorage.defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+    }
+
+    static func mark(_ channelId: String?) {
+        guard let channelId, !SearchSettings.isIncognito else { return }
+        var updated = dates
+        updated[channelId] = Date().timeIntervalSince1970
+        ProfileStorage.defaults.set(updated, forKey: key)
+    }
+
+    static func isStale(_ channelId: String) -> Bool {
+        isStale(lastWatched: dates[channelId], now: Date().timeIntervalSince1970)
+    }
+
+    private static func isStale(lastWatched: Double?, now: Double) -> Bool {
+        guard let lastWatched else { return true }
+        return now - lastWatched > staleAfter
+    }
+
+    /// The app only knows what it played itself, so this adds the account's recent history.
+    /// These count as watched now, because the history page gives no usable date.
+    static func addHistory() async {
+        guard let json = try? await FeedSource.browse(YouTubeFeeds.history).fetch() else { return }
+        let items = await offMain { FeedParser.items(in: json) }
+        var updated = dates
+        let now = Date().timeIntervalSince1970
+        for case .video(let video, _) in items {
+            if let id = video.channelId, updated[id] == nil { updated[id] = now }
+        }
+        ProfileStorage.defaults.set(updated, forKey: key)
+    }
+
+    static func selfCheck() {
+        assert(isStale(lastWatched: nil, now: 0))
+        assert(!isStale(lastWatched: 100, now: 100 + staleAfter))
+        assert(isStale(lastWatched: 100, now: 101 + staleAfter))
     }
 }

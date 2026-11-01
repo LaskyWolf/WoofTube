@@ -38,6 +38,7 @@ struct WoofTubeApp: App {
                 CoverTint.selfCheck()
                 GlyphScript.selfCheck()
                 WatchSegments.selfCheck()
+                WatchedChannels.selfCheck()
                 VideoFlavor.selfCheck()
                 #endif
             }

@@ -600,6 +600,7 @@ private struct LoadingChips: View {
 struct SubsView: View {
     private enum Filter: String, CaseIterable {
         case new = "New"
+        case notSeenLately = "Not Seen Lately"
         case videos = "Videos"
         case shorts = "Shorts"
         case posts = "Posts"
@@ -610,6 +611,7 @@ struct SubsView: View {
     private var subscriptions: Subscriptions { .shared }
     @State private var filter: Filter?
     @State private var newVideos: [YouTubeVideo] = []
+    @State private var didAddHistory = false
     @Environment(Router.self) private var router
 
     /// A filter can leave a page empty, so it looks a little further before giving up.
@@ -636,6 +638,11 @@ struct SubsView: View {
             return {
                 if case .video(let video, _) = $0 { return video.isNew } else { return false }
             }
+        case .notSeenLately:
+            return {
+                if case .video(let video, _) = $0, let id = video.channelId { return WatchedChannels.isStale(id) }
+                return false
+            }
         case .videos:
             return {
                 guard $0.id != relevantId else { return false }
@@ -657,7 +664,7 @@ struct SubsView: View {
         switch filter {
         case .shorts: .shorts
         case .posts: .posts
-        case .new, .videos, nil: .videos
+        case .new, .notSeenLately, .videos, nil: .videos
         }
     }
 
@@ -685,6 +692,10 @@ struct SubsView: View {
                 Subscriptions.shared.add(model.videos.compactMap(\.channelId))
             }
             .task(id: filter) {
+                if filter == .notSeenLately, !didAddHistory {
+                    await WatchedChannels.addHistory()
+                    didAddHistory = true
+                }
                 if filter == .posts {
                     if posts.items.isEmpty { await loadPosts() }
                 } else if let keeps {

@@ -209,6 +209,7 @@ struct ShortsView: View {
         .overlay(alignment: .topTrailing) {
             if let video = model.currentVideo {
                 ShortsMoreMenu(model: model, player: model.player, video: video)
+                    .padding(.trailing, Layout.chipSpacing)
             }
         }
         .overlay(alignment: .top) {
@@ -550,7 +551,7 @@ private struct ShortsMoreMenu: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.red)
                 .shadow(color: .black.opacity(0.5), radius: 3)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)

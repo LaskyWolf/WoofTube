@@ -156,6 +156,7 @@ final class Router {
         }
         closeShorts()
         SeenVideos.mark(video.videoId)
+        WatchedChannels.mark(video.channelId)
         current = video
         liveChatToken = nil
         channelRoute = nil
@@ -557,6 +558,7 @@ final class Router {
         let loaded = await offMain { WatchDetails(json: json, videoId: videoId) }
         guard current?.videoId == videoId else { return }
         details = loaded
+        WatchedChannels.mark(loaded.channelId)
         liveChatToken = JSON.string("continuation", in: JSON.first("liveChatRenderer", in: json))
         async let dislikes = DislikeCounts.fetch(videoId: videoId)
         async let comment = CommentsPage.topComment(token: loaded.commentsToken)
