@@ -316,6 +316,8 @@ struct TabHeader: View {
 
                 NavigationLink(value: HeaderRoute.settings) {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
+                        .frame(width: 36, height: 36)
+                        .glassEffect(.regular.interactive(), in: .circle)
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
@@ -397,6 +399,7 @@ struct HomeView: View {
     @State private var model = FeedModel()
     @State private var history = FeedModel()
     @State private var selectedChip: String?
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -417,6 +420,9 @@ struct HomeView: View {
                 await model.load(.browse(YouTubeFeeds.home))
             }
             .task { if history.items.isEmpty { await history.load(.browse(YouTubeFeeds.history)) } }
+            .onChange(of: scenePhase) {
+                if scenePhase == .active { Task { await history.load(.browse(YouTubeFeeds.history)) } }
+            }
         }
     }
 
@@ -520,6 +526,7 @@ private struct KeepWatchingCard: View {
         .padding(Layout.rowSpacing)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
         .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.chipSpacing)
         .padding(.bottom, Layout.sectionGap)
     }
 
@@ -568,6 +575,7 @@ private struct KeepWatchingCard: View {
         .padding(Layout.rowSpacing)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
         .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.chipSpacing)
         .padding(.bottom, Layout.sectionGap)
         .shimmerClock()
         .accessibilityHidden(true)
@@ -591,6 +599,7 @@ private struct LoadingChips: View {
 
 struct SubsView: View {
     private enum Filter: String, CaseIterable {
+        case new = "New"
         case videos = "Videos"
         case shorts = "Shorts"
         case posts = "Posts"
@@ -623,6 +632,10 @@ struct SubsView: View {
     private var keeps: ((FeedItem) -> Bool)? {
         let relevantId = relevantShelf?.id
         switch filter {
+        case .new:
+            return {
+                if case .video(let video, _) = $0 { return video.isNew } else { return false }
+            }
         case .videos:
             return {
                 guard $0.id != relevantId else { return false }
@@ -644,7 +657,7 @@ struct SubsView: View {
         switch filter {
         case .shorts: .shorts
         case .posts: .posts
-        case .videos, nil: .videos
+        case .new, .videos, nil: .videos
         }
     }
 
@@ -958,17 +971,26 @@ struct VideoRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+        VStack(alignment: .leading, spacing: 0) {
             Button(action: onPlay) {
-                Thumbnail(url: video.thumbnailURL, videoId: video.videoId)
+                Thumbnail(url: video.thumbnailURL, videoId: video.videoId, showsDownload: false)
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(colors: [.clear, Color(.systemBackground)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: ShortCard.fadeHeight)
+                    }
                     .overlay { WatchProgressLine(video: video, extras: extras) }
-                    .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras) }
+                    .overlay(alignment: .topTrailing) {
+                        HStack(spacing: 0) {
+                            DownloadedBadge(videoId: video.videoId)
+                            VideoBadge(video: video, extras: extras)
+                        }
+                    }
                     .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras) }
                     .clipShape(.rect(cornerRadius: Layout.tileRadius))
                     .videoZoomSource(video.videoId)
             }
             .buttonStyle(RowPressStyle())
-            HStack(alignment: .top, spacing: Layout.rowSpacing) {
+            HStack(alignment: .top, spacing: Layout.chipSpacing) {
                 avatar
                 Button(action: onPlay) {
                     HStack(spacing: 0) {
@@ -987,12 +1009,13 @@ struct VideoRow: View {
                             }
                         }
                         Spacer(minLength: 0)
-                        DownloadedBadge(videoId: video.videoId)
                     }
                     .contentShape(.rect)
                 }
                 .buttonStyle(RowPressStyle())
             }
+            .padding(.horizontal, Layout.rowPadding)
+            .padding(.top, -ShortCard.avatarSize / 2)
         }
     }
 
@@ -1006,7 +1029,7 @@ struct VideoRow: View {
                     }
                 }
             } label: {
-                AvatarStack(urls: extras.collaborators.map(\.avatar), size: Layout.avatarSmall)
+                AvatarStack(urls: extras.collaborators.map(\.avatar), size: ShortCard.avatarSize)
                     .contentShape(.rect)
             }
             .accessibilityLabel("Creators")
@@ -1015,14 +1038,14 @@ struct VideoRow: View {
                 Button {
                     router.openChannel(id)
                 } label: {
-                    Avatar(url: url, size: Layout.avatarSmall)
-                        // Reaches 44 pt, using the gap around the avatar.
-                        .contentShape(Circle().inset(by: -4))
+                    Avatar(url: url, size: ShortCard.avatarSize)
+                        .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
                 }
                 .buttonStyle(ZoomPressStyle())
                 .accessibilityLabel("Open \(video.channelTitle ?? "Channel")")
             } else {
-                Avatar(url: url, size: Layout.avatarSmall)
+                Avatar(url: url, size: ShortCard.avatarSize)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
             }
         }
     }
@@ -1153,6 +1176,7 @@ struct CompactVideoRow: View {
                 .overlay { WatchProgressLine(video: video, extras: extras) }
                 .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
                 .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras, isCompact: true) }
+                .downloadBadge(video.videoId)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                 .videoZoomSource(video.videoId)
             VStack(alignment: .leading, spacing: 2) {
@@ -1168,7 +1192,6 @@ struct CompactVideoRow: View {
                 }
             }
             Spacer(minLength: 0)
-            DownloadedBadge(videoId: video.videoId)
         }
         .contentShape(.rect)
     }
@@ -1207,16 +1230,18 @@ struct LoadingRows: View {
     }
 
     private var videoRow: some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+        VStack(alignment: .leading, spacing: 0) {
             ShimmerFill(radius: Layout.tileRadius).aspectRatio(16 / 9, contentMode: .fit)
-            HStack(alignment: .top, spacing: Layout.rowSpacing) {
-                ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+            HStack(alignment: .top, spacing: Layout.chipSpacing) {
+                ShimmerBlock(width: ShortCard.avatarSize, height: ShortCard.avatarSize, radius: ShortCard.avatarSize / 2)
                 VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                     LoadingLine(height: 15)
                     LoadingLine(height: 15, shortBy: 90)
                     LoadingLine(height: 11, shortBy: 150)
                 }
             }
+            .padding(.horizontal, Layout.rowPadding)
+            .padding(.top, Layout.chipSpacing)
         }
         .padding(.horizontal, Layout.screenPadding)
         .padding(.vertical, Layout.rowSpacing)
@@ -1333,11 +1358,15 @@ struct Thumbnail: View {
     let url: String?
     let videoId: String
     var aspect: CGFloat = 16 / 9
+    var showsDownload = true
 
     var body: some View {
         Color(.secondarySystemFill)
             .aspectRatio(aspect, contentMode: .fit)
             .overlay { CachedImage(url: url ?? "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg") }
+            .overlay(alignment: .topTrailing) {
+                if showsDownload { DownloadedBadge(videoId: videoId) }
+            }
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
     }
 }
@@ -1377,7 +1406,7 @@ private struct ShortCard: View {
     static let width: CGFloat = 158
     static let coverAspect: CGFloat = 158 / 250
     static let avatarSize: CGFloat = 44
-    private static let fadeHeight: CGFloat = 64
+    static let fadeHeight: CGFloat = 64
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1440,6 +1469,7 @@ private struct NewVideosCard: View {
         .padding(.vertical, Layout.rowSpacing)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius + 2, style: .continuous))
         .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.chipSpacing)
         .padding(.bottom, Layout.sectionGap)
     }
 }
@@ -1466,6 +1496,7 @@ private struct LoadingNewVideos: View {
         .padding(.vertical, Layout.rowSpacing)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius + 2, style: .continuous))
         .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.chipSpacing)
         .padding(.bottom, Layout.sectionGap)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -1517,6 +1548,7 @@ private struct NewVideoRibbon: View {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 VStack(alignment: .leading, spacing: 0) {
                     CoverImage(url: cover, maxPixels: 408)
+                    .downloadBadge(video.videoId)
                         .frame(height: (Self.width - Layout.rowPadding * 2) * 9 / 16)
                         .overlay(alignment: .bottom) {
                             LinearGradient(colors: [.clear, cardColor], startPoint: .top, endPoint: .bottom)
@@ -1699,7 +1731,7 @@ private struct PostRow: View {
             }
             images
             if let video = post.video {
-                VideoButton(video: video)
+                VideoButton(video: video, isCompact: true)
             }
             ForEach(post.pollChoices, id: \.title) { choice in
                 let isVoted = shownChoice == choice.title

@@ -138,7 +138,7 @@ struct LibraryView: View {
             ZoomLink(wholeLabel: true) {
                 PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
             } label: {
-                ShortcutTile(title: "Watch Later", subtitle: countText(watchLater), icon: "clock.fill", tint: .orange, covers: covers(watchLater.videos))
+                ShortcutTile(title: "Watch Later", subtitle: countText(watchLater), icon: "clock.fill", tint: .yellow, covers: covers(watchLater.videos))
             }
             ZoomLink(wholeLabel: true) {
                 DownloadsView()
@@ -465,6 +465,7 @@ private struct HistoryStrip: View {
                 CoverImage(url: video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg")
                     .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
                     .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
+                    .downloadBadge(video.videoId)
                     .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
                 Text(video.title)
                     .font(.caption.weight(.medium))

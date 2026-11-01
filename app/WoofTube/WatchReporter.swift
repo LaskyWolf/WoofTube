@@ -43,6 +43,15 @@ struct WatchSegments {
         assert(segments.advance(to: 101) == nil)
         assert(segments.finish()?.end == 101)
         assert(segments.finish() == nil)
+
+        // No word from the account, or it's about the same: this phone's position stands.
+        assert(WatchPositions.handoff(local: 300, account: nil, duration: 1000) == 300)
+        assert(WatchPositions.handoff(local: 300, account: 310, duration: 1000) == 300)
+        // Another device moved on, in either direction.
+        assert(WatchPositions.handoff(local: 300, account: 700, duration: 1000) == 700)
+        assert(WatchPositions.handoff(local: 700, account: 300, duration: 1000) == 300)
+        // Finished elsewhere: nothing to carry on from.
+        assert(WatchPositions.handoff(local: 300, account: 990, duration: 1000) == 300)
     }
 }
 
@@ -53,10 +62,38 @@ final class WatchReporter {
     private let sessionId = WatchReporter.makeSessionId()
     private var watchtimeURL: String?
     private var segments = WatchSegments()
+    private var accountPosition: Double?
+    private var didAskAccount = SearchSettings.isIncognito
+
+    /// How long a video waits to hear from the account, in steps of 100 ms.
+    private static let answerSteps = 20
 
     init(videoId: String) {
         guard !SearchSettings.isIncognito else { return }
         Task { await start(videoId: videoId) }
+        Task { await askAccount(videoId: videoId) }
+    }
+
+    /// Where to start: this phone's position, or the account's if another device has moved on.
+    func startPosition(local: Double, duration: Double?) async -> Double {
+        // ponytail: polls the answer, because waiting on the request can't be given a time limit as simply.
+        for _ in 0..<Self.answerSteps where !didAskAccount {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return WatchPositions.handoff(local: local, account: accountPosition, duration: duration)
+    }
+
+    /// The watch history is where YouTube keeps every device's progress.
+    private func askAccount(videoId: String) async {
+        defer { didAskAccount = true }
+        guard let json = try? await FeedSource.browse(YouTubeFeeds.history).fetch() else { return }
+        let items = await offMain { FeedParser.items(in: json) }
+        for case .video(let video, let extras) in items where video.videoId == videoId {
+            if let progress = extras.progress, let duration = video.durationSeconds {
+                accountPosition = progress * Double(duration)
+            }
+            return
+        }
     }
 
     func tick(_ time: Double) {

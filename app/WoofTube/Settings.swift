@@ -240,8 +240,9 @@ private struct PlayerSettingsView: View {
                         Image(systemName: "play.square.stack").glyphMotion(router.autoplay ? .nextCard : .pop, trigger: router.autoplay)
                     }
                 }
+                Toggle("Picture in Picture", systemImage: "pip", isOn: Bindable(router).allowsPictureInPicture)
             } footer: {
-                Text("Autoplay starts the first Up Next video when one ends.")
+                Text("Autoplay starts the first Up Next video when one ends. Picture in Picture keeps the video in a small window when you leave the app.")
             }
             Section {
                 Toggle(isOn: Bindable(router).skipsSponsors) {

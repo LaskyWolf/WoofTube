@@ -619,7 +619,14 @@ private final class DownloadSession: NSObject, URLSessionDownloadDelegate {
     }
 }
 
-/// A small mark on a saved video's row. Only this video's answer redraws it.
+extension View {
+    /// `DownloadedBadge` in the cover's top corner.
+    func downloadBadge(_ videoId: String) -> some View {
+        overlay(alignment: .topTrailing) { DownloadedBadge(videoId: videoId) }
+    }
+}
+
+/// A small mark on a saved video's cover. Only this video's answer redraws it.
 struct DownloadedBadge: View {
     let videoId: String
     @State private var isDownloaded: Bool
@@ -634,11 +641,16 @@ struct DownloadedBadge: View {
         ZStack {
             if isDownloaded {
                 Image(systemName: "arrow.down.to.line")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tint)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Color.black.opacity(0.78), in: .circle)
+                    .padding(Layout.cardSpacing)
                     .accessibilityLabel("Downloaded")
             }
         }
+        .allowsHitTesting(false)
+        .glyphMotion(isDownloaded ? .arrowDrop : nil, trigger: isDownloaded)
         .onReceive(DownloadStore.shared.$items.map { [videoId] in $0.contains { $0.id == videoId } }.removeDuplicates()) {
             isDownloaded = $0
         }

@@ -69,6 +69,12 @@ final class Router {
     var maxHeight: Int {
         didSet { UserDefaults.standard.set(maxHeight, forKey: Self.maxHeightKey) }
     }
+    var allowsPictureInPicture: Bool {
+        didSet {
+            UserDefaults.standard.set(allowsPictureInPicture, forKey: Self.pictureInPictureKey)
+            updateAutomaticWindow()
+        }
+    }
     var autoplay: Bool {
         didSet { UserDefaults.standard.set(autoplay, forKey: Self.autoplayKey) }
     }
@@ -106,6 +112,7 @@ final class Router {
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
     private static let autoplayKey = "autoplay"
+    private static let pictureInPictureKey = "allowsPictureInPicture"
     private static let skipsSponsorsKey = "skipsSponsors"
     private static let captionLanguageKey = "captionLanguage"
     private var loadTask: Task<Void, Never>?
@@ -133,6 +140,7 @@ final class Router {
         let saved = defaults.integer(forKey: Self.maxHeightKey)
         maxHeight = saved > 0 ? saved : 1080
         autoplay = defaults.object(forKey: Self.autoplayKey) as? Bool ?? true
+        allowsPictureInPicture = defaults.object(forKey: Self.pictureInPictureKey) as? Bool ?? true
         skipsSponsors = defaults.bool(forKey: Self.skipsSponsorsKey)
         setUpRemoteCommands()
         player.onEnded = { [weak self] in self?.playNextAfterEnd() }
@@ -273,11 +281,11 @@ final class Router {
         // The one losing the right goes first, because iOS allows one at a time.
         if shortsModel == nil {
             if didCreateShortsWindow { shortsPictureInPicture.startsAutomatically = false }
-            pictureInPicture.startsAutomatically = current != nil
+            pictureInPicture.startsAutomatically = allowsPictureInPicture && current != nil
         } else {
             pictureInPicture.startsAutomatically = false
             didCreateShortsWindow = true
-            shortsPictureInPicture.startsAutomatically = true
+            shortsPictureInPicture.startsAutomatically = allowsPictureInPicture
         }
     }
 
@@ -447,6 +455,11 @@ final class Router {
         restoreCaption()
     }
 
+    private func handoffStart(from start: Double, isNewPlayback: Bool) async -> Double {
+        guard isNewPlayback, let watchReporter else { return start }
+        return await watchReporter.startPosition(local: start, duration: current?.durationSeconds.map(Double.init))
+    }
+
     private func startStream(videoId: String, start: Double, isNewPlayback: Bool) {
         loadTask?.cancel()
         streamSummary = nil
@@ -460,7 +473,9 @@ final class Router {
         loadTask = Task {
             if let local = DownloadStore.shared.stream(videoId: videoId) {
                 streamSummary = "Downloaded"
-                player.load(url: local, start: start)
+                let from = await handoffStart(from: start, isNewPlayback: isNewPlayback)
+                guard !Task.isCancelled else { return }
+                player.load(url: local, start: from)
                 updateNowPlaying()
                 await loadMissingCaptions(videoId: videoId)
                 return
@@ -476,7 +491,9 @@ final class Router {
                 isLive = stream.isLive
                 captions = stream.captions
                 restoreCaption()
-                player.load(url: stream.url, start: start)
+                let from = stream.isLive ? start : await handoffStart(from: start, isNewPlayback: isNewPlayback)
+                guard !Task.isCancelled else { return }
+                player.load(url: stream.url, start: from)
                 updateNowPlaying()
                 await loadMissingCaptions(videoId: videoId)
                 guard !Task.isCancelled else { return }
@@ -599,6 +616,17 @@ enum WatchPositions {
     static func start(for video: YouTubeVideo) -> Double {
         positions[video.videoId] ?? 0
     }
+
+    /// Reports go out every 30 seconds and YouTube's progress is a whole percent, so a smaller
+    /// difference than this is the same viewing. A bigger one is another device.
+    static func handoff(local: Double, account: Double?, duration: Double?) -> Double {
+        guard let account else { return local }
+        if let duration, duration > 0, account / duration >= finishedFraction { return local }
+        let margin = max(handoffMargin, (duration ?? 0) * 0.02)
+        return abs(account - local) > margin ? account : local
+    }
+
+    private static let handoffMargin = 45.0
 
     /// YouTube's own progress, for a video this phone has no position for.
     static func seed(videoId: String, time: Double) {

@@ -50,11 +50,11 @@ struct NotificationsView: View {
 
     var body: some View {
         List {
-            ForEach($sections) { $section in
+            ForEach(sections) { section in
                 Section {
-                    ForEach($section.items) { $item in
+                    ForEach(section.items) { item in
                         NotificationRow(item: item) {
-                            item.isRead = true
+                            markRead(item)
                             open(item)
                         }
                         .listRowInsets(EdgeInsets(top: Layout.rowPadding, leading: Layout.screenPadding, bottom: Layout.rowPadding, trailing: Layout.screenPadding))
@@ -76,9 +76,19 @@ struct NotificationsView: View {
                         .padding(.top, Layout.rowSpacing)
                 } else {
                     ContentUnavailableView {
-                        Label("No Notifications", systemImage: "bell")
+                        if errorText != nil {
+                            Label("Couldn't Load", systemImage: "exclamationmark.triangle")
+                        } else {
+                            Label("No Notifications", systemImage: "bell")
+                        }
                     } description: {
                         if let errorText { Text(errorText) }
+                    } actions: {
+                        Button("Try Again") {
+                            isLoading = true
+                            Task { await load() }
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
             }
@@ -91,6 +101,15 @@ struct NotificationsView: View {
             await load()
         }
         .refreshable { await load() }
+    }
+
+    /// By ID, because a refresh can replace the list while a row still holds its place in it.
+    private func markRead(_ item: NotificationItem) {
+        for section in sections.indices {
+            if let row = sections[section].items.firstIndex(where: { $0.id == item.id }) {
+                sections[section].items[row].isRead = true
+            }
+        }
     }
 
     private func open(_ item: NotificationItem) {
@@ -114,7 +133,10 @@ struct NotificationsView: View {
             sections = Self.sections(in: json)
             errorText = nil
         } catch {
-            errorText = error.localizedDescription
+            // Leaving the page cancels the request, which says nothing about the notifications.
+            if (error as? URLError)?.code != .cancelled, !(error is CancellationError) {
+                errorText = error.localizedDescription
+            }
         }
     }
 
@@ -133,6 +155,12 @@ struct NotificationsView: View {
             for renderer in nodes("notificationRenderer", in: section["items"]) {
                 let item = NotificationItem(renderer: renderer)
                 add(item, to: title ?? ageTitle(item.time))
+            }
+        }
+        if result.isEmpty {
+            for renderer in nodes("notificationRenderer", in: json) {
+                let item = NotificationItem(renderer: renderer)
+                add(item, to: ageTitle(item.time))
             }
         }
         return result

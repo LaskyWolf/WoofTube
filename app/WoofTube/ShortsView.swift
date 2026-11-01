@@ -206,6 +206,11 @@ struct ShortsView: View {
         .scrollDisabled(scrub != nil)
         .ignoresSafeArea(edges: .top)
         .overlay(alignment: .top) { topBar }
+        .overlay(alignment: .topTrailing) {
+            if let video = model.currentVideo {
+                ShortsMoreMenu(model: model, player: model.player, video: video)
+            }
+        }
         .overlay(alignment: .top) {
             if scrub != nil {
                 ScrubPill(clock: model.player.clock, player: model.player)
@@ -227,15 +232,31 @@ struct ShortsView: View {
             }
         }
         .sheet(isPresented: $showsDescription) {
-            ScrollView {
-                Text(model.details?.description ?? "No description.")
-                    .font(.subheadline)
-                    .textSelection(.enabled)
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+                        if let title = model.currentVideo?.title {
+                            Text(title).font(.headline)
+                        }
+                        Text(model.details?.description.flatMap { $0.isEmpty ? nil : $0 } ?? "No description.")
+                            .font(.subheadline)
+                            .lineSpacing(Layout.cardSpacing)
+                            .textSelection(.enabled)
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Layout.screenPadding)
+                    // The sheet's corners are round, so the text sits further in than on a page.
+                    .padding(.horizontal, Layout.screenPadding + Layout.chipSpacing)
+                    .padding(.vertical, Layout.chipSpacing)
+                }
+                .navigationTitle("Description")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(role: .close) { showsDescription = false }
+                    }
+                }
             }
             .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
         }
         .onAppear { model.playCurrent() }
         .onChange(of: model.currentId) { model.playCurrent() }
@@ -366,6 +387,7 @@ struct ShortsView: View {
                     .font(.subheadline)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -407,7 +429,6 @@ struct ShortsView: View {
                 .simultaneousGesture(TapGesture().onEnded { shareTaps += 1 })
                 .accessibilityLabel("Share")
             }
-            ShortsMoreMenu(model: model, player: model.player, video: video, showsDescription: $showsDescription)
             if let details, let id = details.channelId {
                 Button {
                     subscribeTaps += 1
@@ -497,13 +518,10 @@ private struct ShortsMoreMenu: View {
     @ObservedObject var model: ShortsModel
     @ObservedObject var player: MpvPlayer
     let video: YouTubeVideo
-    @Binding var showsDescription: Bool
     @Environment(Router.self) private var router
-    @State private var taps = 0
 
     var body: some View {
         Menu {
-            Button("Description", systemImage: "text.alignleft") { showsDescription = true }
             Button("Save to Watch Later", systemImage: "clock") {
                 router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
             }
@@ -530,10 +548,13 @@ private struct ShortsMoreMenu: View {
                 }
             }
         } label: {
-            RailLabel(icon: "ellipsis")
-                .symbolEffect(.bounce.byLayer, value: taps)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.5), radius: 3)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
         }
-        .simultaneousGesture(TapGesture().onEnded { taps += 1 })
         .accessibilityLabel("More")
     }
 }

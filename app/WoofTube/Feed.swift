@@ -176,6 +176,11 @@ final class Subscriptions {
 extension YouTubeVideo {
     /// True when YouTube's "3 hours ago" counts in seconds, minutes or hours, so under a day.
     // ponytail: reads English and Italian, the languages in use. Other languages show no New badge.
+    /// Out today, not live and not opened yet.
+    var isNew: Bool {
+        isRecent && !isLive && !SeenVideos.contains(videoId)
+    }
+
     var isRecent: Bool {
         (publishedTimeText ?? "").lowercased().split { !$0.isLetter }.contains { Self.recentUnits.contains(String($0)) }
     }
