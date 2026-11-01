@@ -128,17 +128,17 @@ struct LibraryView: View {
 
     private var shortcuts: some View {
         HStack(spacing: 10) {
-            NavigationLink {
+            ZoomLink {
                 PlaylistPage(title: "Liked Videos", playlistId: YouTubeFeeds.likedVideosPlaylistId)
             } label: {
                 ShortcutTile(title: "Liked Videos", subtitle: countText(liked), icon: "hand.thumbsup.fill", tint: .pink, covers: likedCovers)
             }
-            NavigationLink {
+            ZoomLink {
                 PlaylistPage(title: "Watch Later", playlistId: YouTubeFeeds.watchLaterPlaylistId)
             } label: {
                 ShortcutTile(title: "Watch Later", subtitle: countText(watchLater), icon: "clock.fill", tint: .orange, covers: covers(watchLater.videos))
             }
-            NavigationLink {
+            ZoomLink {
                 DownloadsView()
             } label: {
                 ShortcutTile(
@@ -186,7 +186,7 @@ struct LibraryView: View {
             }
             LazyVStack(spacing: 0) {
                 ForEach(shownPlaylists, id: \.playlistId) { playlist in
-                    NavigationLink {
+                    ZoomLink {
                         PlaylistPage(title: playlist.title, playlistId: playlist.playlistId)
                     } label: {
                         MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
@@ -230,6 +230,7 @@ struct LibraryView: View {
                         ChannelRow(channel: channel, avatarSize: Layout.avatarMedium)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
+                            .tabZoomSource(channel.channelId ?? channel.title)
                     }
                     .buttonStyle(RowPressStyle())
                     .padding(.horizontal, Layout.screenPadding)
@@ -403,7 +404,7 @@ private struct HistoryStrip: View {
     var body: some View {
         if model.isLoading || !model.videosAndShorts.isEmpty {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                NavigationLink {
+                ZoomLink {
                     ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history, listsWithoutQuery: true)
                 } label: {
                     HStack(alignment: .firstTextBaseline) {
@@ -468,6 +469,7 @@ private struct HistoryStrip: View {
 
 /// Woof Music's playlist page: header card over the blurred cover, then compact rows.
 struct PlaylistPage: View {
+    @State private var shuffleTaps = 0
     let title: String
     let playlistId: String
 
@@ -565,8 +567,11 @@ struct PlaylistPage: View {
             EmptyView()
         } buttons: {
             if !videos.isEmpty {
-                Button { router.playAll(videos, shuffled: true) } label: {
-                    HeaderRoundIcon(systemImage: "shuffle")
+                Button {
+                    shuffleTaps += 1
+                    router.playAll(videos, shuffled: true)
+                } label: {
+                    HeaderRoundIcon(systemImage: "shuffle", motion: .crossSwap, trigger: shuffleTaps)
                 }
                 .accessibilityLabel("Shuffle")
                 Button {

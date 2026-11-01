@@ -36,6 +36,8 @@ struct WoofTubeApp: App {
                 #if DEBUG
                 await StreamCache.selfCheck()
                 CoverTint.selfCheck()
+                GlyphScript.selfCheck()
+                VideoFlavor.selfCheck()
                 #endif
             }
             .alert("Session Expired", isPresented: $session.isExpired) {
@@ -99,15 +101,31 @@ enum AppTab: Hashable {
     case home, library, subs, search
 }
 
-/// Pushes a channel's page on this tab's navigation stack.
-struct ChannelPageDestination: ViewModifier {
+/// The pages a tab opens from code, each growing out of what was tapped.
+struct TabDestinations: ViewModifier {
     let tab: AppTab
     @Environment(Router.self) private var router
+    @Namespace private var zoom
 
     func body(content: Content) -> some View {
-        content.navigationDestination(item: Binding(get: { router.channelPage?.tab == tab ? router.channelPage : nil }, set: { router.channelPage = $0 })) { route in
-            ChannelView(channelId: route.id).id(route.id)
-        }
+        content
+            .navigationDestination(for: HeaderRoute.self) { route in
+                Group {
+                    switch route {
+                    case .notifications: NotificationsView()
+                    case .settings: SettingsView()
+                    }
+                }
+                .environment(\.tabZoomSpace, zoom)
+                .navigationTransition(.zoom(sourceID: route, in: zoom))
+            }
+            .navigationDestination(item: Binding(get: { router.channelPage?.tab == tab ? router.channelPage : nil }, set: { router.channelPage = $0 })) { route in
+                ChannelView(channelId: route.id)
+                    .id(route.id)
+                    .environment(\.tabZoomSpace, zoom)
+                    .navigationTransition(.zoom(sourceID: route.id, in: zoom))
+            }
+            .environment(\.tabZoomSpace, zoom)
     }
 }
 

@@ -27,6 +27,8 @@ struct HeaderRoundIcon: View {
     let systemImage: String
     var primary: Color?
     var tint: Color = .primary
+    var motion: GlyphScript?
+    var trigger: AnyHashable = 0
 
     private var size: CGFloat { primary == nil ? 38 : 50 }
 
@@ -35,6 +37,7 @@ struct HeaderRoundIcon: View {
             .font(.system(size: primary == nil ? 15 : 19, weight: .bold))
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(primary == nil ? tint : .white)
+            .glyphMotion(motion, trigger: trigger)
             .frame(width: size, height: size)
             .glassEffect((primary.map { Glass.regular.tint($0) } ?? .regular).interactive(), in: .circle)
             // Reaches 44 pt, using the gap between neighbouring buttons.

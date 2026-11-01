@@ -232,6 +232,7 @@ enum HeaderRoute: Hashable {
 
 /// Woof Music's TabHeaderView: the title, then 36 pt buttons 12 pt apart.
 struct TabHeader: View {
+    @State private var addTaps = 0
     let title: String
     /// Shows a + button when set, for the Library's new playlist.
     var onAdd: (() -> Void)?
@@ -248,10 +249,14 @@ struct TabHeader: View {
             // The targets are 44 pt, so a small gap keeps the icons as far apart as they look.
             HStack(spacing: Layout.cardSpacing) {
                 if let onAdd {
-                    Button(action: onAdd) {
+                    Button {
+                        addTaps += 1
+                        onAdd()
+                    } label: {
                         Image(systemName: "plus")
                             .font(.title3)
                             .foregroundStyle(.secondary)
+                            .glyphMotion(.plusTurn, trigger: addTaps)
                             .frame(width: 44, height: 44)
                             .contentShape(.rect)
                     }
@@ -262,6 +267,7 @@ struct TabHeader: View {
                         Image(systemName: "eyeglasses")
                             .font(.title3)
                             .foregroundStyle(incognito.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .glyphMotion(incognito.wrappedValue ? .glassesOn : .glassesOff, trigger: incognito.wrappedValue)
                             .frame(width: 44, height: 44)
                             .contentShape(.rect)
                     }
@@ -272,9 +278,11 @@ struct TabHeader: View {
                     Image(systemName: "bell")
                         .font(.title3)
                         .foregroundStyle(.secondary)
+                        .glyphMotion(session.unseenNotifications > 0 ? .bellRing : nil, trigger: session.unseenNotifications)
                         .frame(width: 44, height: 44)
                         .overlay(alignment: .topTrailing) { badge }
                         .contentShape(.rect)
+                        .tabZoomSource(HeaderRoute.notifications)
                 }
                 .accessibilityLabel(session.unseenNotifications > 0 ? "Notifications, \(session.unseenNotifications) unread" : "Notifications")
 
@@ -282,6 +290,7 @@ struct TabHeader: View {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
+                        .tabZoomSource(HeaderRoute.settings)
                 }
                 .accessibilityLabel("Settings")
             }
@@ -312,13 +321,7 @@ extension View {
             TabHeader(title: title, onAdd: onAdd, incognito: incognito).background(Color(.systemBackground))
         }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: HeaderRoute.self) { route in
-                switch route {
-                case .notifications: NotificationsView()
-                case .settings: SettingsView()
-                }
-            }
-            .modifier(ChannelPageDestination(tab: tab))
+            .modifier(TabDestinations(tab: tab))
     }
 }
 
@@ -797,7 +800,7 @@ struct FeedRows: View {
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, Layout.rowSpacing)
         case .playlist(let playlist):
-            NavigationLink {
+            ZoomLink {
                 PlaylistPage(title: playlist.title, playlistId: playlist.playlistId)
             } label: {
                 MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
@@ -812,6 +815,7 @@ struct FeedRows: View {
                     ChannelRow(channel: channel)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(.rect)
+                        .tabZoomSource(id)
                 }
                 .buttonStyle(RowPressStyle())
                 .padding(.horizontal, Layout.screenPadding)
@@ -1216,7 +1220,7 @@ private struct NewVideosCard: View {
             }
             .padding(.horizontal, Layout.rowSpacing)
             ScrollView(.horizontal) {
-                HStack(spacing: Layout.chipSpacing) {
+                HStack(alignment: .top, spacing: Layout.chipSpacing) {
                     ForEach(videos, id: \.videoId) { NewVideoRibbon(video: $0) }
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -1233,15 +1237,14 @@ private struct NewVideosCard: View {
     }
 }
 
-/// A row in the colour of the video's own cover.
+/// A small upright card in the colour of the video's own cover.
 private struct NewVideoRibbon: View {
     let video: YouTubeVideo
     @Environment(Router.self) private var router
     @State private var tint: Color?
     @State private var avatar: String?
 
-    private static let width: CGFloat = 276
-    private static let coverWidth: CGFloat = 104
+    private static let width: CGFloat = 148
     private static let avatarSize: CGFloat = 26
 
     private var cover: String { video.thumbnailURL ?? "https://i.ytimg.com/vi/\(video.videoId)/hqdefault.jpg" }
@@ -1251,26 +1254,27 @@ private struct NewVideoRibbon: View {
             SeenVideos.mark(video.videoId)
             router.play(video)
         } label: {
-            HStack(spacing: Layout.rowSpacing + 2) {
-                CoverImage(url: cover, maxPixels: 312)
-                    .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                CoverImage(url: cover, maxPixels: 408)
+                    .frame(height: (Self.width - Layout.rowPadding * 2) * 9 / 16)
                     .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                     .overlay(alignment: .bottomTrailing) {
                         Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
                             .overlay(Circle().stroke(.white, lineWidth: 2))
-                            .offset(x: Layout.rowPadding, y: Layout.rowPadding)
+                            .offset(x: -Layout.rowPadding, y: Layout.rowPadding)
                     }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(video.title)
-                        .font(.footnote.weight(.bold))
-                        .lineLimit(2)
+                        .font(.caption.weight(.bold))
+                        .lineLimit(2, reservesSpace: true)
                         .multilineTextAlignment(.leading)
-                    Text([video.channelTitle, video.publishedTimeText].compactMap { $0 }.joined(separator: " · "))
+                    Text(video.publishedTimeText ?? video.channelTitle ?? "")
                         .font(.caption2)
                         .opacity(0.85)
                         .lineLimit(1)
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, 2)
+                .padding(.bottom, 2)
             }
             .foregroundStyle(.white)
             .padding(Layout.rowPadding)
@@ -1426,7 +1430,12 @@ private struct PostRow: View {
                         isLiked = !showsLiked
                         perform(action)
                     } label: {
-                        Label(likes, systemImage: showsLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                        Label {
+                            Text(likes)
+                        } icon: {
+                            Image(systemName: showsLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                                .glyphMotion(showsLiked ? .pop : .deflate, trigger: showsLiked)
+                        }
                             .frame(minHeight: 44)
                             .contentShape(.rect)
                     }

@@ -294,8 +294,15 @@ private struct CommentRow: View {
                     .font(.subheadline)
                     .textSelection(.enabled)
                 HStack(spacing: 16) {
-                    Button(comment.isLiked ? comment.likeCountLiked : comment.likeCount, systemImage: comment.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup") {
+                    Button {
                         Task { await model.toggleLike(comment) }
+                    } label: {
+                        Label {
+                            Text(comment.isLiked ? comment.likeCountLiked : comment.likeCount)
+                        } icon: {
+                            Image(systemName: comment.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                                .glyphMotion(comment.isLiked ? .pop : .deflate, trigger: comment.isLiked)
+                        }
                     }
                     if comment.replyParams != nil {
                         Button("Reply") { onReply(comment) }

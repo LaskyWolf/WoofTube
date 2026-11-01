@@ -578,8 +578,15 @@ private struct MiniControls: View {
                     .lineLimit(1)
                     .padding(.leading, Layout.rowSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button(player.isPaused ? "Play" : "Pause", systemImage: player.isPaused ? "play.fill" : "pause.fill") {
+                Button {
                     player.togglePause()
+                } label: {
+                    Label {
+                        Text(player.isPaused ? "Play" : "Pause")
+                    } icon: {
+                        MorphingGlyph(systemName: player.isPaused ? "play.fill" : "pause.fill")
+                            .glyphMotion(player.isPaused ? .playShoot : .pauseStamp, trigger: player.isPaused)
+                    }
                 }
                 Button("Close", systemImage: "xmark", action: onClose)
             }
@@ -758,8 +765,15 @@ private struct PlayerProgress: View {
                 }
                 Spacer(minLength: 0)
                 RoutePicker().frame(width: 44, height: 44)
-                Button(isFullscreen ? "Exit Full Screen" : "Full Screen", systemImage: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
+                Button {
                     Orientation.setFullscreen(!isFullscreen)
+                } label: {
+                    Label {
+                        Text(isFullscreen ? "Exit Full Screen" : "Full Screen")
+                    } icon: {
+                        MorphingGlyph(systemName: isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            .glyphMotion(isFullscreen ? .pullApart : .squeezeIn, trigger: isFullscreen)
+                    }
                 }
                 .buttonStyle(PlayerPressStyle())
                 .labelStyle(PlayerGlyphLabelStyle(size: 15))
@@ -817,10 +831,44 @@ private struct PlayerProgress: View {
 private struct SeekHint {
     let id = UUID()
     let isLeading: Bool
+    /// Double taps in a row add up.
+    let seconds: Int
+}
+
+/// Says what was just picked in a menu. The system draws menus and their icons stay still, so the movement happens here.
+private struct PlayerNotice {
+    let id = UUID()
+    let text: String
+    var symbol: String?
+    var speed: Double?
+    let script: GlyphScript
+}
+
+/// A moon with a ring that shrinks as the time runs out.
+private struct SleepGlyph: View {
+    @ObservedObject var timer: SleepTimer
+    private static let ringSize: CGFloat = 32
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            Image(systemName: "moon.zzz.fill")
+                .glyphMotion(.sleepRock, trigger: timer.isActive, playsOnAppear: true)
+                .background {
+                    if let endsAt = timer.endsAt, let minutes = timer.minutes {
+                        Circle()
+                            .trim(from: 0, to: CGFloat(max(endsAt.timeIntervalSince(context.date) / Double(minutes * 60), 0)))
+                            .stroke(.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: Self.ringSize, height: Self.ringSize)
+                    }
+                }
+        }
+    }
 }
 
 private struct PlayerControls: View {
-    private static let skipSeconds = 10.0
+    private static let skipSeconds = 10
+    private static let noticeTime = Duration.milliseconds(1400)
     private static let exitFullscreenDistance: CGFloat = 60
     /// mpv often waits a moment for data with no visible effect, so the spinner waits longer.
     private static let spinnerDelay = Duration.milliseconds(600)
@@ -835,6 +883,8 @@ private struct PlayerControls: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
     @State private var showsSpinner = false
+    @State private var notice: PlayerNotice?
+    @State private var optionsTaps = 0
 
     /// Nothing to show yet, so the spinner appears at once.
     private var isStarting: Bool {
@@ -854,8 +904,9 @@ private struct PlayerControls: View {
                     scheduleHide()
                 },
                 onDoubleTap: { isLeading in
-                    player.skip(by: isLeading ? -Self.skipSeconds : Self.skipSeconds)
-                    seekHint = SeekHint(isLeading: isLeading)
+                    player.skip(by: Double(isLeading ? -Self.skipSeconds : Self.skipSeconds))
+                    let previous = seekHint?.isLeading == isLeading ? seekHint?.seconds ?? 0 : 0
+                    seekHint = SeekHint(isLeading: isLeading, seconds: previous + Self.skipSeconds)
                 },
                 onDragChanged: { _ in },
                 onDragEnded: { translation, _ in
@@ -872,8 +923,15 @@ private struct PlayerControls: View {
                 controls.transition(.opacity)
             }
             if let seekHint {
-                Image(systemName: seekHint.isLeading ? "gobackward.10" : "goforward.10")
-                    .font(.system(size: 28, weight: .semibold))
+                VStack(spacing: Layout.cardSpacing) {
+                    Image(systemName: seekHint.isLeading ? "gobackward.10" : "goforward.10")
+                        .font(.system(size: 28, weight: .semibold))
+                        .glyphMotion(seekHint.isLeading ? .spinBack : .spinForward, trigger: seekHint.id, playsOnAppear: true)
+                    if seekHint.seconds > Self.skipSeconds {
+                        Text("\(seekHint.isLeading ? "−" : "+")\(seekHint.seconds)")
+                            .font(.subheadline.weight(.bold).monospacedDigit())
+                    }
+                }
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.5), radius: 3)
                     .frame(maxWidth: .infinity, alignment: seekHint.isLeading ? .leading : .trailing)
@@ -885,6 +943,9 @@ private struct PlayerControls: View {
                         guard !Task.isCancelled else { return }
                         self.seekHint = nil
                     }
+            }
+            if let notice {
+                noticeView(notice)
             }
         }
         .environment(\.colorScheme, .dark)
@@ -910,7 +971,15 @@ private struct PlayerControls: View {
             HStack(spacing: 0) {
                 Spacer()
                 if sleepTimer.isActive {
-                    Button("Sleep Timer", systemImage: "moon.zzz.fill") { showsSleepTimer = true }
+                    Button {
+                        showsSleepTimer = true
+                    } label: {
+                        Label {
+                            Text("Sleep Timer")
+                        } icon: {
+                            SleepGlyph(timer: sleepTimer)
+                        }
+                    }
                 }
                 if player.speed != 1 {
                     speedMenu
@@ -919,16 +988,17 @@ private struct PlayerControls: View {
             }
             Spacer(minLength: 0)
             if !isStarting, !showsSpinner {
-                HStack(spacing: 24) {
-                    Button("Back 10 Seconds", systemImage: "gobackward.10") { skip(-Self.skipSeconds) }
-                        .labelStyle(PlayerGlyphLabelStyle(size: 24))
-                    Button(player.isPaused ? "Play" : "Pause", systemImage: player.isPaused ? "play.fill" : "pause.fill") {
-                        player.togglePause()
+                Button {
+                    player.togglePause()
+                } label: {
+                    Label {
+                        Text(player.isPaused ? "Play" : "Pause")
+                    } icon: {
+                        MorphingGlyph(systemName: player.isPaused ? "play.fill" : "pause.fill")
+                            .glyphMotion(player.isPaused ? .playShoot : .pauseStamp, trigger: player.isPaused)
                     }
-                    .labelStyle(PlayerGlyphLabelStyle(size: 34))
-                    Button("Forward 10 Seconds", systemImage: "goforward.10") { skip(Self.skipSeconds) }
-                        .labelStyle(PlayerGlyphLabelStyle(size: 24))
                 }
+                .labelStyle(PlayerGlyphLabelStyle(size: 34))
             }
             Spacer(minLength: 0)
             PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? []) { scrubbing in
@@ -973,9 +1043,38 @@ private struct PlayerControls: View {
         .accessibilityLabel("Close Video")
     }
 
-    private func skip(_ seconds: Double) {
-        player.skip(by: seconds)
-        scheduleHide()
+    private func noticeView(_ notice: PlayerNotice) -> some View {
+        HStack(spacing: Layout.chipSpacing) {
+            Group {
+                if let speed = notice.speed {
+                    SpeedGauge(speed: speed, size: 18)
+                } else if let symbol = notice.symbol {
+                    Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
+                }
+            }
+            .glyphMotion(notice.script, trigger: notice.id, playsOnAppear: true)
+            Text(notice.text)
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, Layout.rowSpacing)
+        .frame(minHeight: Layout.controlHeight)
+        .glassEffect(.regular, in: .capsule)
+        .id(notice.id)
+        .transition(.opacity)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(.top, Layout.chipSpacing)
+        .allowsHitTesting(false)
+        .task(id: notice.id) {
+            try? await Task.sleep(for: Self.noticeTime)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { self.notice = nil }
+        }
+    }
+
+    private func show(_ notice: PlayerNotice) {
+        withAnimation(.easeOut(duration: 0.15)) { self.notice = notice }
     }
 
     /// Woof Music's speed chip: accent filled away from 1x.
@@ -983,8 +1082,11 @@ private struct PlayerControls: View {
         Menu {
             speedPicker
         } label: {
-            Text(player.speed.speedText)
-                .font(.system(size: 11, weight: .bold).monospacedDigit())
+            HStack(spacing: 3) {
+                SpeedGauge(speed: player.speed, size: 12)
+                Text(player.speed.speedText)
+                    .font(.system(size: 11, weight: .bold).monospacedDigit())
+            }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
@@ -1002,7 +1104,10 @@ private struct PlayerControls: View {
     }
 
     private var speedPicker: some View {
-        Picker("Speed", selection: Binding(get: { player.speed }, set: { player.setSpeed($0) })) {
+        Picker("Speed", selection: Binding(get: { player.speed }, set: { speed in
+            player.setSpeed(speed)
+            show(PlayerNotice(text: speed == 1 ? "Normal" : speed.speedText, speed: speed, script: .pop))
+        })) {
             ForEach(Router.speeds, id: \.self) { speed in
                 Text(speed == 1 ? "Normal" : speed.speedText).tag(speed)
             }
@@ -1013,10 +1118,14 @@ private struct PlayerControls: View {
     private var captionsMenu: some View {
         if !router.captions.isEmpty {
             Menu {
-                Button("Off") { router.selectCaption(nil) }
+                Button("Off", systemImage: "xmark") {
+                    router.selectCaption(nil)
+                    show(PlayerNotice(text: "Captions Off", symbol: "captions.bubble", script: .captionsOff))
+                }
                 ForEach(router.captions, id: \.languageCode) { track in
                     Button {
                         router.selectCaption(track)
+                        show(PlayerNotice(text: track.name ?? "Captions On", symbol: "captions.bubble.fill", script: .captionsOn))
                     } label: {
                         if router.selectedCaption == track.languageCode {
                             Label(track.name ?? track.languageCode ?? "Unknown", systemImage: "checkmark")
@@ -1035,10 +1144,11 @@ private struct PlayerControls: View {
         Menu {
             captionsMenu
             if router.audioTracks.count > 1 {
-                Menu("Audio Track") {
+                Menu("Audio Track", systemImage: "waveform") {
                     ForEach(router.audioTracks) { track in
                         Button {
                             router.selectAudioTrack(track)
+                            show(PlayerNotice(text: track.name, symbol: "waveform", script: .audioPulse))
                         } label: {
                             if router.selectedAudioTrack == track.id {
                                 Label(track.name, systemImage: "checkmark")
@@ -1049,12 +1159,18 @@ private struct PlayerControls: View {
                     }
                 }
             }
-            Picker("Quality", selection: Binding(get: { router.maxHeight }, set: { router.changeQuality(to: $0) })) {
+            Picker("Quality", systemImage: "sparkles.tv", selection: Binding(get: { router.maxHeight }, set: { height in
+                router.changeQuality(to: height)
+                show(PlayerNotice(text: "\(height)p", symbol: "sparkles.tv", script: .qualitySparkle))
+            })) {
                 ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
             }
             .pickerStyle(.menu)
-            Menu("Speed") { speedPicker }
-            Toggle("Autoplay", isOn: Bindable(router).autoplay)
+            Menu("Speed", systemImage: player.speed.gaugeSymbol) { speedPicker }
+            Toggle("Autoplay", systemImage: "play.square.stack", isOn: Binding(get: { router.autoplay }, set: { isOn in
+                router.autoplay = isOn
+                show(PlayerNotice(text: isOn ? "Autoplay On" : "Autoplay Off", symbol: "play.square.stack", script: isOn ? .nextCard : .pop))
+            }))
             Button(sleepTimer.isActive ? "Sleep Timer · On" : "Sleep Timer…", systemImage: sleepTimer.isActive ? "moon.zzz.fill" : "moon.zzz") {
                 showsSleepTimer = true
             }
@@ -1063,7 +1179,9 @@ private struct PlayerControls: View {
             }
         } label: {
             Label("Options", systemImage: "ellipsis")
+                .symbolEffect(.bounce.byLayer, value: optionsTaps)
         }
+        .simultaneousGesture(TapGesture().onEnded { optionsTaps += 1 })
     }
 
     private func scheduleHide() {
@@ -1097,6 +1215,11 @@ private struct WatchDetailsView: View {
     @State private var showsPlaylists = false
     @State private var showsChat = false
     @State private var confirmsDeleteDownload = false
+    @State private var likeTaps = 0
+    @State private var dislikeTaps = 0
+    @State private var shareTaps = 0
+    @State private var laterTaps = 0
+    @State private var finishedDownloads = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
@@ -1112,7 +1235,12 @@ private struct WatchDetailsView: View {
                 if router.isLive, router.liveChatToken != nil {
                     Button { showsChat = true } label: {
                         HStack {
-                            Label("Live Chat", systemImage: "bubble.left.and.bubble.right")
+                            Label {
+                                Text("Live Chat")
+                            } icon: {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .glyphMotion(showsChat ? .bubblePop : nil, trigger: showsChat)
+                            }
                                 .font(.subheadline.weight(.semibold))
                             Spacer()
                             Image(systemName: "chevron.right")
@@ -1258,23 +1386,29 @@ private struct WatchDetailsView: View {
             HStack(spacing: 10) {
                 HStack(spacing: 0) {
                     Button {
+                        likeTaps += 1
                         setLike(isLiked ? "INDIFFERENT" : "LIKE")
                     } label: {
                         likeLabel(
                             icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup",
                             text: (isLiked ? details.likeCountLiked : details.likeCount) ?? "Like",
-                            isActive: isLiked
+                            isActive: isLiked,
+                            motion: isLiked ? .like(emojis: VideoFlavor.emojis(for: router.current?.title)) : .deflate,
+                            taps: likeTaps
                         )
                     }
                     .accessibilityLabel("Like")
                     Divider().frame(height: 18)
                     Button {
+                        dislikeTaps += 1
                         setLike(isDisliked ? "INDIFFERENT" : "DISLIKE")
                     } label: {
                         likeLabel(
                             icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown",
                             text: details.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText },
-                            isActive: isDisliked
+                            isActive: isDisliked,
+                            motion: isDisliked ? .dislike : .rise,
+                            taps: dislikeTaps
                         )
                     }
                     .accessibilityLabel("Dislike")
@@ -1283,22 +1417,26 @@ private struct WatchDetailsView: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
                 if let id = router.current?.videoId, let url = URL(string: "https://www.youtube.com/watch?v=\(id)") {
                     ShareLink(item: url) {
-                        HeaderRoundIcon(systemImage: "square.and.arrow.up")
+                        HeaderRoundIcon(systemImage: "square.and.arrow.up", motion: .shareLaunch, trigger: shareTaps)
                     }
+                    .simultaneousGesture(TapGesture().onEnded { shareTaps += 1 })
                     .accessibilityLabel("Share")
                     Button {
+                        laterTaps += 1
                         toggleWatchLater(id, isSaved: details.isInWatchLater)
                     } label: {
                         HeaderRoundIcon(
                             systemImage: details.isInWatchLater ? "clock.fill" : "clock",
-                            tint: details.isInWatchLater ? settings.accentColor : .primary
+                            tint: details.isInWatchLater ? settings.accentColor : .primary,
+                            motion: details.isInWatchLater ? .clockForward : .clockBack,
+                            trigger: laterTaps
                         )
                     }
                     .accessibilityLabel(details.isInWatchLater ? "Remove from Watch Later" : "Save to Watch Later")
                     Button {
                         showsPlaylists = true
                     } label: {
-                        HeaderRoundIcon(systemImage: "text.badge.plus")
+                        HeaderRoundIcon(systemImage: "text.badge.plus", motion: showsPlaylists ? .addToList : nil, trigger: showsPlaylists)
                     }
                     .accessibilityLabel("Add to Playlist")
                     if let video = router.current {
@@ -1312,14 +1450,15 @@ private struct WatchDetailsView: View {
                             }
                         } label: {
                             if isSaving {
-                                ProgressView()
-                                    .frame(width: 38, height: 38)
-                                    .glassEffect(.regular, in: .circle)
+                                DownloadRing(fraction: downloads.active.first { $0.id == id }?.fraction ?? 0)
                             } else {
-                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down.to.line")
+                                HeaderRoundIcon(systemImage: isSaved ? "checkmark" : "arrow.down.to.line", motion: .checkStamp, trigger: finishedDownloads)
                             }
                         }
                         .disabled(isSaving)
+                        .onChange(of: isSaving) { wasSaving, _ in
+                            if wasSaving, isSaved { finishedDownloads += 1 }
+                        }
                         .accessibilityLabel(isSaved ? "Delete Download" : isSaving ? "Downloading" : "Download")
                         .confirmationDialog("Delete this download?", isPresented: $confirmsDeleteDownload, titleVisibility: .visible) {
                             Button("Delete Download", role: .destructive) {
@@ -1335,11 +1474,12 @@ private struct WatchDetailsView: View {
         }
     }
 
-    private func likeLabel(icon: String, text: String?, isActive: Bool) -> some View {
+    private func likeLabel(icon: String, text: String?, isActive: Bool, motion: GlyphScript, taps: Int) -> some View {
         HStack(spacing: Layout.rowPadding) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                .glyphMotion(motion, trigger: taps)
             if let text {
                 Text(text)
                     .font(.subheadline.weight(.semibold))
@@ -1408,6 +1548,28 @@ private struct WatchDetailsView: View {
                 router.actionMessage = error.localizedDescription
             }
         }
+    }
+}
+
+/// The real progress of this video's download, around the arrow that's coming in.
+private struct DownloadRing: View {
+    let fraction: Double
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.primary.opacity(0.15), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: CGFloat(max(fraction, 0.03)))
+                .stroke(.tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 0.2), value: fraction)
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .bold))
+                .glyphMotion(.arrowDrop, trigger: 0, playsOnAppear: true)
+        }
+        .padding(5)
+        .frame(width: 38, height: 38)
+        .glassEffect(.regular, in: .circle)
     }
 }
 
@@ -1524,9 +1686,11 @@ struct SubscribeButton: View {
     let onChange: (Bool) -> Void
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var taps = 0
 
     var body: some View {
         Button {
+            taps += 1
             toggle()
         } label: {
             if isLarge {
@@ -1551,6 +1715,7 @@ struct SubscribeButton: View {
             }
         }
         .buttonStyle(GlassPressStyle())
+        .glyphMotion(isSubscribed ? .subscribed : .unsubscribed, trigger: taps)
         .animation(reduceMotion ? nil : .snappy, value: isSubscribed)
         .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
         .sensoryFeedback(.selection, trigger: isSubscribed)
@@ -1637,6 +1802,8 @@ private struct ChannelSearchContent: View {
 /// Woof Music's artist page over the channel's banner, then the pinned or latest video,
 /// then the channel's tabs as filters.
 struct ChannelView: View {
+    @State private var searchTaps = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let channelId: String
 
     @State private var model = FeedModel()
@@ -1767,9 +1934,13 @@ struct ChannelView: View {
         } buttons: {
             SubscribeButton(channelId: channelId, isSubscribed: isSubscribed, isLarge: true) { isSubscribed = $0 }
             Button {
-                withAnimation(.snappy) { isSearching = true }
+                searchTaps += 1
+                Task {
+                    try? await Task.sleep(for: .seconds(reduceMotion ? 0 : 0.34))
+                    withAnimation(.snappy) { isSearching = true }
+                }
             } label: {
-                HeaderRoundIcon(systemImage: "magnifyingglass")
+                HeaderRoundIcon(systemImage: "magnifyingglass", motion: .lensZoom, trigger: searchTaps)
                     .matchedGeometryEffect(id: ChannelSearchContent.barId, in: searchMorph)
             }
             .accessibilityLabel("Search This Channel")

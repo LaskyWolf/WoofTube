@@ -32,6 +32,14 @@ enum ThemeMode: String, CaseIterable, Identifiable {
     case system = "System", light = "Light", dark = "Dark"
     var id: String { rawValue }
 
+    var symbol: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light: return "sun.max"
+        case .dark: return "moon"
+        }
+    }
+
     var colorScheme: ColorScheme? {
         switch self {
         case .system: return nil
@@ -71,7 +79,7 @@ struct SettingsView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink {
+                ZoomLink {
                     ProfileView()
                 } label: {
                     HStack(spacing: Layout.menuRowSpacing) {
@@ -114,7 +122,7 @@ struct SettingsView: View {
     }
 
     private func settingsRow<Destination: View>(_ title: String, icon: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
-        NavigationLink(destination: destination) {
+        ZoomLink(destination: destination) {
             Label {
                 Text(title)
             } icon: {
@@ -219,24 +227,40 @@ private struct PlayerSettingsView: View {
                 Picker(selection: Bindable(router).maxHeight) {
                     ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
                 } label: {
-                    Label("Maximum Quality", systemImage: "sparkles.tv")
+                    Label {
+                        Text("Maximum Quality")
+                    } icon: {
+                        Image(systemName: "sparkles.tv").glyphMotion(.qualitySparkle, trigger: router.maxHeight)
+                    }
                 }
                 Toggle(isOn: Bindable(router).autoplay) {
-                    Label("Autoplay", systemImage: "play.square.stack")
+                    Label {
+                        Text("Autoplay")
+                    } icon: {
+                        Image(systemName: "play.square.stack").glyphMotion(router.autoplay ? .nextCard : .pop, trigger: router.autoplay)
+                    }
                 }
             } footer: {
                 Text("Autoplay starts the first Up Next video when one ends.")
             }
             Section {
                 Toggle(isOn: Bindable(router).skipsSponsors) {
-                    Label("Skip Sponsors", systemImage: "forward.end")
+                    Label {
+                        Text("Skip Sponsors")
+                    } icon: {
+                        Image(systemName: "forward.end").glyphMotion(router.skipsSponsors ? .dashAhead : .pop, trigger: router.skipsSponsors)
+                    }
                 }
             } footer: {
                 Text("Uses SponsorBlock's community list, which receives the ID of each video you watch.")
             }
             Section {
                 Toggle(isOn: $showsDislikeCounts) {
-                    Label("Dislike Counts", systemImage: "hand.thumbsdown")
+                    Label {
+                        Text("Dislike Counts")
+                    } icon: {
+                        Image(systemName: "hand.thumbsdown").glyphMotion(showsDislikeCounts ? .dislike : .rise, trigger: showsDislikeCounts)
+                    }
                 }
             } footer: {
                 Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open or see in a feed.")
@@ -258,7 +282,12 @@ private struct AppearanceSettingsView: View {
                 Picker(selection: $settings.themeMode) {
                     ForEach(ThemeMode.allCases) { Text($0.rawValue).tag($0) }
                 } label: {
-                    Label("Theme Mode", systemImage: "sun.max")
+                    Label {
+                        Text("Theme Mode")
+                    } icon: {
+                        MorphingGlyph(systemName: settings.themeMode.symbol)
+                            .glyphMotion(settings.themeMode == .dark ? .moonRise : .sunRise, trigger: settings.themeMode)
+                    }
                 }
             } header: {
                 Text("Theme")

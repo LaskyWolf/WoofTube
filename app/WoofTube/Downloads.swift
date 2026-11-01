@@ -652,7 +652,7 @@ struct LibraryDownloadCard: View {
 
     var body: some View {
         if let batch = store.batch {
-            NavigationLink {
+            ZoomLink {
                 DownloadsView().onAppear { store.clearFinishedBatch() }
             } label: {
                 content(batch)
@@ -750,6 +750,7 @@ struct LibraryDownloadCard: View {
 
 /// Woof Music's downloads page: the header card, what's downloading, then the saved videos.
 struct DownloadsView: View {
+    @State private var shuffleTaps = 0
     @ObservedObject private var store = DownloadStore.shared
     @Environment(Router.self) private var router
     @EnvironmentObject private var settings: AppSettings
@@ -775,7 +776,7 @@ struct DownloadsView: View {
                     } description: {
                         Text("Long press a video and choose Download.")
                     } actions: {
-                        NavigationLink("Download Settings") { DownloadSettingsView() }
+                        ZoomLink { DownloadSettingsView() } label: { Text("Download Settings") }
                             .buttonStyle(.borderedProminent)
                     }
                     .padding(.vertical, 48)
@@ -829,7 +830,7 @@ struct DownloadsView: View {
                     for video in videos { router.addToQueue(video) }
                 }
                 .disabled(videos.isEmpty)
-                NavigationLink {
+                ZoomLink {
                     DownloadSettingsView()
                 } label: {
                     Label("Download Settings", systemImage: "gearshape")
@@ -855,8 +856,11 @@ struct DownloadsView: View {
             EmptyView()
         } buttons: {
             if !videos.isEmpty {
-                Button { router.playAll(videos, shuffled: true) } label: {
-                    HeaderRoundIcon(systemImage: "shuffle")
+                Button {
+                    shuffleTaps += 1
+                    router.playAll(videos, shuffled: true)
+                } label: {
+                    HeaderRoundIcon(systemImage: "shuffle", motion: .crossSwap, trigger: shuffleTaps)
                 }
                 .accessibilityLabel("Shuffle")
                 Button { router.playAll(videos) } label: {
@@ -885,7 +889,7 @@ struct DownloadSettingsView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink {
+                ZoomLink {
                     DownloadsView()
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {

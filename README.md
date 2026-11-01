@@ -26,14 +26,14 @@ It contains no YouTube code and shows no ads.
 | 🎧 **Background and Picture in Picture** | Audio keeps playing when you lock the phone, and the video can float over other apps. |
 | ⬇️ **Real downloads** | Videos download in the background and retry when YouTube's address expires. |
 | ⏭️ **SponsorBlock** | Sponsor segments are skipped using the community list. Dislike counts come from Return YouTube Dislike. Both are optional. |
-| 🧊 **Native iOS 26** | Liquid Glass buttons, SF Symbols, system menus, tab bar and sheets. Dynamic Type, Dark Mode and Reduce Motion are respected. |
+| 🧊 **Native iOS 26** | Liquid Glass buttons, zoom transitions, SF Symbols, system menus, tab bar and sheets. Dynamic Type, Dark Mode and Reduce Motion are respected. |
 
 ## Features
 
 ### Home and Subs
 - Your own Home feed, with filter chips and videos you have already seen moved out of the way
 - Keep Watching card to resume where you stopped
-- New Videos row on Subs: today's uploads, each in the colour of its cover
+- New Videos row on Subs: today's uploads as small cards, each in the colour of its cover
 - Shorts shelves, community posts with polls, and playlists in the feed
 - Long-press menus on videos: Watch Later, playlists, share, download and feedback
 
@@ -67,6 +67,8 @@ It contains no YouTube code and shows no ads.
 ### Look
 - Accent colours that also change the app icon
 - Light, dark or system appearance
+- Icons with their own animation that follow the real state: the speed needle, the download ring, the sleep timer countdown
+- Pages open by growing out of what you tapped
 
 <div align="center">
 

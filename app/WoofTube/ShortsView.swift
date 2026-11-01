@@ -157,6 +157,9 @@ final class ShortsModel: ObservableObject {
 /// Swipe sideways for the next Short. Hold to stop the video, and move while holding to scrub.
 /// Swipe down to send it to the floating card.
 struct ShortsView: View {
+    @State private var likeTaps = 0
+    @State private var dislikeTaps = 0
+    @State private var subscribeTaps = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The fingers' scrub: where it started, and whether to carry on playing after.
     private struct Scrub {
@@ -372,21 +375,24 @@ struct ShortsView: View {
         let isDisliked = details?.likeStatus == "DISLIKE"
         return VStack(spacing: Layout.screenPadding) {
             Button {
+                likeTaps += 1
                 Task { await model.setLike(isLiked ? "INDIFFERENT" : "LIKE", video: video) }
             } label: {
-                RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like")
+                RailLabel(icon: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup", text: (isLiked ? details?.likeCountLiked : details?.likeCount) ?? "Like", motion: isLiked ? .deflate : .like(emojis: VideoFlavor.emojis(for: video.title)), trigger: likeTaps)
             }
             Button {
+                dislikeTaps += 1
                 Task { await model.setLike(isDisliked ? "INDIFFERENT" : "DISLIKE", video: video) }
             } label: {
-                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike")
+                RailLabel(icon: isDisliked ? "hand.thumbsdown.fill" : "hand.thumbsdown", text: details?.dislikeCount.map { ($0 + (isDisliked ? 1 : 0)).compactText } ?? "Dislike", motion: isDisliked ? .rise : .dislike, trigger: dislikeTaps)
             }
             ShortsMoreMenu(model: model, player: model.player, video: video, showsDescription: $showsDescription)
             if let details, let id = details.channelId {
                 Button {
+                    subscribeTaps += 1
                     SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
                 } label: {
-                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus")
+                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus", motion: details.isSubscribed ? .unsubscribed : .subscribed, trigger: subscribeTaps)
                         .contentTransition(.symbolEffect(.replace))
                         .background {
                             Circle()
@@ -430,11 +436,14 @@ private struct ShortStartSpinner: View {
 private struct RailLabel: View {
     let icon: String
     var text: String?
+    var motion: GlyphScript?
+    var trigger: Int = 0
 
     var body: some View {
         VStack(spacing: 2) {
             Image(systemName: icon)
                 .font(.system(size: 22, weight: .semibold))
+                .glyphMotion(motion, trigger: trigger)
             if let text {
                 Text(text)
                     .font(.caption2.weight(.semibold))
@@ -454,6 +463,7 @@ private struct ShortsMoreMenu: View {
     let video: YouTubeVideo
     @Binding var showsDescription: Bool
     @Environment(Router.self) private var router
+    @State private var taps = 0
 
     var body: some View {
         Menu {
@@ -466,7 +476,7 @@ private struct ShortsMoreMenu: View {
             Button("Save to Watch Later", systemImage: "clock") {
                 router.run { try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId) }
             }
-            Picker("Speed", systemImage: "gauge.with.dots.needle.67percent", selection: Binding(get: { player.speed }, set: { player.setSpeed($0) })) {
+            Picker("Speed", systemImage: player.speed.gaugeSymbol, selection: Binding(get: { player.speed }, set: { player.setSpeed($0) })) {
                 ForEach(Router.speeds, id: \.self) { speed in
                     Text(speed == 1 ? "Normal" : speed.speedText).tag(speed)
                 }
@@ -474,7 +484,7 @@ private struct ShortsMoreMenu: View {
             .pickerStyle(.menu)
             if !model.captions.isEmpty {
                 Menu("Captions", systemImage: "captions.bubble") {
-                    Button("Off") { model.selectCaption(nil) }
+                    Button("Off", systemImage: "xmark") { model.selectCaption(nil) }
                     ForEach(model.captions, id: \.languageCode) { track in
                         Button(track.name ?? track.languageCode ?? "Unknown") { model.selectCaption(track) }
                     }
@@ -482,7 +492,9 @@ private struct ShortsMoreMenu: View {
             }
         } label: {
             RailLabel(icon: "ellipsis")
+                .symbolEffect(.bounce.byLayer, value: taps)
         }
+        .simultaneousGesture(TapGesture().onEnded { taps += 1 })
         .accessibilityLabel("More")
     }
 }
