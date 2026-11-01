@@ -220,6 +220,7 @@ private struct ProfileView: View {
 private struct PlayerSettingsView: View {
     @Environment(Router.self) private var router
     @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
+    @AppStorage(DeArrow.enabledKey) private var usesDeArrow = false
 
     var body: some View {
         List {
@@ -254,6 +255,11 @@ private struct PlayerSettingsView: View {
                 }
             } footer: {
                 Text("Uses SponsorBlock's community list. It receives part of a code shared by many videos, not which one you watch.")
+            }
+            Section {
+                Toggle("Community Titles", systemImage: "text.badge.checkmark", isOn: $usesDeArrow)
+            } footer: {
+                Text("Uses DeArrow's community titles and thumbnails in place of the originals. Its title list receives part of a code shared by many videos. Its thumbnail server receives the ID of each video that has a new thumbnail.")
             }
             Section {
                 Toggle(isOn: $showsDislikeCounts) {

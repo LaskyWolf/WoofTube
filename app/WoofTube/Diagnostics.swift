@@ -250,6 +250,7 @@ struct DiagnosticsSection: Identifiable {
             Row(label: "Picture in Picture", value: onOff(router.allowsPictureInPicture)),
             Row(label: "Skip Sponsors", value: onOff(router.skipsSponsors)),
             Row(label: "Dislike Counts", value: onOff(dislikes)),
+            Row(label: "Community Titles", value: onOff(UserDefaults.standard.bool(forKey: DeArrow.enabledKey))),
             Row(label: "Last Download", value: DownloadStore.shared.lastReport ?? "None"),
             Row(label: "Crash and Hang Reports", value: "\(CrashReports.saved.count)")
         ] + state)

@@ -25,7 +25,7 @@ It contains no YouTube code and shows no ads.
 | 🚫 **No ads** | The app plays the video streams directly, so there are no ad breaks or banners. |
 | 🎧 **Background and Picture in Picture** | Audio keeps playing when you lock the phone, and the video can float over other apps. |
 | ⬇️ **Real downloads** | Videos download in the background and retry when YouTube's address expires. |
-| ⏭️ **SponsorBlock** | Sponsor segments are skipped using the community list. Dislike counts come from Return YouTube Dislike. Both are optional. |
+| ⏭️ **SponsorBlock** | Sponsor segments are skipped using the community list. Dislike counts come from Return YouTube Dislike. DeArrow can replace clickbait titles and thumbnails. All three are optional. |
 | 🧊 **Native iOS 26** | Liquid Glass buttons, zoom transitions, SF Symbols, system menus, tab bar and sheets. Dynamic Type, Dark Mode and Reduce Motion are respected. |
 
 ## Features
@@ -81,6 +81,7 @@ It contains no YouTube code and shows no ads.
 
 - The app has no analytics and no server of its own. It talks to YouTube directly.
 - SponsorBlock and Return YouTube Dislike receive the ID of each video you watch. Turn them off in Settings to stop that.
+- DeArrow is off by default. When on, its title list receives part of a code shared by many videos, and its thumbnail server receives the ID of each video that has a new thumbnail.
 - Crash reports stay on the phone until you choose to share them from Settings.
 
 ## Install
@@ -120,7 +121,7 @@ The `tweak/` and `scripts/` folders hold an older build that injected tweaks int
 - [SwiftyTube](https://github.com/686udjie/SwiftyTube): Swift client for YouTube's InnerTube API
 - [Trop](https://github.com/686udjie/Trop) and [Woof Music](https://github.com/LaskyWolf/WoofMusic): design and code this app is based on
 - [mpv](https://mpv.io) and [MPVKit](https://github.com/streamyfin/MPVKit): video playback
-- [SponsorBlock](https://sponsor.ajay.app) and [Return YouTube Dislike](https://returnyoutubedislike.com): community data
+- [SponsorBlock](https://sponsor.ajay.app), [DeArrow](https://dearrow.ajay.app) and [Return YouTube Dislike](https://returnyoutubedislike.com): community data
 
 ## License
 

@@ -496,7 +496,7 @@ private struct KeepWatchingCard: View {
                 HStack(spacing: Layout.rowSpacing) {
                     thumb(main).frame(width: Self.thumbWidth)
                     VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                        Text(main.video.title)
+                        VideoTitle(video: main.video)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
@@ -515,7 +515,7 @@ private struct KeepWatchingCard: View {
             }
             .buttonStyle(RowPressStyle())
             .accessibilityLabel("Resume \(main.video.title), \(timeLeft(main))")
-            .videoMenu(main.video)
+            .videoMenu(main.video, background: Color(.secondarySystemBackground))
 
             let others = videos.filter { $0.video.videoId != main.video.videoId }
             if !others.isEmpty {
@@ -1081,7 +1081,7 @@ struct VideoRow: View {
                 Button(action: onPlay) {
                     HStack(spacing: 0) {
                         VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                            Text(video.title)
+                            VideoTitle(video: video)
                                 .font(.subheadline.weight(.medium))
                                 .lineLimit(2, reservesSpace: isNarrow)
                                 .multilineTextAlignment(.leading)
@@ -1267,7 +1267,7 @@ struct CompactVideoRow: View {
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                 .videoZoomSource(video.videoId)
             VStack(alignment: .leading, spacing: 2) {
-                Text(video.title)
+                VideoTitle(video: video)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -1449,11 +1449,30 @@ struct Thumbnail: View {
     var aspect: CGFloat = 16 / 9
     var showsDownload = true
     var maxPixels = ImageStore.feedPixels
+    /// Off for upright Shorts covers, because DeArrow's pictures are wide frames of the video.
+    var allowsDeArrow = true
+    @AppStorage(DeArrow.enabledKey) private var isDeArrowOn = false
+    @State private var didAsk = false
+
+    private var usesDeArrow: Bool { allowsDeArrow && isDeArrowOn }
+
+    /// Waits for DeArrow's answer, so YouTube's picture isn't downloaded just to be replaced.
+    private var shownURL: String? {
+        let own = url ?? YouTubeVideo.cover(of: videoId)
+        guard usesDeArrow else { return own }
+        guard let branding = DeArrow.cached(videoId) else { return didAsk ? own : nil }
+        return branding.thumbnailTime.map { DeArrow.thumbnail(of: videoId, at: $0) } ?? own
+    }
 
     var body: some View {
         Color(.secondarySystemFill)
             .aspectRatio(aspect, contentMode: .fit)
-            .overlay { CachedImage(url: url ?? YouTubeVideo.cover(of: videoId), maxPixels: maxPixels) }
+            .overlay { CachedImage(url: shownURL, maxPixels: maxPixels) }
+            .task(id: usesDeArrow ? videoId : "") {
+                didAsk = false
+                if usesDeArrow { _ = await DeArrow.branding(of: videoId) }
+                didAsk = true
+            }
             .overlay(alignment: .topTrailing) {
                 if showsDownload { DownloadedBadge(videoId: videoId) }
             }
@@ -1501,7 +1520,7 @@ private struct ShortCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: Self.coverAspect, maxPixels: Self.coverPixels)
+            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, aspect: Self.coverAspect, maxPixels: Self.coverPixels, allowsDeArrow: false)
                 .fadesAtBottom()
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
                 .videoZoomSource(video.videoId)
@@ -1660,7 +1679,7 @@ private struct NewVideoRibbon: View {
                     HStack(spacing: Layout.chipSpacing) {
                         Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
                             .overlay(Circle().stroke(cardColor, lineWidth: 2))
-                        Text(video.title)
+                        VideoTitle(video: video)
                             .font(.caption.weight(.bold))
                             .lineLimit(2, reservesSpace: true)
                             .multilineTextAlignment(.leading)
@@ -1683,7 +1702,7 @@ private struct NewVideoRibbon: View {
             .animation(.easeOut(duration: 0.3), value: tint)
         }
         .buttonStyle(ZoomPressStyle())
-        .videoMenu(video)
+        .videoMenu(video, background: nil)
         .task {
             tint = await CoverTint.color(of: cover)
             if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }

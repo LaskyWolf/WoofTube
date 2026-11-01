@@ -3,8 +3,26 @@ import SwiftyTube
 
 extension View {
     /// The long press menu. Same layout as Woof Music: actions row, queue, then the rest.
-    func videoMenu(_ video: YouTubeVideo, feedback: [FeedbackAction] = [], collaborators: [Collaborator] = [], onRemove: (() -> Void)? = nil, onRemoveFromPlaylist: (() -> Void)? = nil) -> some View {
-        modifier(VideoMenuModifier(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist))
+    /// `background` is what's behind the view; nil is for a view that fills its own shape.
+    func videoMenu(_ video: YouTubeVideo, feedback: [FeedbackAction] = [], collaborators: [Collaborator] = [], background: Color? = Color(.systemBackground), onRemove: (() -> Void)? = nil, onRemoveFromPlaylist: (() -> Void)? = nil) -> some View {
+        modifier(VideoMenuModifier(video: video, feedback: feedback, collaborators: collaborators, background: background, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist))
+    }
+
+    /// A long press lifts only what the view draws, so text would float over the blur. This
+    /// background matches what's behind the view, so it only shows once the view is lifted.
+    /// The margin goes back after the menu, so the layout doesn't change.
+    @ViewBuilder
+    func liftedMenu<Items: View>(background: Color? = Color(.systemBackground), @ViewBuilder items: () -> Items) -> some View {
+        if let background {
+            let shape = RoundedRectangle(cornerRadius: Layout.tileRadius, style: .continuous)
+            padding(Layout.rowPadding)
+                .background(background, in: shape)
+                .contentShape(.contextMenuPreview, shape)
+                .contextMenu(menuItems: items)
+                .padding(-Layout.rowPadding)
+        } else {
+            contextMenu(menuItems: items)
+        }
     }
 }
 
@@ -12,6 +30,7 @@ private struct VideoMenuModifier: ViewModifier {
     let video: YouTubeVideo
     let feedback: [FeedbackAction]
     let collaborators: [Collaborator]
+    let background: Color?
     let onRemove: (() -> Void)?
     let onRemoveFromPlaylist: (() -> Void)?
     @Environment(Router.self) private var router
@@ -19,7 +38,7 @@ private struct VideoMenuModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .contextMenu {
+            .liftedMenu(background: background) {
                 VideoMenuItems(video: video, feedback: feedback, collaborators: collaborators, onRemove: onRemove, onRemoveFromPlaylist: onRemoveFromPlaylist, router: router, showsPlaylists: $showsPlaylists)
             }
             .sheet(isPresented: $showsPlaylists) {

@@ -259,7 +259,7 @@ private struct SearchStart: View {
                 .accessibilityLabel("Remove from History")
                     .padding(.trailing, Layout.chipSpacing)
             }
-            .contextMenu {
+            .liftedMenu {
                 Button("Delete", systemImage: "trash", role: .destructive) { history.delete(query) }
             }
     }

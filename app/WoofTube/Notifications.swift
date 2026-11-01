@@ -252,7 +252,7 @@ private struct NotificationRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .contextMenu {
+        .liftedMenu {
             if let id = item.videoId {
                 VideoMenuItems(video: YouTubeVideo(videoId: id, title: item.videoTitle), router: router, showsPlaylists: $showsPlaylists)
             }

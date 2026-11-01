@@ -202,7 +202,7 @@ struct LibraryView: View {
                     }
                     .buttonStyle(RowPressStyle())
                     .padding(.horizontal, Layout.screenPadding)
-                    .contextMenu {
+                    .liftedMenu {
                         Button("Download", systemImage: "arrow.down.to.line") {
                             Task {
                                 downloads.download(await FeedModel.allVideos(ofPlaylist: playlist.playlistId), maxHeight: router.maxHeight)
@@ -474,7 +474,7 @@ private struct HistoryStrip: View {
                     .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
                     .downloadBadge(video.videoId)
                     .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
-                Text(video.title)
+                VideoTitle(video: video)
                     .font(.caption.weight(.medium))
                     // Every tile the same height: a lazy row measures only the tiles it has drawn so far.
                     .lineLimit(2, reservesSpace: true)

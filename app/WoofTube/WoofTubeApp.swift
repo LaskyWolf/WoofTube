@@ -46,6 +46,7 @@ struct WoofTubeApp: App {
                 SponsorBlock.selfCheck()
                 LockupDetails.selfCheck()
                 FeedParser.selfCheck()
+                DeArrow.selfCheck()
                 DiagnosticsSection.selfCheck()
                 CommentsPage.selfCheck()
                 VideoFlavor.selfCheck()

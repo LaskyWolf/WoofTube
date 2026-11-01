@@ -742,7 +742,7 @@ enum SponsorBlock {
         return segments(in: entries, videoId: videoId)
     }
 
-    private static func hashPrefix(of videoId: String) -> String {
+    static func hashPrefix(of videoId: String) -> String {
         SHA256.hash(data: Data(videoId.utf8)).prefix(2).map { String(format: "%02x", $0) }.joined()
     }
 

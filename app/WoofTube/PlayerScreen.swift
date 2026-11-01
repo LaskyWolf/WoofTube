@@ -1324,7 +1324,7 @@ private struct WatchDetailsView: View {
     private var infoHeader: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
             if let video = router.current {
-                Text(video.title)
+                VideoTitle(video: video)
                     .font(.title3.bold())
                     .fixedSize(horizontal: false, vertical: true)
             }
