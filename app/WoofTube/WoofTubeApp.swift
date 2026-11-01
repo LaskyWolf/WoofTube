@@ -37,6 +37,7 @@ struct WoofTubeApp: App {
                 await StreamCache.selfCheck()
                 CoverTint.selfCheck()
                 GlyphScript.selfCheck()
+                WatchSegments.selfCheck()
                 VideoFlavor.selfCheck()
                 #endif
             }

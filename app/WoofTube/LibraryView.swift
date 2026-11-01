@@ -116,7 +116,8 @@ struct LibraryView: View {
 
     private func loadPlaylists() async {
         let json = try? await InnerTubeClient.wooftube.browse(browseId: "FEplaylist_aggregation")
-        playlists = json.map { YouTubeFeedParser.playlists(in: $0) } ?? []
+        // A failed refresh leaves the list on screen.
+        if let json { playlists = YouTubeFeedParser.playlists(in: json) }
         isLoadingPlaylists = false
         for playlist in playlists where !LibraryPlaylists.isHidden(playlist.playlistId) {
             if await LibraryPlaylists.isMusicOnly(playlist) {

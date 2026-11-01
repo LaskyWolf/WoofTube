@@ -5,7 +5,6 @@ struct LoadedStream: @unchecked Sendable {
     let url: String
     let summary: String
     let captions: [YouTubeCaptionTrack]
-    let trackingURL: String?
     /// Separate files, which downloads and audio tracks need. HLS and combined streams have none.
     var videoURL: String?
     var audioURL: String?
@@ -15,7 +14,6 @@ struct LoadedStream: @unchecked Sendable {
     var client: YouTubeClient?
     var isLive = false
     /// Tells YouTube how much was watched, which is what shapes the recommendations.
-    var watchtimeURL: String?
     var title: String?
     var channelTitle: String?
     var channelId: String?
@@ -153,7 +151,6 @@ enum StreamLoader {
                     continue
                 }
                 let captions = YouTubeWatchParser.captionTracks(from: response)
-                let tracking = response.playbackTracking?.videostatsPlaybackUrl?.baseUrl
                 let details = response.videoDetails
                 // A live stream has no length, and mpv can only play it through HLS.
                 if details?.lengthSeconds == "0" {
@@ -162,7 +159,7 @@ enum StreamLoader {
                         attempts.append("\(client.clientName): live, but no HLS address")
                         continue
                     }
-                    return LoadedStream(url: hls, summary: "\(client.clientName) · Live HLS", captions: captions, trackingURL: tracking, isLive: true, title: details?.title, channelTitle: details?.author, channelId: details?.channelId)
+                    return LoadedStream(url: hls, summary: "\(client.clientName) · Live HLS", captions: captions, isLive: true, title: details?.title, channelTitle: details?.author, channelId: details?.channelId)
                 }
                 // The short side, so a vertical 1080x1920 Short counts as 1080p.
                 let formats = ((data.formats ?? []) + (data.adaptiveFormats ?? []))
@@ -176,21 +173,19 @@ enum StreamLoader {
                         url: StreamFallback.combineVideoAndAudio(videoURL: videoURL, audioURL: audioURL, duration: duration),
                         summary: "\(client.clientName) · \(min(video.width ?? 0, video.height ?? 0))p · \(video.codec)",
                         captions: captions,
-                        trackingURL: tracking,
                         videoURL: videoURL,
                         audioURL: audioURL,
                         videoSize: video.contentLength.flatMap(Int64.init),
                         audioSize: audio.contentLength.flatMap(Int64.init),
                         duration: duration,
                         client: client,
-                        watchtimeURL: response.playbackTracking?.videostatsWatchtimeUrl?.baseUrl,
                         title: details?.title,
                         channelTitle: details?.author,
                         channelId: details?.channelId
                     )
                 }
                 if let hls = data.hlsManifestUrl {
-                    return LoadedStream(url: hls, summary: "\(client.clientName) · HLS", captions: captions, trackingURL: tracking, title: details?.title, channelTitle: details?.author, channelId: details?.channelId)
+                    return LoadedStream(url: hls, summary: "\(client.clientName) · HLS", captions: captions, title: details?.title, channelTitle: details?.author, channelId: details?.channelId)
                 }
                 attempts.append("\(client.clientName): no direct streams")
             } catch {
@@ -210,8 +205,7 @@ enum StreamLoader {
             return LoadedStream(
                 url: result.muxedStreamUrl ?? result.streamUrl,
                 summary: "\(result.clientName) · \(result.muxedHeight ?? 0)p combined",
-                captions: captionsResponse.map { YouTubeWatchParser.captionTracks(from: $0) } ?? [],
-                trackingURL: nil
+                captions: captionsResponse.map { YouTubeWatchParser.captionTracks(from: $0) } ?? []
             )
         } catch {
             attempts.append("Fallback: \(error.localizedDescription)")
@@ -257,7 +251,7 @@ actor StreamCache {
 
     static func selfCheck() async {
         func stream(_ url: String, isLive: Bool = false) -> LoadedStream {
-            LoadedStream(url: url, summary: "", captions: [], trackingURL: nil, isLive: isLive)
+            LoadedStream(url: url, summary: "", captions: [], isLive: isLive)
         }
         let cache = StreamCache()
         _ = try? await cache.stream(videoId: "a", maxHeight: 1) { stream("first") }

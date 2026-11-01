@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import SwiftyTube
 
@@ -27,6 +28,8 @@ final class ShortsModel: ObservableObject {
     private var nextToken: String?
     private var isLoadingMore = false
     private var loadTask: Task<Void, Never>?
+    private var watchReporter: WatchReporter?
+    private var timeWatch: AnyCancellable?
 
     var currentVideo: YouTubeVideo? { shorts.first { $0.videoId == currentId } }
 
@@ -36,6 +39,7 @@ final class ShortsModel: ObservableObject {
         self.shorts = shorts.filter { seen.insert($0.videoId).inserted }
         self.currentId = startId
         self.player = player
+        timeWatch = player.clock.$time.sink { [weak self] time in self?.watchReporter?.tick(time) }
     }
 
     /// Does nothing when the page reopens on the Short that's already playing.
@@ -47,10 +51,14 @@ final class ShortsModel: ObservableObject {
 
     func cancel() {
         loadTask?.cancel()
+        watchReporter?.finish()
+        watchReporter = nil
     }
 
     private func play(_ video: YouTubeVideo) async {
         SeenVideos.mark(video.videoId)
+        watchReporter?.finish()
+        watchReporter = WatchReporter(videoId: video.videoId)
         if player.errorText != nil || errorText != nil { await StreamLoader.forget(videoId: video.videoId) }
         player.prepareForNewVideo()
         playingId = video.videoId
@@ -116,7 +124,7 @@ final class ShortsModel: ObservableObject {
             default: _ = try await tube.unlike(videoId: video.videoId)
             }
         } catch {
-            details?.likeStatus = previous
+            if playingId == video.videoId { details?.likeStatus = previous }
             errorText = error.localizedDescription
         }
     }

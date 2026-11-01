@@ -609,7 +609,8 @@ private final class DownloadSession: NSObject, URLSessionDownloadDelegate {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let name = task.taskDescription, let error, (error as? URLError)?.code != .cancelled else { return }
+        // A cancelled chunk that isn't in the current job is ignored by chunkFailed, so only unexpected ones count.
+        guard let name = task.taskDescription, let error else { return }
         Task { @MainActor in DownloadStore.shared.chunkFailed(name, error: error) }
     }
 

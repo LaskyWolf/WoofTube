@@ -130,7 +130,7 @@ struct PlayerOverlay: View {
                 onDragEnded: { value in finishMiniDrag(value, origin: origin, screen: screen) }
             )
 
-            CardEdgeProgress(clock: miniPlayerObject.clock, duration: miniPlayerObject.duration, radius: Self.cardRadius)
+            CardEdgeProgress(clock: miniPlayerObject.clock, player: miniPlayerObject, radius: Self.cardRadius)
         }
         .frame(width: miniCardWidth, height: miniCardHeight)
         .matchedTransitionSource(id: Self.zoomSource, in: zoom) { source in
@@ -662,9 +662,11 @@ private struct MiniGlyphLabelStyle: LabelStyle {
 /// Its own view, so only the line redraws as the time ticks.
 private struct CardEdgeProgress: View {
     @ObservedObject var clock: PlayerClock
-    let duration: Double
+    @ObservedObject var player: MpvPlayer
     let radius: CGFloat
     private static let lineHeight: CGFloat = 5
+
+    private var duration: Double { player.duration }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1215,6 +1217,26 @@ private struct RoutePicker: UIViewRepresentable {
     func updateUIView(_ view: AVRoutePickerView, context: Context) {}
 }
 
+private struct PlaybackFailure: View {
+    @ObservedObject var player: MpvPlayer
+    @Environment(Router.self) private var router
+
+    var body: some View {
+        if let failure = router.loadError ?? player.errorText {
+            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                if let video = router.current {
+                    Button("Try Again") { router.play(video) }
+                        .buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+}
+
 private struct WatchDetailsView: View {
     @Binding var showsComments: Bool
     @Environment(Router.self) private var router
@@ -1233,18 +1255,7 @@ private struct WatchDetailsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.sectionSpacing) {
             infoHeader
-            if let failure = router.loadError ?? router.player.errorText {
-                VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                    Label(failure, systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                    if let video = router.current {
-                        Button("Try Again") { router.play(video) }
-                            .buttonStyle(.bordered)
-                    }
-                }
-            }
+            PlaybackFailure(player: router.player)
             if let details = router.details {
                 descriptionCard(details)
                 if router.isLive, router.liveChatToken != nil {
@@ -1554,7 +1565,7 @@ private struct WatchDetailsView: View {
                     try await PlaylistActions.add(id, to: YouTubeFeeds.watchLaterPlaylistId)
                 }
             } catch {
-                router.setDetails { $0.isInWatchLater = isSaved }
+                if router.current?.videoId == id { router.setDetails { $0.isInWatchLater = isSaved } }
                 router.actionMessage = error.localizedDescription
             }
         }
@@ -1572,7 +1583,7 @@ private struct WatchDetailsView: View {
                 default: _ = try await tube.unlike(videoId: id)
                 }
             } catch {
-                router.setDetails { $0.likeStatus = previous }
+                if router.current?.videoId == id { router.setDetails { $0.likeStatus = previous } }
                 router.actionMessage = error.localizedDescription
             }
         }

@@ -54,10 +54,8 @@ struct YouTubeAPIError: LocalizedError {
 /// for are sent from here with the same headers as its WEB client.
 enum YouTubeAPI {
     static func post(_ endpoint: String, body: [String: Any]) async throws -> [String: Any] {
-        let tube = InnerTubeClient.wooftube
-        let auth = await tube.currentAuth()
+        let auth = await InnerTubeClient.wooftube.currentAuth()
         let client = YouTubeClient.web
-        let origin = YouTubeService.youtube.origin
 
         var clientContext: [String: Any] = [
             "clientName": client.clientName,
@@ -76,21 +74,9 @@ enum YouTubeAPI {
 
         var request = URLRequest(url: YouTubeService.youtube.baseURL.appendingPathComponent(endpoint))
         request.httpMethod = "POST"
-        request.httpShouldHandleCookies = false
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("\(client.clientId)", forHTTPHeaderField: "X-YouTube-Client-Name")
-        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
-        request.setValue(origin, forHTTPHeaderField: "X-Origin")
-        request.setValue(origin, forHTTPHeaderField: "Origin")
-        request.setValue(origin + "/", forHTTPHeaderField: "Referer")
-        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
-        request.setValue(auth.visitorData, forHTTPHeaderField: "X-Goog-Visitor-Id")
-        request.setValue(auth.cookies.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
-        if let sapisid = auth.sapisid {
-            request.setValue(SAPISIDAuth.authorizationHeader(sapisid: sapisid, origin: origin), forHTTPHeaderField: "Authorization")
-        }
+        signIn(&request, auth: auth)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -103,6 +89,31 @@ enum YouTubeAPI {
             throw YouTubeAPIError(errorDescription: JSON.text(JSON.first("feedback", in: json["actionResult"])) ?? "YouTube refused this action.")
         }
         return json
+    }
+
+    /// Opens one of the addresses YouTube gives for reporting playback.
+    static func ping(_ url: URL) async throws {
+        var request = URLRequest(url: url)
+        signIn(&request, auth: await InnerTubeClient.wooftube.currentAuth())
+        _ = try await URLSession.shared.data(for: request)
+    }
+
+    private static func signIn(_ request: inout URLRequest, auth: AuthState) {
+        let client = YouTubeClient.web
+        let origin = YouTubeService.youtube.origin
+        request.httpShouldHandleCookies = false
+        request.setValue("\(client.clientId)", forHTTPHeaderField: "X-YouTube-Client-Name")
+        request.setValue(client.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
+        request.setValue(origin, forHTTPHeaderField: "X-Origin")
+        request.setValue(origin, forHTTPHeaderField: "Origin")
+        request.setValue(origin + "/", forHTTPHeaderField: "Referer")
+        request.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("0", forHTTPHeaderField: "X-Goog-AuthUser")
+        request.setValue(auth.visitorData, forHTTPHeaderField: "X-Goog-Visitor-Id")
+        request.setValue(auth.cookies.map { "\($0.key)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        if let sapisid = auth.sapisid {
+            request.setValue(SAPISIDAuth.authorizationHeader(sapisid: sapisid, origin: origin), forHTTPHeaderField: "Authorization")
+        }
     }
 }
 

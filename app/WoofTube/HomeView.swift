@@ -40,6 +40,10 @@ final class FeedModel {
     private(set) var isLoading = false
     /// A filter was picked and its videos are on the way, so the old ones give way to the loading rows.
     private(set) var isSwitching = false
+    /// False while only the saved Home rows are showing.
+    private(set) var didLoadFresh = false
+    /// Each `load` gets a number, so an older answer knows it's too late.
+    private var loadGeneration = 0
     private(set) var errorText: String?
     private var nextToken: String?
     private var nextQuery: String?
@@ -84,14 +88,19 @@ final class FeedModel {
     }
 
     func load(_ source: FeedSource, keepChips: Bool = false) async {
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         defer {
-            isLoading = false
-            isSwitching = false
+            if generation == loadGeneration {
+                isLoading = false
+                isSwitching = false
+            }
         }
         do {
             let json = try await source.fetch()
             var page = await offMain { FeedParser.items(in: json) }
+            guard generation == loadGeneration else { return }
             isHome = source == .browse(YouTubeFeeds.home)
             if isHome {
                 let file = SavedHome.file
@@ -99,7 +108,10 @@ final class FeedModel {
             }
             if !keepChips { chips = Self.parseChips(json) }
             nextToken = YouTubeFeedParser.continuation(in: json)
-            if isHome { page = await freshHomeRows(from: page) }
+            if isHome {
+                page = await freshHomeRows(from: page)
+                guard generation == loadGeneration else { return }
+            }
             if items.isEmpty {
                 withAnimation(.easeOut(duration: 0.25)) { items = page }
             } else {
@@ -107,7 +119,9 @@ final class FeedModel {
             }
             if case .search(let query, _) = source { nextQuery = query } else { nextQuery = nil }
             errorText = nil
+            didLoadFresh = true
         } catch {
+            guard generation == loadGeneration else { return }
             errorText = error.localizedDescription
             if isSwitching { items = [] }
         }
@@ -115,8 +129,9 @@ final class FeedModel {
 
     func loadMore(after item: FeedItem) async {
         guard item.id == items.last?.id, !isLoading, nextToken != nil else { return }
+        let generation = loadGeneration
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == loadGeneration { isLoading = false } }
         let tube = InnerTubeClient.wooftube
         // A page of Home can hold only seen videos, and an empty result would stop the scrolling.
         for _ in 0...Self.pagesToSkip {
@@ -125,9 +140,10 @@ final class FeedModel {
             guard let json = try? await (nextQuery != nil
                 ? tube.search(query: nextQuery ?? "", continuation: token)
                 : tube.browse(continuation: token)) else {
-                nextToken = token
+                if generation == loadGeneration { nextToken = token }
                 return
             }
+            guard generation == loadGeneration else { return }
             let known = Set(items.map(\.id))
             let page = await offMain { FeedParser.items(in: json) }
             let added = (isHome ? SeenVideos.removing(from: page) : page).filter { !known.contains($0.id) }
@@ -396,8 +412,8 @@ struct HomeView: View {
             // Separate tasks, so each part of the page appears as soon as its own answer arrives.
             .task { await session.refreshUnseenNotifications() }
             .task {
-                guard model.items.isEmpty else { return }
-                await model.showSavedHome()
+                guard !model.didLoadFresh else { return }
+                if model.items.isEmpty { await model.showSavedHome() }
                 await model.load(.browse(YouTubeFeeds.home))
             }
             .task { if history.items.isEmpty { await history.load(.browse(YouTubeFeeds.history)) } }
@@ -1583,7 +1599,7 @@ private enum ShortAvatars {
     static func url(of videoId: String) async -> String? {
         if let url = known[videoId] { return url }
         guard let json = try? await InnerTubeClient.wooftube.next(videoId: videoId),
-              let url = WatchDetails(json: json, videoId: videoId).channelAvatar else { return nil }
+              let url = await offMain({ WatchDetails(json: json, videoId: videoId).channelAvatar }) else { return nil }
         known[videoId] = url
         return url
     }

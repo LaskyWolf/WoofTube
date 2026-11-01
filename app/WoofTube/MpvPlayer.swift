@@ -35,6 +35,8 @@ final class MpvPlayer: ObservableObject {
     }()
     /// Called on the main thread when a video plays to its end.
     var onEnded: (() -> Void)?
+    private var loadedURL: String?
+    private var hasEnded = false
 
     private let queue = DispatchQueue(label: "com.laskywolf.wooftube.mpv")
     private var mpv: OpaquePointer?
@@ -55,6 +57,8 @@ final class MpvPlayer: ObservableObject {
     }
 
     func load(url: String, start: Double = 0) {
+        loadedURL = url
+        hasEnded = false
         loadStarted = Date()
         errorText = nil
         isBuffering = true
@@ -83,6 +87,10 @@ final class MpvPlayer: ObservableObject {
     }
 
     func setPaused(_ paused: Bool) {
+        if !paused, hasEnded, let loadedURL {
+            load(url: loadedURL)
+            return
+        }
         isPaused = paused
         setProperty("pause", paused ? "yes" : "no")
     }
@@ -90,6 +98,10 @@ final class MpvPlayer: ObservableObject {
     func seek(to seconds: Double) {
         // An invalid time would crash whatever draws it.
         guard seconds.isFinite, !isLiveStream else { return }
+        if hasEnded, let loadedURL {
+            load(url: loadedURL, start: seconds)
+            return
+        }
         clock.time = seconds
         isBuffering = true
         command(["seek", String(seconds), "absolute"])
@@ -237,6 +249,7 @@ final class MpvPlayer: ObservableObject {
                 self?.handleRouteChange(note)
             },
             center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                guard self?.isVideoReady == true else { return }
                 self?.queue.async { self?.activateAudioSession() }
             },
             // iOS can take the video decoder away in the background, which leaves the picture black.
@@ -261,11 +274,12 @@ final class MpvPlayer: ObservableObject {
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         switch type {
         case .began:
-            wasPlayingBeforeInterruption = !isPaused && duration > 0
+            wasPlayingBeforeInterruption = !isPaused && isVideoReady
             if wasPlayingBeforeInterruption { setPaused(true) }
         case .ended:
             restoreAudio()
-            if wasPlayingBeforeInterruption { setPaused(false) }
+            let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init)
+            if wasPlayingBeforeInterruption, options?.contains(.shouldResume) == true { setPaused(false) }
             wasPlayingBeforeInterruption = false
         @unknown default:
             break
@@ -276,7 +290,7 @@ final class MpvPlayer: ObservableObject {
     private func handleRouteChange(_ note: Notification) {
         guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: raw),
-              duration > 0 else { return }
+              isVideoReady else { return }
         switch reason {
         case .oldDeviceUnavailable:
             setPaused(true)
@@ -342,7 +356,12 @@ final class MpvPlayer: ObservableObject {
             case MPV_EVENT_END_FILE:
                 guard let end = event.pointee.data?.load(as: mpv_event_end_file.self) else { continue }
                 if end.reason == MPV_END_FILE_REASON_EOF {
-                    player?.publish { $0.onEnded?() }
+                    player?.publish {
+                        $0.hasEnded = true
+                        $0.isPaused = true
+                        $0.isBuffering = false
+                        $0.onEnded?()
+                    }
                 }
                 guard end.reason == MPV_END_FILE_REASON_ERROR else { continue }
                 let message = String(cString: mpv_error_string(end.error))

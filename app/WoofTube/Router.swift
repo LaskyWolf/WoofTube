@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import MediaPlayer
 import SwiftUI
@@ -110,8 +111,7 @@ final class Router {
     private var loadTask: Task<Void, Never>?
     private var didCreateShortsWindow = false
     private var wasInBackground = false
-    private var pendingWatchtime: String?
-    private static let watchedAfterSeconds = 30.0
+    private var watchReporter: WatchReporter?
     private(set) var isLive = false {
         didSet { player.isLiveStream = isLive }
     }
@@ -205,12 +205,15 @@ final class Router {
     }
 
     private func refillQueue() {
-        guard queue.count < Self.playlistRefill, let model = playlistModel, model.hasMore, let last = model.items.last else { return }
-        let known = Set(model.videos.map(\.videoId))
+        guard queue.count < Self.playlistRefill, let model = playlistModel else { return }
         Task {
-            await model.loadMore(after: last)
+            if model.hasMore, let last = model.items.last { await model.loadMore(after: last) }
             guard playlistModel === model else { return }
-            queue += model.videos.filter { !known.contains($0.videoId) && !$0.isShort }
+            // Carries on after the last one already lined up, including pages the playlist screen loaded.
+            let videos = model.videos.filter { !$0.isShort }
+            let lined = Set(queue.map(\.videoId) + [current?.videoId].compactMap { $0 })
+            guard let index = videos.lastIndex(where: { lined.contains($0.videoId) }) else { return }
+            queue += videos[(index + 1)...]
         }
     }
 
@@ -359,7 +362,7 @@ final class Router {
     func changeQuality(to height: Int) {
         maxHeight = height
         guard let current else { return }
-        startStream(videoId: current.videoId, start: player.time, isNewPlayback: false)
+        startStream(videoId: current.videoId, start: isLive ? 0 : player.time, isNewPlayback: false)
     }
 
     func close() {
@@ -372,9 +375,12 @@ final class Router {
         playlistTitle = nil
         playlistModel = nil
         isExpanded = false
+        watchReporter?.finish()
+        watchReporter = nil
         player.stop()
         sleepTimer.cancel()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     func selectCaption(_ track: YouTubeCaptionTrack?) {
@@ -382,10 +388,11 @@ final class Router {
         captionCues = []
         UserDefaults.standard.set(track?.languageCode, forKey: Self.captionLanguageKey)
         guard let track else { return }
+        let videoId = current?.videoId
         Task {
             do {
                 let cues = try await CaptionLoader.cues(for: track)
-                guard selectedCaption == track.languageCode else { return }
+                guard selectedCaption == track.languageCode, current?.videoId == videoId else { return }
                 captionCues = cues
                 if cues.isEmpty { actionMessage = "YouTube returned no captions for this language." }
             } catch {
@@ -425,14 +432,10 @@ final class Router {
     private func playbackTick(_ time: Double) {
         guard let current, player.duration > 0 else { return }
         WatchPositions.save(videoId: current.videoId, time: time, duration: player.duration)
+        watchReporter?.tick(time)
         // Leaves out the end, because the seek below lands there and calls this again at once.
         if let segment = sponsorSegments.first(where: { time >= $0.lowerBound && time < $0.upperBound }) {
             player.seek(to: segment.upperBound)
-        }
-        if time >= Self.watchedAfterSeconds, let url = pendingWatchtime {
-            pendingWatchtime = nil
-            let seconds = Int(time)
-            Task { try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: "\(url)&st=0&et=\(seconds)&cmt=\(seconds)&el=detailpage", client: .web) }
         }
     }
 
@@ -450,7 +453,10 @@ final class Router {
         loadError = nil
         captions = []
         isLive = false
-        if isNewPlayback { pendingWatchtime = nil }
+        if isNewPlayback {
+            watchReporter?.finish()
+            watchReporter = WatchReporter(videoId: videoId)
+        }
         loadTask = Task {
             if let local = DownloadStore.shared.stream(videoId: videoId) {
                 streamSummary = "Downloaded"
@@ -468,7 +474,6 @@ final class Router {
                 selectedAudioTrack = nil
                 streamSummary = stream.summary
                 isLive = stream.isLive
-                if isNewPlayback, !SearchSettings.isIncognito { pendingWatchtime = stream.watchtimeURL }
                 captions = stream.captions
                 restoreCaption()
                 player.load(url: stream.url, start: start)
@@ -485,9 +490,6 @@ final class Router {
                     let found = await StreamLoader.storyboard(videoId: videoId)
                     guard !Task.isCancelled else { return }
                     storyboard = found
-                }
-                if isNewPlayback, !SearchSettings.isIncognito, let tracking = stream.trackingURL {
-                    try? await InnerTubeClient.wooftube.registerPlayback(trackingUrl: tracking, client: .web)
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -526,18 +528,20 @@ final class Router {
         }
     }
 
+    private var activePlayer: MpvPlayer { shortsModel?.player ?? player }
+
     private func setUpRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
-        center.playCommand.addTarget { [player] _ in
-            player.setPaused(false)
+        center.playCommand.addTarget { [weak self] _ in
+            self?.activePlayer.setPaused(false)
             return .success
         }
-        center.pauseCommand.addTarget { [player] _ in
-            player.setPaused(true)
+        center.pauseCommand.addTarget { [weak self] _ in
+            self?.activePlayer.setPaused(true)
             return .success
         }
-        center.togglePlayPauseCommand.addTarget { [player] _ in
-            player.togglePause()
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.activePlayer.togglePause()
             return .success
         }
         center.changePlaybackPositionCommand.addTarget { [player] event in
@@ -546,8 +550,10 @@ final class Router {
             return .success
         }
         nowPlayingSubscriptions = [
-            player.$duration.sink { [weak self] _ in self?.updateNowPlaying() },
-            player.$isPaused.sink { [weak self] _ in self?.updateNowPlaying() },
+            // These fire just before the value changes, so the update waits for the next turn.
+            player.$duration.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateNowPlaying() },
+            player.$isPaused.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateNowPlaying() },
+            player.$isBuffering.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateNowPlaying() },
             // A stream that won't play shouldn't come back from the cache when the video is opened again.
             player.$errorText.compactMap { $0 }.sink { [weak self] _ in
                 guard let videoId = self?.current?.videoId else { return }

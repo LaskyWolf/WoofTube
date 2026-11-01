@@ -58,8 +58,10 @@ struct VideoMenuItems: View {
         .controlGroupStyle(.compactMenu)
 
         Section {
-            Button("Play Next", systemImage: "text.insert") { router.playNext(video) }
-            Button("Add to Queue", systemImage: "text.append") { router.addToQueue(video) }
+            if !video.isShort {
+                Button("Play Next", systemImage: "text.insert") { router.playNext(video) }
+                Button("Add to Queue", systemImage: "text.append") { router.addToQueue(video) }
+            }
         }
 
         Section {
