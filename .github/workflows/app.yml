@@ -1,12 +1,6 @@
 name: Native app
 
 on:
-  push:
-    branches:
-      - native-app
-    paths:
-      - app/**
-      - .github/workflows/app.yml
   workflow_dispatch:
 
 jobs:
