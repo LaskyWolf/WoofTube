@@ -113,7 +113,7 @@ Google can challenge or restrict an account used in an unofficial app, and posti
 
 ## Project status
 
-Version 1.0. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
+Version 1.1. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
 
 ## Credits
 
