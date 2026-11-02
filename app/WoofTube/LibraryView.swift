@@ -466,7 +466,7 @@ private struct HistoryStrip: View {
 
     private func tile(_ video: YouTubeVideo) -> some View {
         Button {
-            router.play(video)
+            router.openVideo(video)
         } label: {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 VideoCover(video: video)

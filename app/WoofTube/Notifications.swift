@@ -145,7 +145,7 @@ struct NotificationsView: View {
             }
         }
         if let id = item.videoId {
-            router.play(YouTubeVideo(videoId: id, title: item.videoTitle, thumbnailURL: item.thumbnail))
+            router.openVideo(YouTubeVideo(videoId: id, title: item.videoTitle, thumbnailURL: item.thumbnail))
         }
     }
 

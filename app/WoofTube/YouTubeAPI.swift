@@ -92,6 +92,23 @@ enum YouTubeAPI {
         return json
     }
 
+    /// Gives up quickly and says no, because the video is waiting to open.
+    static func isShort(videoId: String) async -> Bool {
+        await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                guard let json = try? await post("player", body: ["videoId": videoId]) else { return false }
+                return JSON.first("isShortsEligible", in: json) as? Bool ?? false
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(1.5))
+                return nil
+            }
+            let answer = await group.next() ?? nil
+            group.cancelAll()
+            return answer ?? false
+        }
+    }
+
     /// Turns a path such as /@handle into the channel's id.
     static func channelId(at path: String) async throws -> String {
         let json = try? await post("navigation/resolve_url", body: ["url": "https://www.youtube.com" + path])

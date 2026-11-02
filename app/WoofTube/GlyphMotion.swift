@@ -444,7 +444,7 @@ struct ClockGlyph: View {
             if isSaved {
                 Circle().fill(.tint)
             } else {
-                Circle().stroke(Color(.label), lineWidth: 2)
+                Circle().strokeBorder(Color(.label), lineWidth: 2)
             }
             hand(length: Self.size * 0.36, angle: minuteAngle)
             hand(length: Self.size * 0.24, angle: 120 + minuteAngle / 12)

@@ -50,6 +50,9 @@ final class Router {
     var channelRoute: ChannelRoute?
     var channelPage: ChannelPageRoute?
     var pendingLink: YouTubeLink?
+    @ObservationIgnored private var shortCheck: Task<Void, Never>?
+    /// YouTube's longest Short, in seconds. Anything longer opens without asking.
+    private static let longestShort = 180
     var selectedTab = AppTab.home
     /// The open Shorts page. With `shortsModel` set and this nil, the Short is in the floating card.
     var shortsRoute: ShortsRoute?
@@ -147,9 +150,37 @@ final class Router {
         player.onEnded = { [weak self] in self?.playNextAfterEnd() }
     }
 
+    /// For a tap on a video. History and other lists can show a Short as a normal video, so YouTube is asked first.
+    func openVideo(_ video: YouTubeVideo) {
+        shortCheck?.cancel()
+        guard !video.isShort, !video.isLive, current?.videoId != video.videoId,
+              video.durationSeconds ?? 0 <= Self.longestShort,
+              DownloadStore.shared.stream(videoId: video.videoId) == nil else {
+            play(video)
+            return
+        }
+        shortCheck = Task {
+            let isShort = await YouTubeAPI.isShort(videoId: video.videoId)
+            guard !Task.isCancelled else { return }
+            var checked = video
+            checked.isShort = isShort
+            play(checked)
+        }
+    }
+
     func play(_ video: YouTubeVideo, expand: Bool = true) {
+        shortCheck?.cancel()
         if video.isShort {
             openShorts([video], start: video)
+            return
+        }
+        // The video already playing only comes back into view, unless it failed or finished.
+        if video.videoId == current?.videoId, loadError == nil, !player.hasEnded {
+            channelRoute = nil
+            if expand {
+                if !isExpanded { zoomSource = video.videoId }
+                isExpanded = true
+            }
             return
         }
         closeShorts()
@@ -230,6 +261,11 @@ final class Router {
     }
 
     func openShorts(_ videos: [YouTubeVideo], start: YouTubeVideo) {
+        if shortsModel?.currentId == start.videoId {
+            channelRoute = nil
+            if shortsRoute == nil { expandShorts() }
+            return
+        }
         close()
         channelRoute = nil
         let model = ShortsModel(shorts: videos, startId: start.videoId, player: shortsPlayer)
@@ -362,7 +398,7 @@ final class Router {
     func open(_ link: YouTubeLink) {
         switch link {
         case .video(let id):
-            play(YouTubeVideo(videoId: id, title: ""))
+            openVideo(YouTubeVideo(videoId: id, title: ""))
         case .short(let id):
             play(YouTubeVideo(videoId: id, title: "", thumbnailURL: "https://i.ytimg.com/vi/\(id)/frame0.jpg", isShort: true))
         case .channel(let id):

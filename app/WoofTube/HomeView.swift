@@ -573,7 +573,7 @@ private struct KeepWatchingCard: View {
         if let duration = entry.video.durationSeconds, let progress = entry.extras.progress {
             WatchPositions.seed(videoId: entry.video.videoId, time: progress * Double(duration))
         }
-        router.play(entry.video)
+        router.openVideo(entry.video)
     }
 
     private var loading: some View {
@@ -988,7 +988,7 @@ struct VideoButton: View {
         if let onPlay {
             onPlay()
         } else {
-            router.play(video)
+            router.openVideo(video)
         }
     }
 
@@ -1618,7 +1618,7 @@ private struct NewVideoRibbon: View {
     var body: some View {
         Button {
             SeenVideos.mark(video.videoId)
-            router.play(video)
+            router.openVideo(video)
         } label: {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 VStack(alignment: .leading, spacing: 0) {

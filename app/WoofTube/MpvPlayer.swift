@@ -36,7 +36,7 @@ final class MpvPlayer: ObservableObject {
     /// Called on the main thread when a video plays to its end.
     var onEnded: (() -> Void)?
     private var loadedURL: String?
-    private var hasEnded = false
+    private(set) var hasEnded = false
 
     private let queue = DispatchQueue(label: "com.laskywolf.wooftube.mpv")
     private var mpv: OpaquePointer?
