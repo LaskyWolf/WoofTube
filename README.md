@@ -114,8 +114,6 @@ Google can challenge or restrict an account used in an unofficial app, and posti
 
 Version 1.0. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
 
-The `tweak/` and `scripts/` folders hold an older build that injected tweaks into a decrypted IPA. It is not maintained.
-
 ## Credits
 
 - [SwiftyTube](https://github.com/686udjie/SwiftyTube): Swift client for YouTube's InnerTube API

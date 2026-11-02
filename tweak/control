@@ -1,9 +1,0 @@
-Package: com.laskywolf.wooftube
-Name: WoofTube
-Version: 0.1.0
-Architecture: iphoneos-arm
-Description: Removes clutter from YouTube, with native iOS settings.
-Maintainer: LaskyWolf
-Author: LaskyWolf
-Section: Tweaks
-Depends: mobilesubstrate
