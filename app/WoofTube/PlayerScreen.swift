@@ -254,6 +254,7 @@ struct WatchPage: View {
                 CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                 PlayerControls(player: router.player, sleepTimer: router.sleepTimer, isFullscreen: isFullscreen, fillsScreen: $fillsScreen)
+                SponsorSkipButton()
             }
         }
     }
@@ -682,11 +683,15 @@ struct ProgressBar: View {
     @Binding var progress: Double
     /// Where chapters start, from 0 to 1. The bar splits at each one.
     var marks: [Double] = []
+    /// Colored parts of the video, drawn over the bar.
+    var highlights: [BarHighlight] = []
     /// Shows the bar as thick as while scrubbing, for scrubbing that happens elsewhere.
     var isEmphasized = false
     let onEditingChanged: (Bool) -> Void
     @GestureState private var isScrubbing = false
     @State private var didStartEditing = false
+    /// A segment of a few seconds in a long video stays visible.
+    private static let minHighlightWidth: CGFloat = 2
 
     var body: some View {
         GeometryReader { geometry in
@@ -697,6 +702,12 @@ struct ProgressBar: View {
             ZStack(alignment: .leading) {
                 Rectangle().fill(.white.opacity(0.3)).frame(height: height)
                 Rectangle().fill(.tint).frame(width: trackWidth * min(max(progress, 0), 1), height: height)
+                ForEach(highlights) { highlight in
+                    Rectangle()
+                        .fill(highlight.color)
+                        .frame(width: max(trackWidth * (highlight.end - highlight.start), Self.minHighlightWidth), height: height)
+                        .offset(x: trackWidth * highlight.start)
+                }
             }
             .frame(height: height)
             .clipShape(BarSegments(marks: marks, position: progress, otherHeight: isThick ? 6 : 3))
@@ -787,6 +798,7 @@ private struct PlayerProgress: View {
     let isFullscreen: Bool
     let storyboard: Storyboard?
     let chapters: [Chapter]
+    let segments: [SponsorSegment]
     let onScrubbing: (Bool) -> Void
     private static let timeDrop: CGFloat = 5
     @State private var position = 0.0
@@ -796,6 +808,7 @@ private struct PlayerProgress: View {
         let total = max(duration, 1)
         let shownTime = isEditing ? position * total : clock.time
         let chapter = chapters.last { $0.start <= shownTime }
+        let segment = segments.first { $0.range.contains(shownTime) }
         VStack(spacing: 0) {
             HStack(alignment: .bottom) {
                 HStack(alignment: .bottom) {
@@ -810,6 +823,13 @@ private struct PlayerProgress: View {
                     }
                     if let chapter {
                         chapterMenu(current: chapter)
+                    }
+                    if let segment {
+                        HStack(spacing: Layout.chipSpacing / 2) {
+                            Circle().fill(segment.category.color).frame(width: 8, height: 8)
+                            Text(segment.category.title).font(.caption2.weight(.semibold))
+                        }
+                        .fixedSize()
                     }
                 }
                 // The buttons beside it need their 44 pt, so this reaches into the bar's empty space.
@@ -837,6 +857,7 @@ private struct PlayerProgress: View {
                 ProgressBar(
                     progress: Binding(get: { isEditing ? position : clock.time / total }, set: { position = $0 }),
                     marks: chapters.dropFirst().map { $0.start / total },
+                    highlights: segments.map { BarHighlight(id: $0.id, start: $0.range.lowerBound / total, end: min($0.range.upperBound / total, 1), color: $0.category.color) },
                     onEditingChanged: { editing in
                         if editing {
                             position = clock.time / total
@@ -1051,7 +1072,7 @@ private struct PlayerControls: View {
                 .labelStyle(PlayerGlyphLabelStyle(size: 34))
             }
             Spacer(minLength: 0)
-            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? []) { scrubbing in
+            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? [], segments: router.usesSponsorBlock ? router.sponsorSegments : []) { scrubbing in
                 if scrubbing {
                     hideTask?.cancel()
                 } else {

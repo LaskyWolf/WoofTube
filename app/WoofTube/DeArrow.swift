@@ -137,6 +137,103 @@ struct VideoTitle: View {
     }
 }
 
+/// Videos that keep their own cover while DeArrow is on: the person's choice, or a frame that doesn't exist.
+@Observable
+final class OriginalCovers {
+    static let shared = OriginalCovers()
+    private static let key = "originalCovers"
+    private var chosen = OriginalCovers.stored()
+    private var missing: Set<String> = []
+
+    private static func stored() -> Set<String> {
+        Set(ProfileStorage.defaults.stringArray(forKey: key) ?? [])
+    }
+
+    func reload() {
+        chosen = Self.stored()
+    }
+
+    func shows(_ videoId: String) -> Bool {
+        chosen.contains(videoId) || missing.contains(videoId)
+    }
+
+    func isChosen(_ videoId: String) -> Bool {
+        chosen.contains(videoId)
+    }
+
+    func isMissing(_ videoId: String) -> Bool {
+        missing.contains(videoId)
+    }
+
+    func toggle(_ videoId: String) {
+        if chosen.remove(videoId) == nil { chosen.insert(videoId) }
+        guard !SearchSettings.isIncognito else { return }
+        ProfileStorage.defaults.set(Array(chosen), forKey: Self.key)
+    }
+
+    func markMissing(_ videoId: String) {
+        if !missing.contains(videoId) { missing.insert(videoId) }
+    }
+}
+
+/// A triangle in the cover's corner, in the colors of DeArrow's logo, when the cover isn't the video's own.
+struct DeArrowMark: View {
+    let videoId: String
+    let size: CGFloat
+    @AppStorage(DeArrow.enabledKey) private var isDeArrowOn = false
+    @State private var didAsk = false
+
+    private static let outer = Color(red: 0x12 / 255, green: 0x13 / 255, blue: 0xBD / 255)
+    private static let middle = Color(red: 0x88 / 255, green: 0xC9 / 255, blue: 0xF9 / 255)
+    private static let inner = Color(red: 0x0A / 255, green: 0x62 / 255, blue: 0xA5 / 255)
+
+    private var isShown: Bool {
+        guard isDeArrowOn, !OriginalCovers.shared.shows(videoId) else { return false }
+        guard let branding = DeArrow.cached(videoId) else { return didAsk }
+        return !branding.usesOwnCover
+    }
+
+    var body: some View {
+        // Something always draws here, because a task on nothing wouldn't start.
+        Color.clear
+            .overlay(alignment: .bottomTrailing) {
+                if isShown {
+                    ZStack(alignment: .bottomTrailing) {
+                        CornerTriangle().fill(Self.outer).frame(width: size, height: size)
+                        CornerTriangle().fill(Self.middle).frame(width: size * 0.68, height: size * 0.68)
+                        CornerTriangle().fill(Self.inner).frame(width: size * 0.38, height: size * 0.38)
+                    }
+                    .accessibilityElement()
+                    .accessibilityLabel("Community cover")
+                }
+            }
+            .allowsHitTesting(false)
+            .task(id: isDeArrowOn ? videoId : "") {
+                didAsk = false
+                if isDeArrowOn { _ = await DeArrow.branding(of: videoId) }
+                didAsk = true
+            }
+    }
+}
+
+private struct CornerTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+extension View {
+    /// Goes after any fade on the cover, and before its corners are rounded.
+    func deArrowMark(_ videoId: String, size: CGFloat = 22) -> some View {
+        overlay { DeArrowMark(videoId: videoId, size: size) }
+    }
+}
+
 /// A video's picture, a frame of the video when DeArrow is on: the community's, DeArrow's random one or YouTube's.
 struct VideoCoverImage: View {
     let url: String?
@@ -150,7 +247,7 @@ struct VideoCoverImage: View {
 
     /// Waits for DeArrow's answer, so YouTube's picture isn't downloaded just to be replaced.
     private var shownURL: String? {
-        guard isDeArrowOn else { return own }
+        guard isDeArrowOn, !OriginalCovers.shared.shows(videoId) else { return own }
         let frame = DeArrow.youTubeFrame(of: videoId, isShort: isShort)
         guard let branding = DeArrow.cached(videoId) else { return didAsk ? frame : nil }
         if branding.usesOwnCover { return own }
@@ -158,7 +255,7 @@ struct VideoCoverImage: View {
     }
 
     var body: some View {
-        CachedImage(url: shownURL, maxPixels: maxPixels, fallback: isDeArrowOn ? own : nil)
+        CachedImage(url: shownURL, maxPixels: maxPixels, onFailure: { OriginalCovers.shared.markMissing(videoId) })
             .task(id: isDeArrowOn ? videoId : "") {
                 didAsk = false
                 if isDeArrowOn { _ = await DeArrow.branding(of: videoId) }

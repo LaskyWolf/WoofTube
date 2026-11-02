@@ -246,7 +246,10 @@ private struct NotificationRow: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if let thumbnail = item.thumbnail, let id = item.videoId {
-                    Thumbnail(url: thumbnail, videoId: id, maxPixels: 400).frame(width: 112)
+                    Thumbnail(url: thumbnail, videoId: id, maxPixels: 400)
+                        .frame(width: 112)
+                        .deArrowMark(id, size: 16)
+                        .clipShape(.rect(cornerRadius: Layout.tileRadius))
                 }
             }
             .contentShape(.rect)

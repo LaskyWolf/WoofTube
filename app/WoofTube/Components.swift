@@ -319,8 +319,8 @@ enum ImageStore {
 struct CachedImage: View {
     let url: String?
     var maxPixels: Int? = ImageStore.feedPixels
-    /// Shown when `url` can't be loaded.
-    var fallback: String?
+    /// Called when `url` can't be loaded.
+    var onFailure: (() -> Void)?
     @State private var loaded: (url: String, image: UIImage)?
     @State private var didFail = false
 
@@ -362,12 +362,8 @@ struct CachedImage: View {
             } catch {
                 let isMissing = (error as? URLError)?.code == .fileDoesNotExist
                 guard !isMissing, !retryDelays.isEmpty else {
-                    if let fallback, let image = try? await ImageStore.load(fallback, maxPixels: maxPixels) {
-                        guard !Task.isCancelled else { return }
-                        withAnimation(.easeInOut(duration: 0.2)) { loaded = (url, image) }
-                    } else {
-                        didFail = true
-                    }
+                    didFail = true
+                    onFailure?()
                     return
                 }
                 try? await Task.sleep(for: retryDelays.removeFirst())

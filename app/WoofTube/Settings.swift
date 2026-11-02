@@ -246,15 +246,19 @@ private struct PlayerSettingsView: View {
                 Text("Autoplay starts the first Up Next video when one ends. Picture in Picture keeps the video in a small window when you leave the app.")
             }
             Section {
-                Toggle(isOn: Bindable(router).skipsSponsors) {
-                    Label {
-                        Text("Skip Sponsors")
-                    } icon: {
-                        Image(systemName: "forward.end").glyphMotion(router.skipsSponsors ? .dashAhead : .pop, trigger: router.skipsSponsors)
+                NavigationLink {
+                    SponsorBlockSettingsView()
+                } label: {
+                    LabeledContent {
+                        Text(router.usesSponsorBlock ? "On" : "Off")
+                    } label: {
+                        Label {
+                            Text("SponsorBlock")
+                        } icon: {
+                            Image(systemName: "forward.end").glyphMotion(router.usesSponsorBlock ? .dashAhead : .pop, trigger: router.usesSponsorBlock)
+                        }
                     }
                 }
-            } footer: {
-                Text("Uses SponsorBlock's community list. It receives part of a code shared by many videos, not which one you watch.")
             }
             Section {
                 Toggle("Community Titles", systemImage: "text.badge.checkmark", isOn: $usesDeArrow)

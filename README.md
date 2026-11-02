@@ -25,7 +25,7 @@ It contains no YouTube code and shows no ads.
 | 🚫 **No ads** | The app plays the video streams directly, so there are no ad breaks or banners. |
 | 🎧 **Background and Picture in Picture** | Audio keeps playing when you lock the phone, and the video can float over other apps. |
 | ⬇️ **Real downloads** | Videos download in the background and retry when YouTube's address expires. |
-| ⏭️ **SponsorBlock** | Sponsor segments are skipped using the community list. Dislike counts come from Return YouTube Dislike. DeArrow can replace clickbait titles and thumbnails. All three are optional. |
+| ⏭️ **SponsorBlock** | The seek bar marks sponsors and other segments from the community list, and each kind can skip, show a button or do nothing. Dislike counts come from Return YouTube Dislike. DeArrow can replace clickbait titles and thumbnails. All three are optional. |
 | 🧊 **Native iOS 26** | Liquid Glass buttons, zoom transitions, SF Symbols, system menus, tab bar and sheets. Dynamic Type, Dark Mode and Reduce Motion are respected. |
 
 ## Features

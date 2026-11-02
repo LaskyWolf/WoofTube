@@ -544,6 +544,7 @@ private struct KeepWatchingCard: View {
     private func thumb(_ entry: (video: YouTubeVideo, extras: VideoExtras)) -> some View {
         Thumbnail(url: entry.video.thumbnailURL, videoId: entry.video.videoId, isShort: entry.video.isShort)
             .overlay { WatchProgressLine(video: entry.video, extras: entry.extras) }
+            .deArrowMark(entry.video.videoId)
             .clipShape(.rect(cornerRadius: Layout.tileRadius))
             .videoZoomSource(entry.video.videoId)
     }
@@ -1065,6 +1066,7 @@ struct VideoRow: View {
                 Thumbnail(url: video.thumbnailURL, videoId: video.videoId, isShort: video.isShort, showsDownload: false)
                     .fadesAtBottom()
                     .overlay { WatchProgressLine(video: video, extras: extras) }
+                    .deArrowMark(video.videoId)
                     .overlay(alignment: .topTrailing) {
                         HStack(spacing: 0) {
                             DownloadedBadge(videoId: video.videoId)
@@ -1255,13 +1257,16 @@ struct WatchProgressLine: View {
 struct CompactVideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
+    @AppStorage(DeArrow.enabledKey) private var isDeArrowOn = false
 
     var body: some View {
         HStack(spacing: Layout.rowSpacing) {
             VideoCover(video: video, maxPixels: 336)
                 .frame(width: 112, height: 63)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
-                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
+                .deArrowMark(video.videoId, size: 16)
+                // The corner belongs to DeArrow's mark when it can appear.
+                .overlay(alignment: isDeArrowOn ? .bottomLeading : .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
                 .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras, isCompact: true) }
                 .downloadBadge(video.videoId)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
@@ -1504,6 +1509,7 @@ private struct ShortCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Thumbnail(url: video.thumbnailURL, videoId: video.videoId, isShort: true, aspect: Self.coverAspect, maxPixels: Self.coverPixels)
                 .fadesAtBottom()
+                .deArrowMark(video.videoId, size: 18)
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
                 .videoZoomSource(video.videoId)
             HStack(spacing: Layout.chipSpacing) {
@@ -1656,6 +1662,7 @@ private struct NewVideoRibbon: View {
                             LinearGradient(colors: [.clear, cardColor], startPoint: .top, endPoint: .bottom)
                                 .frame(height: Self.fadeHeight)
                         }
+                        .deArrowMark(video.videoId, size: 18)
                         .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                         .videoZoomSource(video.videoId)
                     HStack(spacing: Layout.chipSpacing) {

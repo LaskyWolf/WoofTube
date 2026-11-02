@@ -180,6 +180,7 @@ struct ShortsView: View {
     @State private var scrub: Scrub?
     @State private var lastSeek = 0.0
     @State private var pullDistance: CGFloat = 0
+    @State private var position = ScrollPosition(idType: String.self)
 
     private static let commentAreaHeight: CGFloat = 82
     /// Seconds the scrub must move before the video seeks again.
@@ -198,7 +199,18 @@ struct ShortsView: View {
         }
         .scrollTargetBehavior(.paging)
         .scrollIndicators(.hidden)
-        .scrollPosition(id: $model.currentId)
+        .scrollPosition($position)
+        // The scroll view has no size when the page opens, so it stays on the first Short until it's
+        // told again where to go. The first number is 0 until it has both its size and its pages.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.width > 0 ? $0.containerSize.width : 0 } action: { _, width in
+            if width > 0 { showCurrentPage() }
+        }
+        .onScrollPhaseChange { oldPhase, phase, context in
+            let width = context.geometry.containerSize.width
+            guard oldPhase.isScrolling, phase == .idle, width > 0 else { return }
+            let page = Int((context.geometry.contentOffset.x / width).rounded())
+            if model.shorts.indices.contains(page) { model.currentId = model.shorts[page].videoId }
+        }
         .scrollDisabled(scrub != nil)
         .ignoresSafeArea(edges: .top)
         .overlay(alignment: .top) { topBar }
@@ -255,8 +267,15 @@ struct ShortsView: View {
             }
             .presentationDetents([.medium, .large])
         }
-        .onAppear { model.playCurrent() }
+        .onAppear {
+            showCurrentPage()
+            model.playCurrent()
+        }
         .onChange(of: model.currentId) { model.playCurrent() }
+    }
+
+    private func showCurrentPage() {
+        if let id = model.currentId { position.scrollTo(id: id, anchor: .leading) }
     }
 
     private var topBar: some View {

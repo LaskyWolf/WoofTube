@@ -1,6 +1,5 @@
 import AVFoundation
 import Combine
-import CryptoKit
 import MediaPlayer
 import SwiftUI
 import SwiftyTube
@@ -83,8 +82,8 @@ final class Router {
     var autoplay: Bool {
         didSet { UserDefaults.standard.set(autoplay, forKey: Self.autoplayKey) }
     }
-    var skipsSponsors: Bool {
-        didSet { UserDefaults.standard.set(skipsSponsors, forKey: Self.skipsSponsorsKey) }
+    var usesSponsorBlock: Bool {
+        didSet { UserDefaults.standard.set(usesSponsorBlock, forKey: Self.usesSponsorBlockKey) }
     }
     private(set) var audioTracks: [AudioTrack] = []
     private(set) var selectedAudioTrack: String?
@@ -121,7 +120,7 @@ final class Router {
     private static let handoffLateSteps = 150
     private static let handoffUntouched = 15.0
     private static let pictureInPictureKey = "allowsPictureInPicture"
-    private static let skipsSponsorsKey = "skipsSponsors"
+    private static let usesSponsorBlockKey = "skipsSponsors"
     private static let captionLanguageKey = "captionLanguage"
     private var loadTask: Task<Void, Never>?
     private var didCreateShortsWindow = false
@@ -132,7 +131,10 @@ final class Router {
     }
     private(set) var liveChatToken: String?
     private var nowPlayingSubscriptions: [Any] = []
-    private var sponsorSegments: [ClosedRange<Double>] = []
+    private(set) var sponsorSegments: [SponsorSegment] = []
+    /// The segment playing now whose setting is to show a button.
+    private(set) var offeredSegment: SponsorSegment?
+    private var skippedSegments: Set<String> = []
     private var currentStream: LoadedStream?
     private var playlistModel: FeedModel?
     /// What the current video was started from, for downloading its neighbours.
@@ -149,7 +151,7 @@ final class Router {
         maxHeight = saved > 0 ? saved : 1080
         autoplay = defaults.object(forKey: Self.autoplayKey) as? Bool ?? true
         allowsPictureInPicture = defaults.object(forKey: Self.pictureInPictureKey) as? Bool ?? true
-        skipsSponsors = defaults.bool(forKey: Self.skipsSponsorsKey)
+        usesSponsorBlock = defaults.bool(forKey: Self.usesSponsorBlockKey)
         setUpRemoteCommands()
         player.onEnded = { [weak self] in self?.playNextAfterEnd() }
     }
@@ -178,6 +180,8 @@ final class Router {
         selectedCaption = nil
         captionCues = []
         sponsorSegments = []
+        offeredSegment = nil
+        skippedSegments = []
         player.expectedDuration = Double(video.durationSeconds ?? 0)
         player.prepareForNewVideo()
         // The frame taken above belongs to the previous video.
@@ -185,7 +189,7 @@ final class Router {
         startStream(videoId: video.videoId, start: WatchPositions.start(for: video), isNewPlayback: true)
         player.isLiveStream = video.isLive
         Task { await loadDetails(videoId: video.videoId) }
-        if skipsSponsors, !SearchSettings.isIncognito {
+        if usesSponsorBlock, !SearchSettings.isIncognito {
             Task {
                 let segments = await SponsorBlock.segments(videoId: video.videoId)
                 if current?.videoId == video.videoId { sponsorSegments = segments }
@@ -445,15 +449,25 @@ final class Router {
         }
     }
 
-    /// Saves the position and jumps over sponsor segments as playback advances.
+    /// Saves the position and handles SponsorBlock's segments as playback advances.
     private func playbackTick(_ time: Double) {
         guard let current, player.duration > 0 else { return }
         WatchPositions.save(videoId: current.videoId, time: time, duration: player.duration)
         watchReporter?.tick(time)
-        // Leaves out the end, because the seek below lands there and calls this again at once.
-        if let segment = sponsorSegments.first(where: { time >= $0.lowerBound && time < $0.upperBound }) {
-            player.seek(to: segment.upperBound)
+        let active = usesSponsorBlock ? sponsorSegments.filter { $0.range.contains(time) && !skippedSegments.contains($0.id) } : []
+        if let segment = active.first(where: { $0.category.action == .skip }) {
+            skip(segment)
+        } else {
+            let offer = active.first { $0.category.action == .ask }
+            if offeredSegment != offer { offeredSegment = offer }
         }
+    }
+
+    /// Each segment is skipped once, so scrubbing back into it plays it.
+    func skip(_ segment: SponsorSegment) {
+        skippedSegments.insert(segment.id)
+        offeredSegment = nil
+        player.seek(to: segment.range.upperBound)
     }
 
     private func loadMissingCaptions(videoId: String) async {
@@ -729,39 +743,6 @@ extension Int {
     /// "1.2K", like YouTube's like count.
     var compactText: String {
         formatted(.number.notation(.compactName))
-    }
-}
-
-/// SponsorBlock's community list of sponsor segments. It's opt-in, and it only receives the start
-/// of a code many videos share, so it answers for all of them and can't tell which one is playing.
-enum SponsorBlock {
-    static func segments(videoId: String) async -> [ClosedRange<Double>] {
-        guard let url = URL(string: "https://sponsor.ajay.app/api/skipSegments/\(hashPrefix(of: videoId))?category=sponsor"),
-              let (data, _) = try? await URLSession.shared.data(from: url),
-              let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
-        return segments(in: entries, videoId: videoId)
-    }
-
-    static func hashPrefix(of videoId: String) -> String {
-        SHA256.hash(data: Data(videoId.utf8)).prefix(2).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func segments(in entries: [[String: Any]], videoId: String) -> [ClosedRange<Double>] {
-        let entry = entries.first { $0["videoID"] as? String == videoId }
-        return (entry?["segments"] as? [[String: Any]] ?? []).compactMap { item in
-            guard let segment = item["segment"] as? [Double], segment.count == 2, segment[0] < segment[1] else { return nil }
-            return segment[0]...segment[1]
-        }
-    }
-
-    static func selfCheck() {
-        assert(hashPrefix(of: "dQw4w9WgXcQ") == "5f6b")
-        let entries: [[String: Any]] = [
-            ["videoID": "other", "segments": [["segment": [1.0, 2.0]]]],
-            ["videoID": "mine", "segments": [["segment": [3.0, 4.0]], ["segment": [5.0, 5.0]]]]
-        ]
-        assert(segments(in: entries, videoId: "mine") == [3.0...4.0])
-        assert(segments(in: entries, videoId: "none").isEmpty)
     }
 }
 

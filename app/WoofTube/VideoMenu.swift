@@ -61,6 +61,7 @@ struct VideoMenuItems: View {
     let router: Router
     @Binding var showsPlaylists: Bool
     @Environment(\.playlistVideos) private var playlistVideos
+    @AppStorage(DeArrow.enabledKey) private var isDeArrowOn = false
 
     var body: some View {
         ControlGroup {
@@ -80,6 +81,14 @@ struct VideoMenuItems: View {
             if !video.isShort {
                 Button("Play Next", systemImage: "text.insert") { router.playNext(video) }
                 Button("Add to Queue", systemImage: "text.append") { router.addToQueue(video) }
+            }
+        }
+
+        if isDeArrowOn, !OriginalCovers.shared.isMissing(video.videoId), DeArrow.cached(video.videoId)?.usesOwnCover != true {
+            Section {
+                Button(OriginalCovers.shared.isChosen(video.videoId) ? "Show Community Cover" : "Show Original Cover", systemImage: "photo") {
+                    OriginalCovers.shared.toggle(video.videoId)
+                }
             }
         }
 

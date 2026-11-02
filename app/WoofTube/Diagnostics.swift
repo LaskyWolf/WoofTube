@@ -248,7 +248,7 @@ struct DiagnosticsSection: Identifiable {
             Row(label: "Maximum Quality", value: "\(router.maxHeight)p"),
             Row(label: "Autoplay", value: onOff(router.autoplay)),
             Row(label: "Picture in Picture", value: onOff(router.allowsPictureInPicture)),
-            Row(label: "Skip Sponsors", value: onOff(router.skipsSponsors)),
+            Row(label: "SponsorBlock", value: onOff(router.usesSponsorBlock)),
             Row(label: "Dislike Counts", value: onOff(dislikes)),
             Row(label: "Community Titles", value: onOff(UserDefaults.standard.bool(forKey: DeArrow.enabledKey))),
             Row(label: "Last Download", value: DownloadStore.shared.lastReport ?? "None"),

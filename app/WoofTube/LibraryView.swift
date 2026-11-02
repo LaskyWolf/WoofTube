@@ -472,6 +472,7 @@ private struct HistoryStrip: View {
                 VideoCover(video: video)
                     .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
                     .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
+                    .deArrowMark(video.videoId, size: 18)
                     .downloadBadge(video.videoId)
                     .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
                 VideoTitle(video: video)
@@ -484,7 +485,7 @@ private struct HistoryStrip: View {
             .contentShape(.rect)
         }
         .buttonStyle(ZoomPressStyle())
-        .videoMenu(video)
+        .videoMenu(video, background: Color(.secondarySystemBackground))
     }
 }
 

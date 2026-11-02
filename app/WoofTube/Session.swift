@@ -131,6 +131,7 @@ final class Session: ObservableObject {
         ProfileStorage.activate(storage)
         WatchPositions.reload()
         SeenVideos.reload()
+        OriginalCovers.shared.reload()
         DownloadStore.shared.reloadForActiveProfile()
     }
 
