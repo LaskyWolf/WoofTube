@@ -469,7 +469,7 @@ private struct HistoryStrip: View {
             router.play(video)
         } label: {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                CoverImage(url: video.cover)
+                VideoCover(video: video)
                     .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
                     .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
                     .downloadBadge(video.videoId)

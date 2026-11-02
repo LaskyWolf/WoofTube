@@ -192,7 +192,7 @@ struct VideoPoster: View {
 
     var body: some View {
         if !player.isVideoReady, let video {
-            CoverImage(url: video.cover)
+            VideoCover(video: video)
         }
     }
 }
@@ -287,7 +287,10 @@ enum ImageStore {
     static func load(_ url: String, maxPixels: Int? = nil) async throws -> UIImage {
         // Some of YouTube's image addresses leave out the "https:".
         guard let address = URL(string: url.hasPrefix("//") ? "https:" + url : url) else { throw URLError(.badURL) }
-        let (data, _) = try await session.data(from: address)
+        let (data, response) = try await session.data(from: address)
+        // YouTube answers a missing picture with a 404 and a gray image.
+        let status = (response as? HTTPURLResponse)?.statusCode
+        if status == 204 || status == 404 { throw URLError(.fileDoesNotExist) }
         guard let image = await offMain({ decode(data, maxPixels: maxPixels) }) else { throw URLError(.cannotDecodeContentData) }
         let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
         cache.setObject(image, forKey: key(url, maxPixels), cost: cost)
@@ -316,6 +319,8 @@ enum ImageStore {
 struct CachedImage: View {
     let url: String?
     var maxPixels: Int? = ImageStore.feedPixels
+    /// Shown when `url` can't be loaded.
+    var fallback: String?
     @State private var loaded: (url: String, image: UIImage)?
     @State private var didFail = false
 
@@ -355,8 +360,14 @@ struct CachedImage: View {
                 withAnimation(.easeInOut(duration: 0.2)) { loaded = (url, image) }
                 return
             } catch {
-                guard !retryDelays.isEmpty else {
-                    didFail = true
+                let isMissing = (error as? URLError)?.code == .fileDoesNotExist
+                guard !isMissing, !retryDelays.isEmpty else {
+                    if let fallback, let image = try? await ImageStore.load(fallback, maxPixels: maxPixels) {
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) { loaded = (url, image) }
+                    } else {
+                        didFail = true
+                    }
                     return
                 }
                 try? await Task.sleep(for: retryDelays.removeFirst())

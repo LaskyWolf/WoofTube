@@ -281,9 +281,9 @@ struct ShortsView: View {
                 if video.videoId == model.playingId {
                     MpvVideoView(player: model.player, isActive: router.isShortsPageOnScreen, fills: true)
                     VideoPoster(player: model.player, video: video)
-                    MovingVideoCover(poster: video.thumbnailURL, fills: true)
+                    MovingVideoCover(video: video, fills: true)
                 } else {
-                    CoverImage(url: video.thumbnailURL)
+                    VideoCover(video: video)
                 }
                 PlayerTouchSurface(
                     onTap: { model.player.togglePause() },
@@ -380,7 +380,7 @@ struct ShortsView: View {
             Button {
                 showsDescription = true
             } label: {
-                Text(video.title)
+                VideoTitle(video: video)
                     .font(.subheadline)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)

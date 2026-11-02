@@ -82,7 +82,7 @@ struct PlayerOverlay: View {
         return ZStack(alignment: .topLeading) {
             AmbientImage(
                 player: miniPlayerObject,
-                poster: miniVideo.map { $0.cover },
+                video: miniVideo,
                 storyboard: isShort ? nil : router.storyboard,
                 isPaused: isShort ? router.isShortsPageOnScreen : router.isWatchPageOnScreen
             )
@@ -100,7 +100,7 @@ struct PlayerOverlay: View {
             MpvVideoView(player: miniPlayerObject, isActive: isShort ? !router.isShortsPageOnScreen : !router.isWatchPageOnScreen)
                 .id(isShort)
                 .overlay { VideoPoster(player: miniPlayerObject, video: miniVideo) }
-                .overlay { MovingVideoCover(poster: miniVideo?.thumbnailURL, fills: isShort) }
+                .overlay { MovingVideoCover(video: miniVideo, fills: isShort) }
                 .frame(width: miniSize.width, height: miniSize.height)
                 .background(.black)
                 .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
@@ -211,7 +211,7 @@ struct WatchPage: View {
                 Color(.systemBackground)
                 AmbientBackdrop(
                     player: router.player,
-                    poster: poster,
+                    video: router.current,
                     storyboard: router.storyboard,
                     isPaused: isFullscreen
                 )
@@ -241,10 +241,6 @@ struct WatchPage: View {
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
-    private var poster: String? {
-        router.current.map { $0.cover }
-    }
-
     private var video: some View {
         VideoArea(isFullscreen: isFullscreen) {
             ZStack {
@@ -253,7 +249,7 @@ struct WatchPage: View {
                     .background(.black)
                     .allowsHitTesting(false)
                     .ignoresSafeArea(edges: isFullscreen ? .all : [])
-                MovingVideoCover(poster: poster, fills: isFullscreen && fillsScreen)
+                MovingVideoCover(video: router.current, fills: isFullscreen && fillsScreen)
                     .ignoresSafeArea(edges: isFullscreen ? .all : [])
                 CaptionOverlay(clock: router.player.clock, cues: router.captionCues, isFullscreen: isFullscreen)
                     .frame(maxHeight: .infinity, alignment: .bottom)
@@ -265,7 +261,7 @@ struct WatchPage: View {
 
 /// The picture that was showing when the zoom started, over the video on both the page and the card.
 struct MovingVideoCover: View {
-    let poster: String?
+    let video: YouTubeVideo?
     var fills = false
     @Environment(Router.self) private var router
 
@@ -276,8 +272,8 @@ struct MovingVideoCover: View {
                     .overlay {
                         if let still = router.stillFrame {
                             Image(uiImage: still).resizable().aspectRatio(contentMode: fills ? .fill : .fit)
-                        } else {
-                            CachedImage(url: poster, maxPixels: 640)
+                        } else if let video {
+                            VideoCoverImage(url: video.thumbnailURL, videoId: video.videoId, isShort: video.isShort, maxPixels: 640)
                         }
                     }
                     .clipped()
@@ -376,14 +372,14 @@ struct PlayerDismissGesture: UIGestureRecognizerRepresentable {
 /// and fading into the page.
 private struct AmbientBackdrop: View {
     let player: MpvPlayer
-    let poster: String?
+    let video: YouTubeVideo?
     let storyboard: Storyboard?
     let isPaused: Bool
 
     private static let height: CGFloat = 560
 
     var body: some View {
-        AmbientImage(player: player, poster: poster, storyboard: storyboard, isPaused: isPaused)
+        AmbientImage(player: player, video: video, storyboard: storyboard, isPaused: isPaused)
         .frame(height: Self.height)
         .frame(maxWidth: .infinity)
         .clipped()
@@ -400,7 +396,7 @@ private struct AmbientBackdrop: View {
 struct AmbientImage: View {
     @ObservedObject private var clock: PlayerClock
     private let player: MpvPlayer
-    let poster: String?
+    let video: YouTubeVideo?
     let storyboard: Storyboard?
     /// Nothing can see it, so it keeps the frame it has.
     let isPaused: Bool
@@ -409,23 +405,23 @@ struct AmbientImage: View {
     private static let refresh = 3.0
     @Environment(\.scenePhase) private var scenePhase
 
-    init(player: MpvPlayer, poster: String?, storyboard: Storyboard?, isPaused: Bool) {
+    init(player: MpvPlayer, video: YouTubeVideo?, storyboard: Storyboard?, isPaused: Bool) {
         clock = player.clock
         self.player = player
-        self.poster = poster
+        self.video = video
         self.storyboard = storyboard
         self.isPaused = isPaused
     }
 
     var body: some View {
-        AmbientFrame(player: player, moment: isPaused || scenePhase != .active ? nil : (clock.time / Self.refresh).rounded(.down) * Self.refresh, poster: poster, storyboard: storyboard)
+        AmbientFrame(player: player, moment: isPaused || scenePhase != .active ? nil : (clock.time / Self.refresh).rounded(.down) * Self.refresh, video: video, storyboard: storyboard)
     }
 }
 
 private struct AmbientFrame: View {
     let player: MpvPlayer
     let moment: Double?
-    let poster: String?
+    let video: YouTubeVideo?
     let storyboard: Storyboard?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var frame: UIImage?
@@ -437,12 +433,12 @@ private struct AmbientFrame: View {
         ZStack {
             if let frame {
                 Image(uiImage: frame).resizable().scaledToFill().transition(.opacity).id(frame)
-            } else {
-                CachedImage(url: poster, maxPixels: 320)
+            } else if let video {
+                VideoCoverImage(url: video.thumbnailURL, videoId: video.videoId, isShort: video.isShort, maxPixels: 320)
             }
         }
-        .onChange(of: poster) { frame = nil }
-        .task(id: "\(poster ?? "")|\(moment ?? -1)|\(storyboard?.urlTemplate ?? "")") { await loadFrame() }
+        .onChange(of: video?.videoId) { frame = nil }
+        .task(id: "\(video?.videoId ?? "")|\(moment ?? -1)|\(storyboard?.urlTemplate ?? "")") { await loadFrame() }
     }
 
     private func loadFrame() async {

@@ -81,7 +81,7 @@ It contains no YouTube code and shows no ads.
 
 - The app has no analytics and no server of its own. It talks to YouTube directly.
 - SponsorBlock and Return YouTube Dislike receive the ID of each video you watch. Turn them off in Settings to stop that.
-- DeArrow is off by default. When on, its title list receives part of a code shared by many videos, and its thumbnail server receives the ID of each video that has a new thumbnail.
+- DeArrow is off by default. When on, its title list receives part of a code shared by many videos, and its thumbnail server receives the ID of each video with a new thumbnail, also in Incognito.
 - Crash reports stay on the phone until you choose to share them from Settings.
 
 ## Install

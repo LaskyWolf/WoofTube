@@ -259,7 +259,7 @@ private struct PlayerSettingsView: View {
             Section {
                 Toggle("Community Titles", systemImage: "text.badge.checkmark", isOn: $usesDeArrow)
             } footer: {
-                Text("Uses DeArrow's community titles and thumbnails in place of the originals. Its title list receives part of a code shared by many videos. Its thumbnail server receives the ID of each video that has a new thumbnail.")
+                Text("Uses DeArrow's community titles and thumbnails in place of the originals. Its title list receives part of a code shared by many videos. Its thumbnail server receives the ID of each video with a new thumbnail, also in Incognito.")
             }
             Section {
                 Toggle(isOn: $showsDislikeCounts) {
