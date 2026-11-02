@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftyTube
 
 /// DeArrow's community titles and thumbnails, shown in place of a video's own. It's opt-in. The title
 /// list only receives the start of a code many videos share, but the picture server gets the video's ID.
