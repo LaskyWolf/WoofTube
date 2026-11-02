@@ -90,14 +90,26 @@ final class SearchHistory: ObservableObject {
 /// spaces, and allows a small typo. YouTube's own search handles typos in the results.
 enum CreatorMatch {
     private static let shortestFuzzyName = 5
+    private static let mostShown = 6
 
     static func matches(query: String, name: String) -> Bool {
+        let initials = String(name.split { !($0.isLetter || $0.isNumber) }.compactMap(\.first))
         let query = normalized(query)
         let name = normalized(name)
         guard !query.isEmpty, !name.isEmpty else { return false }
+        if query.count >= 2, query == normalized(initials) { return true }
         if name.contains(query) { return query.count * 2 >= name.count }
         if query.contains(name) { return name.count >= 3 }
         return name.count >= shortestFuzzyName && distance(query, name) <= name.count / 3
+    }
+
+    /// The first channels, in YouTube's order, when at least one of them is what the search asked for.
+    static func pertinent(to query: String, in channels: [YouTubeChannel]) -> [YouTubeChannel] {
+        var seen = Set<String>()
+        let unique = channels.filter { channel in channel.channelId.map { seen.insert($0).inserted } ?? false }
+        let top = Array(unique.prefix(mostShown))
+        let isNamed = top.contains { matches(query: query, name: $0.title) || matches(query: query, name: $0.handle ?? "") }
+        return isNamed ? top : []
     }
 
     private static func normalized(_ text: String) -> String {
@@ -127,6 +139,15 @@ enum CreatorMatch {
         assert(matches(query: "beyonce", name: "Beyoncé"))
         assert(!matches(query: "cat", name: "Catfish and the Bottlemen"))
         assert(!matches(query: "how to cook", name: "Gordon Ramsay"))
+        assert(matches(query: "LTT", name: "Linus Tech Tips"))
+        assert(!matches(query: "L", name: "Linus"))
+
+        let linus = YouTubeChannel(channelId: "UC1", title: "Linus Tech Tips", thumbnailURL: nil)
+        let circuit = YouTubeChannel(channelId: "UC2", title: "ShortCircuit", thumbnailURL: nil)
+        let ltt = YouTubeChannel(channelId: "UC3", title: "LTT", thumbnailURL: nil)
+        let found = pertinent(to: "LTT", in: [linus, circuit, linus, ltt])
+        assert(found.map(\.title) == ["Linus Tech Tips", "ShortCircuit", "LTT"])
+        assert(pertinent(to: "how to cook", in: [linus, circuit]).isEmpty)
     }
 }
 
@@ -312,7 +333,7 @@ private struct SearchResults: View {
     @Environment(Router.self) private var router
     @State private var model = FeedModel()
     @State private var filter: Filter?
-    @State private var creator: YouTubeChannel?
+    @State private var creators: [YouTubeChannel] = []
 
     /// YouTube has no such filter, so this drops what its progress or this phone says was seen.
     private var keeps: ((FeedItem) -> Bool)? {
@@ -329,9 +350,7 @@ private struct SearchResults: View {
                 let tapped = Filter(rawValue: title)
                 filter = filter == tapped ? nil : tapped
             }
-            if let creator, let id = creator.channelId {
-                creatorCard(creator, id: id)
-            }
+            creatorCards
         }
         .task(id: filter) { await load() }
     }
@@ -344,36 +363,56 @@ private struct SearchResults: View {
         }
         if let keeps { await model.loadUntilMatch(keeps) }
         guard filter == nil else {
-            creator = nil
+            creators = []
             return
         }
-        let found = await findCreator()
+        let found = await findCreators()
         guard !Task.isCancelled else { return }
-        creator = found
-        if let found { model.remove(.channel(found)) }
+        creators = found
+        found.forEach { model.remove(.channel($0)) }
     }
 
-    /// YouTube doesn't always put the channel on the first page, so this also asks for channels.
-    private func findCreator() async -> YouTubeChannel? {
-        if let found = firstMatch(in: model.items) { return found }
-        guard let json = try? await FeedSource.search(query, params: Filter.channels.params).fetch() else { return nil }
-        return firstMatch(in: await offMain { FeedParser.items(in: json) })
-    }
-
-    private func firstMatch(in items: [FeedItem]) -> YouTubeChannel? {
-        for case .channel(let channel) in items where channel.channelId != nil {
-            if CreatorMatch.matches(query: query, name: channel.title)
-                || CreatorMatch.matches(query: query, name: channel.handle ?? "") {
-                return channel
-            }
+    /// The first page holds YouTube's top channel at most, so this also asks for channels.
+    private func findCreators() async -> [YouTubeChannel] {
+        var items = model.items
+        if let json = try? await FeedSource.search(query, params: Filter.channels.params).fetch() {
+            let found = await offMain { FeedParser.items(in: json) }
+            items += found
         }
-        return nil
+        let channels = items.compactMap { item -> YouTubeChannel? in
+            if case .channel(let channel) = item { return channel }
+            return nil
+        }
+        return CreatorMatch.pertinent(to: query, in: channels)
     }
 
-    private func creatorCard(_ channel: YouTubeChannel, id: String) -> some View {
+    @ViewBuilder
+    private var creatorCards: some View {
+        if creators.count == 1, let creator = creators.first {
+            creatorCard(creator)
+                .padding(.horizontal, Layout.screenPadding)
+                .padding(.vertical, Layout.chipSpacing)
+        } else if !creators.isEmpty {
+            ScrollView(.horizontal) {
+                HStack(spacing: Layout.chipSpacing) {
+                    ForEach(creators, id: \.channelId) { creator in
+                        creatorCard(creator)
+                            .containerRelativeFrame(.horizontal) { width, _ in width * 0.8 }
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollIndicators(.hidden)
+            .contentMargins(.horizontal, Layout.screenPadding, for: .scrollContent)
+            .padding(.vertical, Layout.chipSpacing)
+        }
+    }
+
+    private func creatorCard(_ channel: YouTubeChannel) -> some View {
         let shape = RoundedRectangle(cornerRadius: Layout.sheetRadius)
         return Button {
-            router.openChannelPage(id)
+            if let id = channel.channelId { router.openChannelPage(id) }
         } label: {
             HStack(spacing: Layout.menuRowSpacing) {
                 Avatar(url: channel.thumbnailURL, size: Layout.artMedium)
@@ -384,7 +423,7 @@ private struct SearchResults: View {
                     Text(channel.title)
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
+                        .lineLimit(creators.count > 1 ? 1 : 2)
                         .multilineTextAlignment(.leading)
                     if let detail = channel.subscriberCountText ?? channel.handle {
                         Text(detail)
@@ -403,7 +442,5 @@ private struct SearchResults: View {
             .contentShape(shape)
         }
         .buttonStyle(ZoomPressStyle(scale: 0.98))
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.vertical, Layout.chipSpacing)
     }
 }

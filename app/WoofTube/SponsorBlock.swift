@@ -16,7 +16,7 @@ enum SponsorAction: String, CaseIterable, Identifiable {
     }
 }
 
-/// The kinds of segment SponsorBlock's extension can skip, with its colors.
+/// The kinds of segment SponsorBlock's extension can skip, each with a pastel color in rainbow order.
 enum SponsorCategory: String, CaseIterable, Identifiable {
     case sponsor, selfpromo, interaction, intro, outro, preview, hook, filler
     case musicOfftopic = "music_offtopic"
@@ -53,15 +53,15 @@ enum SponsorCategory: String, CaseIterable, Identifiable {
 
     var color: Color {
         switch self {
-        case .sponsor: Color(red: 0x00 / 255, green: 0xD4 / 255, blue: 0x00 / 255)
-        case .selfpromo: Color(red: 0xFF / 255, green: 0xFF / 255, blue: 0x00 / 255)
-        case .interaction: Color(red: 0xCC / 255, green: 0x00 / 255, blue: 0xFF / 255)
-        case .intro: Color(red: 0x00 / 255, green: 0xFF / 255, blue: 0xFF / 255)
-        case .outro: Color(red: 0x02 / 255, green: 0x02 / 255, blue: 0xED / 255)
-        case .preview: Color(red: 0x00 / 255, green: 0x8F / 255, blue: 0xD6 / 255)
-        case .hook: Color(red: 0x39 / 255, green: 0x56 / 255, blue: 0x99 / 255)
-        case .filler: Color(red: 0x73 / 255, green: 0x00 / 255, blue: 0xFF / 255)
-        case .musicOfftopic: Color(red: 0xFF / 255, green: 0x99 / 255, blue: 0x00 / 255)
+        case .sponsor: Color(red: 0xFF / 255, green: 0x9A / 255, blue: 0xA2 / 255)
+        case .selfpromo: Color(red: 0xFF / 255, green: 0xB8 / 255, blue: 0x77 / 255)
+        case .interaction: Color(red: 0xFF / 255, green: 0xE5 / 255, blue: 0x8A / 255)
+        case .intro: Color(red: 0xA8 / 255, green: 0xE6 / 255, blue: 0xA1 / 255)
+        case .outro: Color(red: 0x86 / 255, green: 0xE3 / 255, blue: 0xCE / 255)
+        case .preview: Color(red: 0x8F / 255, green: 0xD3 / 255, blue: 0xFF / 255)
+        case .hook: Color(red: 0xA7 / 255, green: 0xB8 / 255, blue: 0xFF / 255)
+        case .filler: Color(red: 0xCD / 255, green: 0xA8 / 255, blue: 0xFF / 255)
+        case .musicOfftopic: Color(red: 0xFF / 255, green: 0xA8 / 255, blue: 0xE0 / 255)
         }
     }
 
@@ -203,9 +203,7 @@ private struct SponsorCategoryRow: View {
     }
 
     var body: some View {
-        Picker(selection: $action) {
-            ForEach(SponsorAction.allCases) { Text($0.title).tag($0) }
-        } label: {
+        VStack(alignment: .leading, spacing: 10) {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(category.title)
@@ -219,6 +217,12 @@ private struct SponsorCategoryRow: View {
                     .frame(width: 12, height: 12)
                     .overlay(Circle().stroke(.separator))
             }
+            Picker(category.title, selection: $action) {
+                ForEach(SponsorAction.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
         }
+        .listRowBackground(category.color.opacity(0.22))
     }
 }
