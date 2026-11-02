@@ -27,6 +27,7 @@ struct WoofTubeApp: App {
             .environmentObject(session)
             .environment(router)
             .environmentObject(settings)
+            .onOpenURL { router.receive($0) }
             .task {
                 SwiftyTubeLog.handler = { message, level in
                     if level == .error { FileLog.shared.append("swiftytube", "ERROR", message) }
@@ -50,6 +51,7 @@ struct WoofTubeApp: App {
                 DiagnosticsSection.selfCheck()
                 CommentsPage.selfCheck()
                 VideoFlavor.selfCheck()
+                YouTubeLink.selfCheck()
                 #endif
             }
             .alert("Session Expired", isPresented: $session.isExpired) {
@@ -177,6 +179,12 @@ struct RootTabs: View {
         }
         .routerPresentations(router, isActive: !router.isExpanded)
         .task { await Subscriptions.shared.load() }
+        // Waits here because a link can arrive while the app is still restoring the sign-in.
+        .task(id: router.pendingLink) {
+            guard let link = router.pendingLink else { return }
+            router.pendingLink = nil
+            router.open(link)
+        }
         .onChange(of: scenePhase) {
             router.sceneChanged(isBackground: scenePhase == .background)
             if scenePhase == .active { router.sceneBecameActive() }

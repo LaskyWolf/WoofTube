@@ -152,6 +152,7 @@ enum CreatorMatch {
 }
 
 struct SearchScreen: View {
+    @Environment(Router.self) private var router
     @StateObject private var history = SearchHistory()
     @AppStorage(SearchSettings.incognitoKey) private var isIncognito = false
     @State private var text = ""
@@ -172,10 +173,18 @@ struct SearchScreen: View {
             }
             .tabRoot(title: "Search", tab: .search, incognito: $isIncognito)
         }
-        .searchable(text: $text, isPresented: $isSearching, prompt: "Videos and channels")
+        .searchable(text: $text, isPresented: $isSearching, prompt: "Videos, channels or links")
         .searchFocused($isFieldFocused)
         .autocorrectionDisabled()
         .onSubmit(of: .search) { submit(text) }
+        // A pasted link opens straight away and stays out of recent searches.
+        .onChange(of: text) { _, pasted in
+            guard let link = YouTubeLink(text: pasted) else { return }
+            text = ""
+            submitted = nil
+            isFieldFocused = false
+            router.open(link)
+        }
         .onChange(of: isSearching) { _, searching in
             // The next visit opens on recent searches.
             if !searching {

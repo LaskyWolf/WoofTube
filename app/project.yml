@@ -43,6 +43,12 @@ targets:
       properties:
         CFBundleDisplayName: WoofTube
         UILaunchScreen: {}
+        CFBundleURLTypes:
+          - CFBundleURLName: com.laskywolf.wooftube.links
+            CFBundleURLSchemes:
+              - wooftube
+              - youtube
+              - vnd.youtube
         UIBackgroundModes:
           - audio
         UISupportedInterfaceOrientations:

@@ -63,6 +63,7 @@ It contains no YouTube code and shows no ads.
 - Google sign-in inside the app, with several accounts, each keeping its own data
 - Notification inbox with an unread badge
 - Search with suggestions and history, filters for Never Seen and Live videos, and an incognito mode that stops recording it
+- Opens YouTube links pasted in search, and `youtube://`, `vnd.youtube://` and `wooftube://` links from other apps
 
 ### Look
 - Accent colours that also change the app icon

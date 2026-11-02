@@ -92,6 +92,15 @@ enum YouTubeAPI {
         return json
     }
 
+    /// Turns a path such as /@handle into the channel's id.
+    static func channelId(at path: String) async throws -> String {
+        let json = try? await post("navigation/resolve_url", body: ["url": "https://www.youtube.com" + path])
+        guard let id = JSON.string("browseId", in: json?["endpoint"]), id.hasPrefix("UC") else {
+            throw YouTubeAPIError(errorDescription: "YouTube can't find this channel.")
+        }
+        return id
+    }
+
     /// Opens one of the addresses YouTube gives for reporting playback. These carry the sign-in,
     /// so they only ever go to YouTube itself and never follow a redirect elsewhere.
     static func ping(_ url: URL) async throws {

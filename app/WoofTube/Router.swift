@@ -49,6 +49,7 @@ final class Router {
     private(set) var queue: [YouTubeVideo] = []
     var channelRoute: ChannelRoute?
     var channelPage: ChannelPageRoute?
+    var pendingLink: YouTubeLink?
     var selectedTab = AppTab.home
     /// The open Shorts page. With `shortsModel` set and this nil, the Short is in the floating card.
     var shortsRoute: ShortsRoute?
@@ -349,6 +350,31 @@ final class Router {
         }
     }
 
+    /// A link from another app. Opening the app with no address is not an error.
+    func receive(_ url: URL) {
+        if let link = YouTubeLink(url: url) {
+            pendingLink = link
+        } else if url.host?.isEmpty == false || !url.path.isEmpty {
+            actionMessage = "WoofTube can't open this link."
+        }
+    }
+
+    func open(_ link: YouTubeLink) {
+        switch link {
+        case .video(let id):
+            play(YouTubeVideo(videoId: id, title: ""))
+        case .short(let id):
+            play(YouTubeVideo(videoId: id, title: "", thumbnailURL: "https://i.ytimg.com/vi/\(id)/frame0.jpg", isShort: true))
+        case .channel(let id):
+            openChannelPage(id)
+        case .channelPath(let path):
+            run {
+                let id = try await YouTubeAPI.channelId(at: path)
+                self.openChannelPage(id)
+            }
+        }
+    }
+
     /// A sheet, for a channel among many, as on the Home feed.
     func openChannel(_ channelId: String) {
         channelRoute = ChannelRoute(id: channelId)
@@ -577,6 +603,11 @@ final class Router {
         guard current?.videoId == videoId else { return }
         details = loaded
         WatchedChannels.mark(loaded.channelId)
+        // A video opened from a link starts with only its id.
+        if current?.title.isEmpty == true, let title = JSON.text(JSON.first("title", in: JSON.first("videoPrimaryInfoRenderer", in: json))) {
+            current = YouTubeVideo(videoId: videoId, title: title)
+            updateNowPlaying()
+        }
         liveChatToken = chatToken
         async let dislikes = DislikeCounts.fetch(videoId: videoId)
         async let comment = CommentsPage.topComment(token: loaded.commentsToken)
