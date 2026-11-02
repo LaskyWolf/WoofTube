@@ -52,6 +52,7 @@ struct WoofTubeApp: App {
                 CommentsPage.selfCheck()
                 VideoFlavor.selfCheck()
                 YouTubeLink.selfCheck()
+                StreamLoader.selfCheck()
                 #endif
             }
             .alert("Session Expired", isPresented: $session.isExpired) {

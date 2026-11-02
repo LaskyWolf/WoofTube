@@ -22,6 +22,7 @@ struct AudioTrack: Identifiable, Hashable {
     let id: String
     let name: String
     let url: String
+    let isOriginal: Bool
 }
 
 /// A grid of small frames from the video, shown above the bar while scrubbing.
@@ -89,14 +90,43 @@ enum StreamLoader {
             guard let audio = format["audioTrack"] as? [String: Any],
                   let id = audio["id"] as? String,
                   let name = audio["displayName"] as? String,
-                  let url = format["url"] as? String else { continue }
+                  let url = format["url"] as? String,
+                  format["isDrc"] as? Bool != true else { continue }
             let bitrate = format["bitrate"] as? Int ?? 0
             if bitrate > best[id]?.bitrate ?? -1 {
-                best[id] = (bitrate, AudioTrack(id: id, name: name, url: url))
+                best[id] = (bitrate, AudioTrack(id: id, name: name, url: url, isOriginal: audioTags(of: url).contains(originalTag)))
             }
         }
-        let tracks = best.values.map(\.track).sorted { $0.name < $1.name }
+        let tracks = best.values.map(\.track).sorted { ($0.isOriginal ? 0 : 1, $0.name) < ($1.isOriginal ? 0 : 1, $1.name) }
         return (tracks, JSON.string("spec", in: json["storyboards"]).flatMap(Storyboard.init(spec:)))
+    }
+
+    private static let originalTag = "acont=original"
+    private static let compressedTag = "drc=1"
+
+    /// What YouTube says about an audio file, kept in its address: `acont=dubbed-auto:lang=it`.
+    private static func audioTags(of url: String?) -> [String] {
+        let tags = url.flatMap(URLComponents.init(string:))?.queryItems?.first { $0.name == "xtags" }?.value
+        return tags?.components(separatedBy: ":") ?? []
+    }
+
+    /// A video with dubs lists every language side by side, so without this the choice falls on any of them.
+    /// Videos with one language have no such tag and are kept whole.
+    private static func originalAudio<Item>(in items: [Item], url: (Item) -> String?) -> [Item] {
+        let originals = items.filter { audioTags(of: url($0)).contains(originalTag) }
+        let uncompressed = originals.filter { !audioTags(of: url($0)).contains(compressedTag) }
+        return [uncompressed, originals].first { !$0.isEmpty } ?? items
+    }
+
+    static func selfCheck() {
+        func address(_ tags: String) -> String { "https://a.com/videoplayback?xtags=\(tags)&itag=251" }
+        let dub = address("acont%3Ddubbed-auto%3Alang%3Dit")
+        let original = address("acont%3Doriginal%3Alang%3Den")
+        let compressed = address("acont%3Doriginal%3Adrc%3D1%3Alang%3Den")
+        assert(audioTags(of: dub) == ["acont=dubbed-auto", "lang=it"])
+        assert(originalAudio(in: [dub, compressed, original], url: { $0 }) == [original])
+        assert(originalAudio(in: [dub, compressed], url: { $0 }) == [compressed])
+        assert(originalAudio(in: ["https://a.com/plain", dub], url: { $0 }) == ["https://a.com/plain", dub])
     }
 
     /// The clients tried first for streams can return no storyboard, so this asks the iOS client.
@@ -188,7 +218,7 @@ enum StreamLoader {
                     .filter { min($0.width ?? 0, $0.height ?? 0) <= maxHeight }
                 if let video = FormatSelector.bestVideoOnlyFormat(from: formats),
                    let videoURL = video.url,
-                   let audio = FormatSelector.bestAudioFormat(from: formats, preference: .high),
+                   let audio = FormatSelector.bestAudioFormat(from: originalAudio(in: formats, url: \.url), preference: .high),
                    let audioURL = audio.url {
                     let duration = response.videoDetails?.lengthSeconds.flatMap(Int.init)
                     return LoadedStream(

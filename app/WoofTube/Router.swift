@@ -553,14 +553,13 @@ final class Router {
                 player.note("Stream found in \(Date().timeIntervalSince(started).formatted(.number.precision(.fractionLength(1)))) s")
                 guard !Task.isCancelled else { return }
                 currentStream = stream
-                selectedAudioTrack = nil
                 streamSummary = stream.summary
                 isLive = stream.isLive
                 captions = stream.captions
                 restoreCaption()
                 let from = stream.isLive ? start : await handoffStart(from: start, isNewPlayback: isNewPlayback, duration: stream.duration)
                 guard !Task.isCancelled else { return }
-                player.load(url: stream.url, start: from)
+                player.load(url: playbackURL(of: stream), start: from)
                 if isNewPlayback, !stream.isLive { finishHandoff(videoId: videoId, local: start, startedAt: from, duration: stream.duration) }
                 updateNowPlaying()
                 await loadMissingCaptions(videoId: videoId)
@@ -569,6 +568,7 @@ final class Router {
                     let extras = await StreamLoader.extras(videoId: videoId, client: client)
                     guard !Task.isCancelled else { return }
                     audioTracks = extras.tracks
+                    if selectedAudioTrack == nil { selectedAudioTrack = extras.tracks.first(where: \.isOriginal)?.id }
                     storyboard = extras.storyboard
                 }
                 if storyboard == nil, !stream.isLive {
@@ -581,6 +581,13 @@ final class Router {
                 loadError = error.localizedDescription
             }
         }
+    }
+
+    /// Keeps a dub picked by hand when the stream reloads, such as after a quality change.
+    private func playbackURL(of stream: LoadedStream) -> String {
+        guard let track = audioTracks.first(where: { $0.id == selectedAudioTrack }), !track.isOriginal,
+              let videoURL = stream.videoURL else { return stream.url }
+        return StreamFallback.combineVideoAndAudio(videoURL: videoURL, audioURL: track.url, duration: stream.duration)
     }
 
     /// Captions stay on for the next video, in the language last picked.
