@@ -42,6 +42,8 @@ targets:
       path: WoofTube/Info.plist
       properties:
         CFBundleDisplayName: WoofTube
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         CFBundleURLTypes:
           - CFBundleURLName: com.laskywolf.wooftube.links
