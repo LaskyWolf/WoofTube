@@ -393,7 +393,7 @@ struct ShortsView: View {
                     }
                     .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZoomPressStyle())
             }
             Button {
                 showsDescription = true
@@ -405,7 +405,7 @@ struct ShortsView: View {
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(.rect)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ZoomPressStyle(scale: 0.98))
             if isCurrent, let failure = model.errorText {
                 Text(failure).font(.footnote).foregroundStyle(.red)
             }

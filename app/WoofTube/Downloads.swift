@@ -681,7 +681,7 @@ struct LibraryDownloadCard: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 44, height: 44)
                     .contentShape(.rect)
-                    .buttonStyle(.plain)
+                    .buttonStyle(ZoomPressStyle())
                 }
             }
             .padding(.horizontal, Layout.screenPadding)

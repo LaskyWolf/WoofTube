@@ -9,16 +9,40 @@ struct GlassPressStyle: ButtonStyle {
     }
 }
 
-/// Dims and shrinks at the touch, then eases back with no bounce.
+/// Woof Music's press feedback: shrinks while pressed and stays a moment, so a quick tap still shows it.
 struct ZoomPressStyle: ButtonStyle {
-    var scale: CGFloat = 0.97
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var scale: CGFloat = 0.94
 
     func makeBody(configuration: Configuration) -> some View {
+        ZoomPressLabel(configuration: configuration, scale: scale)
+    }
+}
+
+private struct ZoomPressLabel: View {
+    private static let linger: Duration = .milliseconds(200)
+
+    let configuration: ButtonStyleConfiguration
+    let scale: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var zoomed = false
+    @State private var release: Task<Void, Never>?
+
+    var body: some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? scale : 1)
-            .opacity(configuration.isPressed ? 0.82 : 1)
-            .animation(configuration.isPressed ? .easeOut(duration: 0.1) : .smooth(duration: 0.26), value: configuration.isPressed)
+            .scaleEffect(zoomed && !reduceMotion ? scale : 1)
+            .opacity(zoomed && reduceMotion ? 0.82 : 1)
+            .animation(.spring(duration: 0.2, bounce: 0.3), value: zoomed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                release?.cancel()
+                if pressed {
+                    zoomed = true
+                } else {
+                    release = Task {
+                        try? await Task.sleep(for: Self.linger)
+                        if !Task.isCancelled { zoomed = false }
+                    }
+                }
+            }
     }
 }
 

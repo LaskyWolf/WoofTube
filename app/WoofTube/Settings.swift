@@ -326,7 +326,7 @@ private struct AppearanceSettingsView: View {
                             .frame(minHeight: 44)
                             .contentShape(.rect)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(ZoomPressStyle())
                         .accessibilityLabel(preset.name)
                     }
                 }

@@ -616,7 +616,7 @@ private struct MiniControls: View {
                 Button("Close", systemImage: "xmark", action: onClose)
             }
             .labelStyle(MiniGlyphLabelStyle())
-            .buttonStyle(.plain)
+            .buttonStyle(ZoomPressStyle())
             .frame(maxHeight: .infinity)
         }
         .contentShape(.rect)
@@ -1261,7 +1261,7 @@ private struct WatchDetailsView: View {
                         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.tileRadius))
                         .contentShape(.rect)
                     }
-                    .buttonStyle(RowPressStyle())
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
                 }
                 if details.commentsToken != nil {
                     CommentsCard(details: details) { showsComments = true }
@@ -1384,14 +1384,14 @@ private struct WatchDetailsView: View {
                     } label: {
                         channelLabel(details)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
                 } else {
                     Button {
                         router.openChannelPage(id)
                     } label: {
                         channelLabel(details)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
                 }
                 Spacer(minLength: 0)
                 SubscribeButton(channelId: id, isSubscribed: details.isSubscribed) { value in
@@ -1538,7 +1538,7 @@ private struct WatchDetailsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .materialCard()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ZoomPressStyle(scale: 0.98))
     }
 
     private func toggleWatchLater(_ id: String, isSaved: Bool) {
@@ -1642,7 +1642,7 @@ struct CommentsCard: View {
             .contentShape(.rect)
             .materialCard()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ZoomPressStyle(scale: 0.98))
         .disabled(details == nil)
     }
 }
@@ -1671,7 +1671,7 @@ private struct QueueCard: View {
                     } label: {
                         CompactVideoRow(video: video)
                     }
-                    .buttonStyle(RowPressStyle())
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
                     .videoMenu(video)
                 }
             }
@@ -1792,7 +1792,7 @@ private struct ChannelSearchContent: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 44, height: 44)
                     .contentShape(.rect)
-                    .buttonStyle(.plain)
+                    .buttonStyle(ZoomPressStyle())
             }
             .padding(.leading, Layout.screenPadding)
             .frame(height: 50)

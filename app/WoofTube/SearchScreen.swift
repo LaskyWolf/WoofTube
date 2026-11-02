@@ -276,7 +276,7 @@ private struct SearchStart: View {
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZoomPressStyle())
                 .accessibilityLabel("Remove from History")
                     .padding(.trailing, Layout.chipSpacing)
             }
@@ -301,7 +301,7 @@ private struct SearchStart: View {
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ZoomPressStyle(scale: 0.98))
     }
 }
 

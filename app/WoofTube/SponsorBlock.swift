@@ -158,7 +158,7 @@ struct SponsorSkipButton: View {
                     .frame(minHeight: 44)
                     .contentShape(.capsule)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZoomPressStyle())
                 .glassEffect(.regular, in: .capsule)
                 .transition(.opacity)
             }

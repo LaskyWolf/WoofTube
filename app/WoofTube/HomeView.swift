@@ -530,7 +530,7 @@ private struct KeepWatchingCard: View {
                 }
                 .contentShape(.rect)
             }
-            .buttonStyle(RowPressStyle())
+            .buttonStyle(ZoomPressStyle(scale: 0.98))
             .accessibilityLabel("Resume \(main.video.title), \(timeLeft(main))")
             .videoMenu(main.video, background: Color(.secondarySystemBackground))
 
@@ -544,7 +544,7 @@ private struct KeepWatchingCard: View {
                             } label: {
                                 thumb(entry).frame(width: Self.smallThumbWidth)
                             }
-                            .buttonStyle(RowPressStyle())
+                            .buttonStyle(ZoomPressStyle(scale: 0.98))
                             .accessibilityLabel("Show \(entry.video.title)")
                         }
                     }
@@ -955,7 +955,7 @@ struct FeedRows: View {
             } label: {
                 MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
             }
-            .buttonStyle(RowPressStyle())
+            .buttonStyle(ZoomPressStyle(scale: 0.98))
             .padding(.horizontal, Layout.screenPadding)
         case .channel(let channel):
             if let id = channel.channelId {
@@ -966,7 +966,7 @@ struct FeedRows: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(.rect)
                 }
-                .buttonStyle(RowPressStyle())
+                .buttonStyle(ZoomPressStyle(scale: 0.98))
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, Layout.rowPadding)
             }
@@ -998,7 +998,7 @@ struct VideoButton: View {
                 Button(action: play) {
                     CompactVideoRow(video: video, extras: extras)
                 }
-                .buttonStyle(RowPressStyle())
+                .buttonStyle(ZoomPressStyle(scale: 0.98))
             } else {
                 VideoRow(video: video, extras: extras, isNarrow: isNarrow, onPlay: play)
             }
@@ -1042,7 +1042,7 @@ struct VideoRow: View {
                     .clipShape(.rect(cornerRadius: Layout.tileRadius))
                     .videoZoomSource(video.videoId)
             }
-            .buttonStyle(RowPressStyle())
+            .buttonStyle(ZoomPressStyle(scale: 0.98))
             HStack(alignment: .top, spacing: Layout.chipSpacing) {
                 avatar
                 Button(action: onPlay) {
@@ -1065,7 +1065,7 @@ struct VideoRow: View {
                     }
                     .contentShape(.rect)
                 }
-                .buttonStyle(RowPressStyle())
+                .buttonStyle(ZoomPressStyle(scale: 0.98))
                 .padding(.top, hasAvatar ? ShortCard.avatarSize / 2 + Layout.cardSpacing : 0)
             }
             .padding(.horizontal, Layout.rowPadding)
@@ -1448,7 +1448,7 @@ private struct ShortsShelf: View {
                         } label: {
                             ShortCard(video: video)
                         }
-                        .buttonStyle(RowPressStyle())
+                        .buttonStyle(ZoomPressStyle())
                         .videoMenu(video)
                     }
                 }
@@ -1799,7 +1799,7 @@ private struct PostRow: View {
                 }
                 .contentShape(.rect)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(ZoomPressStyle())
 
             if !post.text.isEmpty {
                 Text(post.text)
@@ -1841,7 +1841,7 @@ private struct PostRow: View {
                     .clipShape(.rect(cornerRadius: Layout.tileRadius))
                     .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZoomPressStyle(scale: 0.98))
                 .sensoryFeedback(.selection, trigger: isVoted)
                 .accessibilityAddTraits(isVoted ? .isSelected : [])
             }
@@ -1864,7 +1864,7 @@ private struct PostRow: View {
                     .frame(minHeight: 44)
                     .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZoomPressStyle())
                 .accessibilityLabel("Like")
                 .accessibilityValue(shownLikes)
                 .accessibilityAddTraits(showsLiked ? .isSelected : [])

@@ -200,7 +200,7 @@ struct LibraryView: View {
                     } label: {
                         MediaListRow(url: playlist.thumbnailURL, title: playlist.title, subtitle: playlist.videoCountText)
                     }
-                    .buttonStyle(RowPressStyle())
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
                     .padding(.horizontal, Layout.screenPadding)
                     .liftedMenu {
                         Button("Download", systemImage: "arrow.down.to.line") {
@@ -240,7 +240,7 @@ struct LibraryView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
                     }
-                    .buttonStyle(RowPressStyle())
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
                     .padding(.horizontal, Layout.screenPadding)
                     .padding(.vertical, Layout.rowPadding)
                 }
@@ -432,7 +432,7 @@ private struct HistoryStrip: View {
                     }
                     .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ZoomPressStyle(scale: 0.98))
                 .padding(.horizontal, Self.padding)
 
                 ScrollView(.horizontal, showsIndicators: false) {

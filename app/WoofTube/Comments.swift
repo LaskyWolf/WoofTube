@@ -270,7 +270,8 @@ struct CommentsSheet: View {
                             .frame(minHeight: 44)
                             .contentShape(.rect)
                         }
-                        .buttonStyle(.borderless)
+                        .foregroundStyle(.tint)
+                        .buttonStyle(ZoomPressStyle())
                         .listRowInsets(Self.replyInsets)
                         .listRowSeparator(.hidden)
                     }
@@ -319,7 +320,7 @@ struct CommentsSheet: View {
                     Spacer(minLength: 0)
                     Button("Cancel Reply", systemImage: "xmark.circle.fill") { self.replyingTo = nil }
                         .labelStyle(.iconOnly)
-                        .buttonStyle(.plain)
+                        .buttonStyle(ZoomPressStyle())
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
@@ -433,7 +434,8 @@ private struct CommentRow: View {
                     }
                 }
                 .font(.footnote.weight(.medium))
-                .buttonStyle(.borderless)
+                .foregroundStyle(.tint)
+                .buttonStyle(ZoomPressStyle())
                 .foregroundStyle(.secondary)
                 .sensoryFeedback(.impact(weight: .light), trigger: comment.isLiked)
             }

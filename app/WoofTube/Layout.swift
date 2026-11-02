@@ -26,18 +26,6 @@ enum Layout {
     static let rowInsets = EdgeInsets(top: rowPadding * 2, leading: screenPadding, bottom: rowPadding * 2, trailing: screenPadding)
 }
 
-/// Rows shrink slightly under the finger, so a tap always shows a response.
-struct RowPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
-            .opacity(configuration.isPressed ? 0.8 : 1)
-            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
-    }
-}
-
 /// The app is portrait, like Apple Music. Only the open video page can rotate.
 enum Orientation {
     private(set) static var mask = UIInterfaceOrientationMask.portrait

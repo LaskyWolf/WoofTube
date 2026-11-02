@@ -254,7 +254,7 @@ private struct NotificationRow: View {
             }
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ZoomPressStyle(scale: 0.98))
         .liftedMenu {
             if let id = item.videoId {
                 VideoMenuItems(video: YouTubeVideo(videoId: id, title: item.videoTitle), router: router, showsPlaylists: $showsPlaylists)
