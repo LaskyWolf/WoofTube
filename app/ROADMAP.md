@@ -39,11 +39,9 @@ Player:
 
 Video page:
 
-- [ ] Live chat, playlists in the queue, clips and thanks.
+- [ ] Clips and thanks.
 
 Account and library:
 
 - [ ] Reorder playlists and search history.
-- [ ] Account switching.
 - [ ] Cast.
-- [ ] Keep downloads running in the background.

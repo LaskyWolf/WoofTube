@@ -75,7 +75,7 @@ final class MpvPlayer: ObservableObject {
         }
     }
 
-    /// Off while nothing shows the video, such as in the background or the mini player.
+    /// Off while nothing shows the video, such as in the background.
     func setVideoEnabled(_ enabled: Bool) {
         guard enabled != videoEnabled else { return }
         videoEnabled = enabled

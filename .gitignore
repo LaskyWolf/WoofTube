@@ -1,9 +1,5 @@
-.build/
 out/
-.theos/
-packages/
 *.ipa
-*.7z
 
 # Native app
 app/WoofTube.xcodeproj/

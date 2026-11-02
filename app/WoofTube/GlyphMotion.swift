@@ -352,7 +352,7 @@ struct MorphingGlyph: View {
 /// A dial whose needle points at the real playback speed.
 struct SpeedGauge: View {
     let speed: Double
-    var size: CGFloat = 15
+    private let size: CGFloat = 12
 
     private var needleAngle: Double {
         let range = (Router.speeds.first ?? 0.5)...(Router.speeds.last ?? 2)

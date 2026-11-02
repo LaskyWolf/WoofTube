@@ -314,9 +314,6 @@ private struct SearchResults: View {
     @State private var filter: Filter?
     @State private var creator: YouTubeChannel?
 
-    /// A filter can leave a page empty, so it looks a little further before giving up.
-    private static let pagesToSearch = 3
-
     /// YouTube has no such filter, so this drops what its progress or this phone says was seen.
     private var keeps: ((FeedItem) -> Bool)? {
         guard filter == .neverSeen else { return nil }
@@ -345,12 +342,7 @@ private struct SearchResults: View {
         } else {
             await model.load(.search(query, params: filter?.params))
         }
-        if let keeps {
-            for _ in 0..<Self.pagesToSearch where !model.items.contains(where: keeps) {
-                guard let last = model.items.last else { break }
-                await model.loadMore(after: last)
-            }
-        }
+        if let keeps { await model.loadUntilMatch(keeps) }
         guard filter == nil else {
             creator = nil
             return

@@ -160,12 +160,12 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
-/// Everything on the video page that SwiftyTube's watch parser leaves out.
 struct Chapter: Hashable {
     let title: String
     let start: Double
 }
 
+/// Everything on the video page that SwiftyTube's watch parser leaves out.
 struct WatchDetails {
     var description: String?
     var views: String?

@@ -26,7 +26,6 @@ struct ZoomPressStyle: ButtonStyle {
 struct HeaderRoundIcon: View {
     let systemImage: String
     var primary: Color?
-    var tint: Color = .primary
     var motion: GlyphScript?
     var trigger: AnyHashable = 0
 
@@ -36,7 +35,7 @@ struct HeaderRoundIcon: View {
         Image(systemName: systemImage)
             .font(.system(size: primary == nil ? 15 : 19, weight: .bold))
             .contentTransition(.symbolEffect(.replace))
-            .foregroundStyle(primary == nil ? tint : .white)
+            .foregroundStyle(primary == nil ? Color.primary : .white)
             .glyphMotion(motion, trigger: trigger)
             .frame(width: size, height: size)
             .glassEffect((primary.map { Glass.regular.tint($0) } ?? .regular).interactive(), in: .circle)
@@ -176,12 +175,51 @@ struct ChannelBanner: View {
 /// An image that fills whatever frame it gets.
 struct CoverImage: View {
     let url: String?
-    var maxPixels: Int? = ImageStore.feedPixels
 
     var body: some View {
         Color(.secondarySystemFill)
-            .overlay { CachedImage(url: url, maxPixels: maxPixels) }
+            .overlay { CachedImage(url: url) }
             .clipped()
+    }
+}
+
+/// The header card of a list of videos over its blurred cover, with Shuffle and Play All.
+struct VideoListHeader: View {
+    let meta: String
+    let title: String
+    let cover: String?
+    let videos: [YouTubeVideo]
+    let onPlayAll: () -> Void
+    @Environment(Router.self) private var router
+    @EnvironmentObject private var settings: AppSettings
+    @State private var shuffleTaps = 0
+
+    var body: some View {
+        DetailHeaderCard(meta: meta, title: title) {
+            CoverImage(url: cover)
+                .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+        } secondary: {
+            EmptyView()
+        } buttons: {
+            if !videos.isEmpty {
+                Button {
+                    shuffleTaps += 1
+                    router.playAll(videos, shuffled: true)
+                } label: {
+                    HeaderRoundIcon(systemImage: "shuffle", motion: .crossSwap, trigger: shuffleTaps)
+                }
+                .accessibilityLabel("Shuffle")
+                Button(action: onPlayAll) {
+                    HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
+                }
+                .accessibilityLabel("Play All")
+            }
+        }
+        .padding(.vertical, Layout.screenPadding)
+        .frame(maxWidth: .infinity)
+        .background(alignment: .top) {
+            BlurredArtworkBackdrop(url: cover)
+        }
     }
 }
 

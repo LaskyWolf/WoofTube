@@ -762,10 +762,8 @@ struct LibraryDownloadCard: View {
 
 /// Woof Music's downloads page: the header card, what's downloading, then the saved videos.
 struct DownloadsView: View {
-    @State private var shuffleTaps = 0
     @ObservedObject private var store = DownloadStore.shared
     @Environment(Router.self) private var router
-    @EnvironmentObject private var settings: AppSettings
     @State private var confirmsRemoveAll = false
 
     private var videos: [YouTubeVideo] { store.items.map(\.video) }
@@ -861,31 +859,7 @@ struct DownloadsView: View {
     }
 
     private var header: some View {
-        DetailHeaderCard(meta: meta, title: "Downloads") {
-            CoverImage(url: cover)
-                .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
-        } secondary: {
-            EmptyView()
-        } buttons: {
-            if !videos.isEmpty {
-                Button {
-                    shuffleTaps += 1
-                    router.playAll(videos, shuffled: true)
-                } label: {
-                    HeaderRoundIcon(systemImage: "shuffle", motion: .crossSwap, trigger: shuffleTaps)
-                }
-                .accessibilityLabel("Shuffle")
-                Button { router.playAll(videos) } label: {
-                    HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
-                }
-                .accessibilityLabel("Play All")
-            }
-        }
-        .padding(.vertical, Layout.screenPadding)
-        .frame(maxWidth: .infinity)
-        .background(alignment: .top) {
-            BlurredArtworkBackdrop(url: cover)
-        }
+        VideoListHeader(meta: meta, title: "Downloads", cover: cover, videos: videos) { router.playAll(videos) }
     }
 }
 

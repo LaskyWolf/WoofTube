@@ -114,6 +114,22 @@ enum FeedItem: Identifiable {
 }
 
 extension FeedItem {
+    var isVideoRow: Bool {
+        switch self {
+        case .video(let video, _): return !video.isShort
+        case .shelf: return true
+        default: return false
+        }
+    }
+
+    var isShortsRow: Bool {
+        switch self {
+        case .video(let video, _): return video.isShort
+        case .shorts: return true
+        default: return false
+        }
+    }
+
     /// From 0 to 1, by YouTube's count or this phone's.
     var watchedFraction: Double? {
         guard case .video(let video, let extras) = self else { return nil }
@@ -189,13 +205,13 @@ extension YouTubeVideo {
 
     var cover: String { thumbnailURL ?? Self.cover(of: videoId) }
 
-    /// True when YouTube's "3 hours ago" counts in seconds, minutes or hours, so under a day.
-    // ponytail: reads English and Italian, the languages in use. Other languages show no New badge.
     /// Out today, not live and not opened yet.
     var isNew: Bool {
         isRecent && !isLive && !SeenVideos.contains(videoId)
     }
 
+    /// True when YouTube's "3 hours ago" counts in seconds, minutes or hours, so under a day.
+    // ponytail: reads English and Italian, the languages in use. Other languages show no New badge.
     var isRecent: Bool {
         (publishedTimeText ?? "").lowercased().split { !$0.isLetter }.contains { Self.recentUnits.contains(String($0)) }
     }

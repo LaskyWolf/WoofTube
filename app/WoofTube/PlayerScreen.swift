@@ -183,7 +183,7 @@ private struct HandleChevron: Shape {
     }
 }
 
-/// The video page. It opens with the system zoom from the floating card, which also
+/// The video page. It opens with the system zoom from the tapped cover or the floating card, which also
 /// gives it the system's swipe down to close.
 struct WatchPage: View {
     @Environment(Router.self) private var router
@@ -495,16 +495,13 @@ struct PlayerTouchSurface: UIViewRepresentable {
     var onHoldMoved: ((CGFloat) -> Void)?
     /// True for the leading half of the video.
     var onDoubleTap: ((Bool) -> Void)?
-    var onDragChanged: ((CGSize) -> Void)?
-    var onDragEnded: ((_ translation: CGSize, _ predicted: CGSize) -> Void)?
+    var onDragEnded: ((CGSize) -> Void)?
     /// When false the drag is left to whatever sits behind, like the system's swipe to close.
     var isDragEnabled = true
     /// How far two fingers spread: over 1 outward, under 1 inward.
     var onPinch: ((CGFloat) -> Void)?
 
     private static let holdDuration = 0.35
-    /// How far ahead a flick counts, in seconds of its speed.
-    private static let flickSeconds: CGFloat = 0.2
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -522,7 +519,7 @@ struct PlayerTouchSurface: UIViewRepresentable {
             hold.minimumPressDuration = Self.holdDuration
             view.addGestureRecognizer(hold)
         }
-        if onDragChanged != nil {
+        if onDragEnded != nil {
             let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.panned(_:)))
             pan.delegate = coordinator
             pan.maximumNumberOfTouches = 1
@@ -581,21 +578,9 @@ struct PlayerTouchSurface: UIViewRepresentable {
         }
 
         @objc func panned(_ recognizer: UIPanGestureRecognizer) {
+            guard recognizer.state == .ended || recognizer.state == .cancelled else { return }
             let move = recognizer.translation(in: nil)
-            let speed = recognizer.velocity(in: nil)
-            let translation = CGSize(width: move.x, height: move.y)
-            switch recognizer.state {
-            case .changed:
-                parent.onDragChanged?(translation)
-            case .ended, .cancelled:
-                let predicted = CGSize(
-                    width: move.x + speed.x * PlayerTouchSurface.flickSeconds,
-                    height: move.y + speed.y * PlayerTouchSurface.flickSeconds
-                )
-                parent.onDragEnded?(translation, predicted)
-            default:
-                break
-            }
+            parent.onDragEnded?(CGSize(width: move.x, height: move.y))
         }
     }
 }
@@ -979,8 +964,7 @@ private struct PlayerControls: View {
                     let previous = seekHint?.isLeading == isLeading ? seekHint?.seconds ?? 0 : 0
                     seekHint = SeekHint(isLeading: isLeading, seconds: previous + Self.skipSeconds)
                 },
-                onDragChanged: { _ in },
-                onDragEnded: { translation, _ in
+                onDragEnded: { translation in
                     if translation.height > Self.exitFullscreenDistance { Orientation.setFullscreen(false) }
                 },
                 isDragEnabled: isFullscreen,
@@ -1119,20 +1103,14 @@ private struct PlayerControls: View {
             speedPicker
         } label: {
             HStack(spacing: 3) {
-                SpeedGauge(speed: player.speed, size: 12)
+                SpeedGauge(speed: player.speed)
                 Text(player.speed.speedText)
                     .font(.system(size: 11, weight: .bold).monospacedDigit())
             }
                 .foregroundStyle(.white)
                 .padding(.horizontal, Layout.chipSpacing)
                 .padding(.vertical, 3)
-                .background {
-                    if player.speed == 1 {
-                        Capsule().fill(.white.opacity(0.15))
-                    } else {
-                        Capsule().fill(.tint)
-                    }
-                }
+                .background { Capsule().fill(.tint) }
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(.rect)
         }
@@ -1153,20 +1131,7 @@ private struct PlayerControls: View {
     private var captionsMenu: some View {
         if !router.captions.isEmpty {
             Menu {
-                Button("Off", systemImage: "xmark") {
-                    router.selectCaption(nil)
-                }
-                ForEach(router.captions, id: \.languageCode) { track in
-                    Button {
-                        router.selectCaption(track)
-                    } label: {
-                        if router.selectedCaption == track.languageCode {
-                            Label(track.name ?? track.languageCode ?? "Unknown", systemImage: "checkmark")
-                        } else {
-                            Text(track.name ?? track.languageCode ?? "Unknown")
-                        }
-                    }
-                }
+                CaptionChoices(tracks: router.captions, selected: router.selectedCaption) { router.selectCaption($0) }
             } label: {
                 Label("Captions", systemImage: router.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill")
             }
@@ -1259,7 +1224,6 @@ private struct PlaybackFailure: View {
 private struct WatchDetailsView: View {
     @Binding var showsComments: Bool
     @Environment(Router.self) private var router
-    @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var downloads = DownloadStore.shared
     @State private var showsDescription = false
     @State private var showsPlaylists = false
@@ -1880,13 +1844,6 @@ struct ChannelView: View {
         } ?? []
     }
 
-    private var videos: [YouTubeVideo] {
-        model.items.compactMap {
-            if case .video(let video, _) = $0 { return video }
-            return nil
-        }
-    }
-
     /// A tab's params hold its English name in any app language: a field tag, the length, then the name.
     private static func tabName(_ tab: YouTubeChannelTab) -> String? {
         guard var text = tab.params?.removingPercentEncoding else { return nil }
@@ -2026,7 +1983,7 @@ struct ChannelView: View {
         guard let id = tab.browseId else { return }
         selectedTab = tab.title
         await model.load(.browse(id, params: tab.params), keepChips: true)
-        if featured == nil, var latest = videos.first {
+        if featured == nil, var latest = model.rowVideos.first {
             latest.channelAvatarURL = nil
             featured = latest
         }

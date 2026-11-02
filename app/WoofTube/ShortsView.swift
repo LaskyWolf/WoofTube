@@ -2,8 +2,7 @@ import Combine
 import SwiftUI
 import SwiftyTube
 
-/// Plays one Short at a time on its own 9:16 player and keeps the feed going with the search filter,
-/// because YouTube answers FEshorts with an error when signed out. It outlives the Shorts page,
+/// Plays one Short at a time on its own 9:16 player and keeps the feed going with YouTube's own Shorts sequence. It outlives the Shorts page,
 /// so the Short carries on in the floating card.
 @MainActor
 final class ShortsModel: ObservableObject {
@@ -549,18 +548,7 @@ private struct ShortsMoreMenu: View {
             .pickerStyle(.menu)
             if !model.captions.isEmpty {
                 Menu("Captions", systemImage: model.selectedCaption == nil ? "captions.bubble" : "captions.bubble.fill") {
-                    Button("Off", systemImage: "xmark") { model.selectCaption(nil) }
-                    ForEach(model.captions, id: \.languageCode) { track in
-                        Button {
-                            model.selectCaption(track)
-                        } label: {
-                            if model.selectedCaption == track.languageCode {
-                                Label(track.name ?? track.languageCode ?? "Unknown", systemImage: "checkmark")
-                            } else {
-                                Text(track.name ?? track.languageCode ?? "Unknown")
-                            }
-                        }
-                    }
+                    CaptionChoices(tracks: model.captions, selected: model.selectedCaption) { model.selectCaption($0) }
                 }
             }
         } label: {

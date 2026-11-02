@@ -53,10 +53,20 @@ final class FeedModel {
     private static let freshRowsWanted = 8
     private static let pagesToSkip = 3
 
+    private static let pagesToSearch = 3
+
     var hasMore: Bool { nextToken != nil }
     var isSearch: Bool { nextQuery != nil }
 
-    /// The same in page order, with Shorts too.
+    /// The page's own video rows, without those inside shelves.
+    var rowVideos: [YouTubeVideo] {
+        items.compactMap {
+            if case .video(let video, _) = $0 { return video }
+            return nil
+        }
+    }
+
+    /// Every video in page order, with Shorts too.
     var videosAndShorts: [YouTubeVideo] {
         items.flatMap { item -> [YouTubeVideo] in
             switch item {
@@ -155,6 +165,14 @@ final class FeedModel {
             items += added
             nextToken = next
             if !added.isEmpty { return }
+        }
+    }
+
+    /// A filter can leave a page empty, so this looks a little further before giving up.
+    func loadUntilMatch(_ keeps: (FeedItem) -> Bool) async {
+        for _ in 0..<Self.pagesToSearch where !items.contains(where: keeps) {
+            guard let last = items.last else { break }
+            await loadMore(after: last)
         }
     }
 
@@ -264,7 +282,7 @@ enum HeaderRoute: Hashable {
     case notifications, settings
 }
 
-/// Woof Music's TabHeaderView: the title, then 36 pt buttons 12 pt apart.
+/// Woof Music's TabHeaderView: the title, then its buttons.
 struct TabHeader: View {
     @State private var addTaps = 0
     let title: String
@@ -470,7 +488,6 @@ private struct KeepWatchingCard: View {
     private static let thumbWidth: CGFloat = 144
     private static let smallThumbWidth: CGFloat = 78
     private static let playSize: CGFloat = 44
-    private static let radius: CGFloat = 18
 
     private var videos: [(video: YouTubeVideo, extras: VideoExtras)] {
         Array(history.unfinished.prefix(Self.shown))
@@ -535,10 +552,7 @@ private struct KeepWatchingCard: View {
             }
         }
         .padding(Layout.rowSpacing)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.top, Layout.chipSpacing)
-        .padding(.bottom, Layout.sectionGap)
+        .homeCardBackground()
     }
 
     private func thumb(_ entry: (video: YouTubeVideo, extras: VideoExtras)) -> some View {
@@ -585,10 +599,7 @@ private struct KeepWatchingCard: View {
             }
         }
         .padding(Layout.rowSpacing)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.top, Layout.chipSpacing)
-        .padding(.bottom, Layout.sectionGap)
+        .homeCardBackground()
         .shimmerClock()
         .accessibilityHidden(true)
     }
@@ -626,8 +637,6 @@ struct SubsView: View {
     @State private var didAddHistory = false
     @Environment(Router.self) private var router
 
-    /// A filter can leave a page empty, so it looks a little further before giving up.
-    private static let pagesToSearch = 3
     // ponytail: only this many channels get their posts read, one request each. Raise it if posts go missing.
     private static let channelsWithPosts = 30
     private static let newVideosShown = 12
@@ -657,22 +666,9 @@ struct SubsView: View {
                 return false
             }
         case .videos:
-            return {
-                guard $0.id != relevantId else { return false }
-                switch $0 {
-                case .video(let video, _): return !video.isShort
-                case .shelf: return true
-                default: return false
-                }
-            }
+            return { $0.id != relevantId && $0.isVideoRow }
         case .shorts:
-            return {
-                switch $0 {
-                case .video(let video, _): return video.isShort
-                case .shorts: return true
-                default: return false
-                }
-            }
+            return { $0.isShortsRow }
         case nil:
             return { $0.id != relevantId }
         case .posts:
@@ -719,10 +715,7 @@ struct SubsView: View {
                 if filter == .posts {
                     if posts.items.isEmpty { await loadPosts() }
                 } else if let keeps {
-                    for _ in 0..<Self.pagesToSearch where !model.items.contains(where: keeps) {
-                        guard let last = model.items.last else { break }
-                        await model.loadMore(after: last)
-                    }
+                    await model.loadUntilMatch(keeps)
                 }
             }
         }
@@ -754,7 +747,7 @@ struct SubsView: View {
     }
 }
 
-/// A list with a search field for one page: the whole list until something is searched, if it has one.
+/// A list with a search field for one page: the whole list until something is searched.
 struct ScopedSearchPage: View {
     private enum Filter: String, CaseIterable {
         case videos = "Videos"
@@ -763,42 +756,24 @@ struct ScopedSearchPage: View {
         case finished = "Finished"
     }
 
-    /// A filter can leave a page empty, so it looks a little further before giving up.
-    private static let pagesToSearch = 3
-
     let title: String
     let prompt: String
     let browseId: String
-    var params: String?
-    /// The watch history lists everything. A channel starts empty, as its own page already lists it.
-    var listsWithoutQuery = false
     @State private var model = FeedModel()
     @State private var text = ""
     @State private var submitted = ""
     @State private var filter: Filter?
 
     private var source: FeedSource {
-        submitted.isEmpty ? .browse(browseId) : .scoped(browseId: browseId, params: params, query: submitted)
+        submitted.isEmpty ? .browse(browseId) : .scoped(browseId: browseId, query: submitted)
     }
 
     private var keeps: ((FeedItem) -> Bool)? {
         switch filter {
         case .videos:
-            return {
-                switch $0 {
-                case .video(let video, _): return !video.isShort
-                case .shelf: return true
-                default: return false
-                }
-            }
+            return { $0.isVideoRow }
         case .shorts:
-            return {
-                switch $0 {
-                case .video(let video, _): return video.isShort
-                case .shorts: return true
-                default: return false
-                }
-            }
+            return { $0.isShortsRow }
         case .inProgress:
             return { ($0.watchedFraction ?? 0) > 0 && ($0.watchedFraction ?? 0) < WatchPositions.finishedFraction }
         case .finished:
@@ -809,24 +784,14 @@ struct ScopedSearchPage: View {
     }
 
     private func searchFurther() async {
-        guard let keeps else { return }
-        for _ in 0..<Self.pagesToSearch where !model.items.contains(where: keeps) {
-            guard let last = model.items.last else { break }
-            await model.loadMore(after: last)
-        }
+        if let keeps { await model.loadUntilMatch(keeps) }
     }
 
     var body: some View {
-        Group {
-            if submitted.isEmpty, !listsWithoutQuery {
-                ContentUnavailableView(prompt, systemImage: "magnifyingglass")
-            } else {
-                FeedContent(model: model, retry: { await model.load(source) }, isCompact: true, keeps: keeps) {
-                    FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
-                        let tapped = Filter(rawValue: title)
-                        filter = filter == tapped ? nil : tapped
-                    }
-                }
+        FeedContent(model: model, retry: { await model.load(source) }, isCompact: true, keeps: keeps) {
+            FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
+                let tapped = Filter(rawValue: title)
+                filter = filter == tapped ? nil : tapped
             }
         }
         .navigationTitle(title)
@@ -839,7 +804,7 @@ struct ScopedSearchPage: View {
             if !Task.isCancelled { submitted = text.trimmingCharacters(in: .whitespacesAndNewlines) }
         }
         .task(id: submitted) {
-            if !submitted.isEmpty || listsWithoutQuery { await model.load(source) }
+            await model.load(source)
             await searchFurther()
         }
         .task(id: filter) { await searchFurther() }
@@ -1535,6 +1500,14 @@ private struct ShortCard: View {
 
 private extension View {
     /// See-through at the bottom edge, so it blends into any background, such as the player's.
+    /// The rounded card of a Home section, with the space around it.
+    func homeCardBackground() -> some View {
+        background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, Layout.screenPadding)
+            .padding(.top, Layout.chipSpacing)
+            .padding(.bottom, Layout.sectionGap)
+    }
+
     func fadesAtBottom() -> some View {
         mask {
             VStack(spacing: 0) {
@@ -1575,10 +1548,7 @@ private struct NewVideosCard: View {
             .scrollTargetBehavior(.viewAligned)
         }
         .padding(.vertical, Layout.rowSpacing)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius + 2, style: .continuous))
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.top, Layout.chipSpacing)
-        .padding(.bottom, Layout.sectionGap)
+        .homeCardBackground()
     }
 }
 
@@ -1602,10 +1572,7 @@ private struct LoadingNewVideos: View {
             .scrollIndicators(.hidden)
         }
         .padding(.vertical, Layout.rowSpacing)
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Layout.sheetRadius + 2, style: .continuous))
-        .padding(.horizontal, Layout.screenPadding)
-        .padding(.top, Layout.chipSpacing)
-        .padding(.bottom, Layout.sectionGap)
+        .homeCardBackground()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .shimmerClock()

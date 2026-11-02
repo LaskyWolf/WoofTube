@@ -323,12 +323,12 @@ enum LibraryPlaylists {
     }
 }
 
-/// Woof Music's shortcut tile: two fanned covers over a large symbol the corner crops.
 private extension Color {
     static let lime = Color(red: 0.48, green: 0.74, blue: 0.08)
     static let violet = Color(red: 0.55, green: 0.36, blue: 0.96)
 }
 
+/// Woof Music's shortcut tile: two fanned covers over a large symbol the corner crops.
 private struct ShortcutTile: View {
     let title: String
     let subtitle: String?
@@ -418,7 +418,7 @@ private struct HistoryStrip: View {
         if model.isLoading || !model.videosAndShorts.isEmpty {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 NavigationLink {
-                    ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history, listsWithoutQuery: true)
+                    ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history)
                 } label: {
                     HStack(alignment: .firstTextBaseline) {
                         Text("History").font(.title3.bold())
@@ -491,12 +491,10 @@ private struct HistoryStrip: View {
 
 /// Woof Music's playlist page: header card over the blurred cover, then compact rows.
 struct PlaylistPage: View {
-    @State private var shuffleTaps = 0
     let title: String
     let playlistId: String
 
     @Environment(Router.self) private var router
-    @EnvironmentObject private var settings: AppSettings
     @State private var model = FeedModel()
     @State private var newTitle: String?
     @State private var isRenaming = false
@@ -507,12 +505,7 @@ struct PlaylistPage: View {
     private var allowsRemoving: Bool { playlistId != YouTubeFeeds.likedVideosPlaylistId }
     private var allowsRenaming: Bool { allowsRemoving && playlistId != YouTubeFeeds.watchLaterPlaylistId }
 
-    private var videos: [YouTubeVideo] {
-        model.items.compactMap {
-            if case .video(let video, _) = $0 { return video }
-            return nil
-        }
-    }
+    private var videos: [YouTubeVideo] { model.rowVideos }
 
     private var meta: String {
         guard !videos.isEmpty else { return "Playlist" }
@@ -582,34 +575,10 @@ struct PlaylistPage: View {
     }
 
     private var header: some View {
-        DetailHeaderCard(meta: meta, title: shownTitle) {
-            CoverImage(url: videos.first?.thumbnailURL)
-                .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
-        } secondary: {
-            EmptyView()
-        } buttons: {
-            if !videos.isEmpty {
-                Button {
-                    shuffleTaps += 1
-                    router.playAll(videos, shuffled: true)
-                } label: {
-                    HeaderRoundIcon(systemImage: "shuffle", motion: .crossSwap, trigger: shuffleTaps)
-                }
-                .accessibilityLabel("Shuffle")
-                Button {
-                    if let first = videos.first {
-                        router.playPlaylist(first, title: shownTitle, model: model)
-                    }
-                } label: {
-                    HeaderRoundIcon(systemImage: "play.fill", primary: settings.accentColor)
-                }
-                .accessibilityLabel("Play All")
+        VideoListHeader(meta: meta, title: shownTitle, cover: videos.first?.thumbnailURL, videos: videos) {
+            if let first = videos.first {
+                router.playPlaylist(first, title: shownTitle, model: model)
             }
-        }
-        .padding(.vertical, Layout.screenPadding)
-        .frame(maxWidth: .infinity)
-        .background(alignment: .top) {
-            BlurredArtworkBackdrop(url: videos.first?.thumbnailURL)
         }
     }
 }

@@ -1,6 +1,6 @@
 # WoofTube native app
 
-A SwiftUI YouTube client. It contains no YouTube code and needs no decrypted IPA.
+A SwiftUI YouTube client.
 
 See [ROADMAP.md](ROADMAP.md) for what exists and what is missing.
 

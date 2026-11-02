@@ -66,8 +66,7 @@ struct Storyboard {
     }
 }
 
-/// Thrown with one line per client tried, shown on screen because the
-/// app runs on the phone and there is no log to read.
+/// Thrown with one line per client tried, shown on screen because the app runs on the phone.
 struct StreamFailure: LocalizedError {
     let attempts: [String]
     var errorDescription: String? { attempts.joined(separator: "\n") }

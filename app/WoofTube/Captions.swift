@@ -1,6 +1,28 @@
 import SwiftUI
 import SwiftyTube
 
+/// The choices of a captions menu.
+struct CaptionChoices: View {
+    let tracks: [YouTubeCaptionTrack]
+    let selected: String?
+    let onSelect: (YouTubeCaptionTrack?) -> Void
+
+    var body: some View {
+        Button("Off", systemImage: "xmark") { onSelect(nil) }
+        ForEach(tracks, id: \.languageCode) { track in
+            Button {
+                onSelect(track)
+            } label: {
+                if selected == track.languageCode {
+                    Label(track.name ?? track.languageCode ?? "Unknown", systemImage: "checkmark")
+                } else {
+                    Text(track.name ?? track.languageCode ?? "Unknown")
+                }
+            }
+        }
+    }
+}
+
 struct CaptionCue {
     let start: Double
     let end: Double

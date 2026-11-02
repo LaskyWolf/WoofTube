@@ -92,19 +92,9 @@ final class Router {
     private(set) var detailsUnavailable = false
 
     let player = MpvPlayer()
-    @ObservationIgnored private(set) lazy var pictureInPicture: PictureInPicture = {
-        let window = PictureInPicture(player: player)
-        window.onFailure = { [weak self] message in self?.actionMessage = message }
-        window.onRestore = { [weak self] in self?.isExpanded = true }
-        return window
-    }()
+    @ObservationIgnored private(set) lazy var pictureInPicture: PictureInPicture = makeWindow(for: player) { [weak self] in self?.isExpanded = true }
     /// The window for Shorts only opens by itself, when the app leaves the screen.
-    @ObservationIgnored private lazy var shortsPictureInPicture: PictureInPicture = {
-        let window = PictureInPicture(player: shortsPlayer)
-        window.onFailure = { [weak self] message in self?.actionMessage = message }
-        window.onRestore = { [weak self] in self?.expandShorts() }
-        return window
-    }()
+    @ObservationIgnored private lazy var shortsPictureInPicture: PictureInPicture = makeWindow(for: shortsPlayer) { [weak self] in self?.expandShorts() }
     /// Created on the first Short, and kept because mpv isn't torn down.
     @ObservationIgnored private(set) lazy var shortsPlayer: MpvPlayer = {
         let player = MpvPlayer()
@@ -259,6 +249,13 @@ final class Router {
     func expandShorts() {
         videoStartedMoving(shortsPlayer, isOpening: true)
         shortsRoute = shortsModel.map { ShortsRoute(model: $0) }
+    }
+
+    private func makeWindow(for player: MpvPlayer, onRestore: @escaping () -> Void) -> PictureInPicture {
+        let window = PictureInPicture(player: player)
+        window.onFailure = { [weak self] message in self?.actionMessage = message }
+        window.onRestore = onRestore
+        return window
     }
 
     private func videoStartedMoving(_ moving: MpvPlayer, isOpening: Bool) {
