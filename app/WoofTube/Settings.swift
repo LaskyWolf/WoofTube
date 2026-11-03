@@ -199,6 +199,10 @@ private struct ProfileView: View {
             }
             .disabled(!downloads.active.isEmpty)
             Section {
+                Button("Sign Out", role: .destructive) { confirmsSignOut = true }
+                    .disabled(!downloads.active.isEmpty)
+            }
+            Section {
                 LabeledContent("Version", value: "\(AppUpdate.currentVersion) (\(AppUpdate.currentBuild))")
                 if let release = AppUpdate.shared.available {
                     Link(destination: release.page) {
@@ -234,10 +238,6 @@ private struct ProfileView: View {
                 Link(destination: Self.accountSettings) {
                     Label("Google Account", systemImage: "person.crop.circle")
                 }
-            }
-            Section {
-                Button("Sign Out", role: .destructive) { confirmsSignOut = true }
-                    .disabled(!downloads.active.isEmpty)
             }
         }
         .listSectionSpacing(.compact)
