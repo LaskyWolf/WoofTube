@@ -1043,6 +1043,16 @@ private struct PlayerControls: View {
                 optionsMenu
             }
             Spacer(minLength: 0)
+            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? [], segments: router.usesSponsorBlock ? router.sponsorSegments : []) { scrubbing in
+                if scrubbing {
+                    hideTask?.cancel()
+                } else {
+                    scheduleHide()
+                }
+            }
+        }
+        // Centred on the whole video, not on the space between the top buttons and the bar.
+        .overlay {
             if !isStarting, !showsSpinner {
                 Button {
                     player.togglePause()
@@ -1054,14 +1064,6 @@ private struct PlayerControls: View {
                     }
                 }
                 .labelStyle(PlayerGlyphLabelStyle(size: 34))
-            }
-            Spacer(minLength: 0)
-            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? [], segments: router.usesSponsorBlock ? router.sponsorSegments : []) { scrubbing in
-                if scrubbing {
-                    hideTask?.cancel()
-                } else {
-                    scheduleHide()
-                }
             }
         }
         .padding(.horizontal, Layout.cardSpacing)
@@ -1206,7 +1208,9 @@ private struct PlaybackFailure: View {
     @Environment(Router.self) private var router
 
     var body: some View {
-        if let failure = router.loadError ?? player.errorText {
+        if router.isMembersOnly, let video = router.current {
+            membersOnly(video)
+        } else if let failure = router.loadError ?? player.errorText {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 Label(failure, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -1218,6 +1222,30 @@ private struct PlaybackFailure: View {
                 }
             }
         }
+    }
+
+    /// Joining happens on YouTube, so the button opens the video there.
+    private func membersOnly(_ video: YouTubeVideo) -> some View {
+        VStack(spacing: Layout.chipSpacing) {
+            Image(systemName: "star.circle.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text("Members Only")
+                .font(.headline)
+            Text("Only members of \(router.details?.channelTitle ?? video.channelTitle ?? "this channel") can watch this video. You can join on YouTube.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if let url = URL(string: "https://www.youtube.com/watch?v=\(video.videoId)") {
+                Link("Open in YouTube", destination: url)
+                    .buttonStyle(.bordered)
+                    .frame(minHeight: 44)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(Layout.rowSpacing)
+        .materialCard()
     }
 }
 

@@ -53,6 +53,7 @@ struct WoofTubeApp: App {
                 VideoFlavor.selfCheck()
                 YouTubeLink.selfCheck()
                 StreamLoader.selfCheck()
+                AppUpdate.selfCheck()
                 #endif
             }
             .alert("Session Expired", isPresented: $session.isExpired) {
@@ -180,6 +181,7 @@ struct RootTabs: View {
         }
         .routerPresentations(router, isActive: !router.isExpanded)
         .task { await Subscriptions.shared.load() }
+        .task { await AppUpdate.shared.check() }
         // Waits here because a link can arrive while the app is still restoring the sign-in.
         .task(id: router.pendingLink) {
             guard let link = router.pendingLink else { return }

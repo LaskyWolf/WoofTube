@@ -64,6 +64,7 @@ It contains no YouTube code and shows no ads.
 - Notification inbox with an unread badge
 - Search with suggestions and history, filters for Never Seen and Live videos, and an incognito mode that stops recording it
 - Opens YouTube links pasted in search, and `youtube://`, `vnd.youtube://` and `wooftube://` links from other apps
+- Checks GitHub for a newer release and marks the profile picture when one is out
 
 ### Look
 - Accent colours that also change the app icon
@@ -113,7 +114,7 @@ Google can challenge or restrict an account used in an unofficial app, and posti
 
 ## Project status
 
-Version 1.1. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
+Version 1.2. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
 
 ## Credits
 

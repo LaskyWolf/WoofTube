@@ -26,12 +26,12 @@ enum Layout {
     static let rowInsets = EdgeInsets(top: rowPadding * 2, leading: screenPadding, bottom: rowPadding * 2, trailing: screenPadding)
 }
 
-/// The app is portrait, like Apple Music. Only the open video page can rotate.
+/// The app turns with the phone. Full screen holds landscape until the phone is upright again.
 enum Orientation {
-    private(set) static var mask = UIInterfaceOrientationMask.portrait
+    private(set) static var mask = UIInterfaceOrientationMask.allButUpsideDown
 
     static func videoPageChanged(isOpen: Bool) {
-        apply(isOpen ? .allButUpsideDown : .portrait, request: isOpen ? nil : .portrait)
+        apply(.allButUpsideDown, request: nil)
     }
 
     /// Holds the requested orientation, so the sensor can't undo the button straight away.

@@ -88,6 +88,12 @@ struct SettingsView: View {
                             Text(session.account?.name ?? "YouTube").font(.headline).lineLimit(1)
                             Text("YouTube").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                         }
+                        if let release = AppUpdate.shared.available {
+                            Spacer(minLength: 0)
+                            Text("Update \(release.version)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tint)
+                        }
                     }
                     .padding(.vertical, Layout.cardSpacing)
                 }
@@ -102,6 +108,9 @@ struct SettingsView: View {
             Section("Playback") {
                 settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
                 settingsRow("Downloads", icon: "arrow.down.to.line") { DownloadSettingsView() }
+            }
+            Section {
+                settingsRow("Integrations", icon: "puzzlepiece.extension") { IntegrationsSettingsView() }
             }
             Section("Search") {
                 Toggle(isOn: $tracksSearchHistory) {
@@ -190,6 +199,35 @@ private struct ProfileView: View {
             }
             .disabled(!downloads.active.isEmpty)
             Section {
+                LabeledContent("Version", value: "\(AppUpdate.currentVersion) (\(AppUpdate.currentBuild))")
+                if let release = AppUpdate.shared.available {
+                    Link(destination: release.page) {
+                        Label("WoofTube \(release.version) Is Available", systemImage: "arrow.down.app")
+                    }
+                } else {
+                    Button {
+                        Task { await AppUpdate.shared.check() }
+                    } label: {
+                        HStack {
+                            Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer(minLength: Layout.chipSpacing)
+                            if AppUpdate.shared.isChecking {
+                                ProgressView()
+                            } else if AppUpdate.shared.didCheck {
+                                Text(AppUpdate.shared.errorText ?? "Up to Date")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(AppUpdate.shared.isChecking)
+                }
+            } header: {
+                Text("App")
+            } footer: {
+                Text("Compares this version with the newest release on GitHub.")
+            }
+            Section {
                 Link(destination: Self.notificationSettings) {
                     Label("Notification Settings", systemImage: "bell.badge")
                 }
@@ -219,9 +257,6 @@ private struct ProfileView: View {
 
 private struct PlayerSettingsView: View {
     @Environment(Router.self) private var router
-    @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
-    @AppStorage(DeArrow.enabledKey) private var usesDeArrow = false
-
     var body: some View {
         List {
             Section {
@@ -245,6 +280,19 @@ private struct PlayerSettingsView: View {
             } footer: {
                 Text("Autoplay starts the first Up Next video when one ends. Picture in Picture keeps the video in a small window when you leave the app.")
             }
+        }
+        .navigationTitle("Player")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Services from outside YouTube. Each footer says what it receives.
+private struct IntegrationsSettingsView: View {
+    @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
+    @AppStorage(DeArrow.enabledKey) private var usesDeArrow = false
+
+    var body: some View {
+        List {
             Section {
                 NavigationLink {
                     SponsorBlockSettingsView()
@@ -277,7 +325,7 @@ private struct PlayerSettingsView: View {
                 Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open or see in a feed.")
             }
         }
-        .navigationTitle("Player")
+        .navigationTitle("Integrations")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

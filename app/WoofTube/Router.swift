@@ -71,6 +71,7 @@ final class Router {
     private(set) var details: WatchDetails?
     private(set) var streamSummary: String?
     private(set) var loadError: String?
+    private(set) var isMembersOnly = false
     private(set) var captions: [YouTubeCaptionTrack] = []
     private(set) var selectedCaption: String?
     private(set) var captionCues: [CaptionCue] = []
@@ -566,6 +567,7 @@ final class Router {
         loadTask?.cancel()
         streamSummary = nil
         loadError = nil
+        isMembersOnly = false
         captions = []
         isLive = false
         if isNewPlayback {
@@ -614,6 +616,9 @@ final class Router {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
+                let membersOnly = await YouTubeAPI.isMembersOnly(videoId: videoId)
+                guard !Task.isCancelled else { return }
+                isMembersOnly = membersOnly
                 loadError = error.localizedDescription
             }
         }

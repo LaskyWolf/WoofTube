@@ -42,6 +42,8 @@ final class MpvPlayer: ObservableObject {
     private var mpv: OpaquePointer?
     private var videoEnabled = true
     private var decoderResets = 0
+    private var resyncs = 0
+    private var lastDropCount = 0
     private var wasPlayingBeforeInterruption = false
     private var observers: [Any] = []
 
@@ -50,6 +52,12 @@ final class MpvPlayer: ObservableObject {
     private static let ticksPerSecond = 4.0
     /// Tries per video before leaving a failed picture alone, so it can't loop forever.
     private static let maxDecoderResets = 3
+    private static let smoothnessCheck: DispatchTimeInterval = .seconds(3)
+    /// Seconds the picture may trail the sound before it's put back in step.
+    private static let maxDrift = 0.5
+    private static let maxDropsPerCheck = 20
+    private static let maxResyncs = 3
+    private var smoothnessTimer: DispatchSourceTimer?
 
     init() {
         observeAudioSession()
@@ -65,6 +73,8 @@ final class MpvPlayer: ObservableObject {
         isPaused = false
         queue.async { [self] in
             decoderResets = 0
+            resyncs = 0
+            lastDropCount = 0
             activateAudioSession()
             guard let mpv else { return }
             mpv_set_property_string(mpv, "pause", "no")
@@ -80,6 +90,28 @@ final class MpvPlayer: ObservableObject {
         guard enabled != videoEnabled else { return }
         videoEnabled = enabled
         setProperty("vid", enabled ? "auto" : "no")
+        // The track comes back behind the sound, so an exact seek to the same spot puts them in step.
+        if enabled { command(["seek", "0", "relative+exact"]) }
+    }
+
+    /// Runs on `queue`. A picture that falls behind or drops many frames is put back in step.
+    // ponytail: the thresholds are guesses; tune them from the log if a resync shows up when nothing lagged.
+    private func checkSmoothness() {
+        guard let mpv, resyncs < Self.maxResyncs,
+              value("pause", mpv) == "no", value("paused-for-cache", mpv) == "no", value("vid", mpv) != "no" else { return }
+        let drops = Int(value("frame-drop-count", mpv) ?? "") ?? 0
+        let drift = abs(Double(value("avsync", mpv) ?? "") ?? 0)
+        defer { lastDropCount = drops }
+        guard drift > Self.maxDrift || drops - lastDropCount >= Self.maxDropsPerCheck else { return }
+        resyncs += 1
+        publish { $0.addLog("[player] put the picture back in step at \($0.time.clockText)") }
+        _ = ["seek", "0", "relative+exact"].withUnsafeCArg { mpv_command(mpv, $0) }
+    }
+
+    private func value(_ name: String, _ mpv: OpaquePointer) -> String? {
+        guard let text = mpv_get_property_string(mpv, name) else { return nil }
+        defer { mpv_free(text) }
+        return String(cString: text)
     }
 
     func togglePause() {
@@ -189,6 +221,12 @@ final class MpvPlayer: ObservableObject {
         mpv_observe_property(mpv, 2, "pause", MPV_FORMAT_FLAG)
         mpv_observe_property(mpv, 3, "paused-for-cache", MPV_FORMAT_FLAG)
         self.mpv = mpv
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.smoothnessCheck, repeating: Self.smoothnessCheck)
+        timer.setEventHandler { [weak self] in self?.checkSmoothness() }
+        timer.resume()
+        smoothnessTimer = timer
 
         Thread { [weak self] in
             Self.runEvents(mpv, player: self)

@@ -109,6 +109,12 @@ enum YouTubeAPI {
         }
     }
 
+    /// YouTube answers a members-only video with an offer to join the channel.
+    static func isMembersOnly(videoId: String) async -> Bool {
+        guard let json = try? await post("player", body: ["videoId": videoId]) else { return false }
+        return JSON.string("offerId", in: json["playabilityStatus"]) == "sponsors_only_video"
+    }
+
     /// Turns a path such as /@handle into the channel's id.
     static func channelId(at path: String) async throws -> String {
         let json = try? await post("navigation/resolve_url", body: ["url": "https://www.youtube.com" + path])
