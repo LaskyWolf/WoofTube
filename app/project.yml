@@ -67,8 +67,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.laskywolf.wooftube.native.share
-        # The hand-over reaches the app object, which extension-only code may not name.
-        APPLICATION_EXTENSION_API_ONLY: NO
     info:
       path: ShareExtension/Info.plist
       properties:

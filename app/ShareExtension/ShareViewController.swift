@@ -38,12 +38,16 @@ final class ShareViewController: UIViewController {
     }
 
     /// An extension can't reach UIApplication.shared, but the app object is still at the end of the responder chain.
+    /// Its open method is off limits to extension code, so it's looked up by name at run time.
     // ponytail: not an official API. If iOS stops passing the link on, copy it and paste it in WoofTube's search instead.
     private func open(_ url: URL) {
+        typealias Open = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let current = responder {
-            if let application = current as? UIApplication {
-                application.open(url)
+            if current is UIApplication, let method = class_getInstanceMethod(type(of: current), selector) {
+                let open = unsafeBitCast(method_getImplementation(method), to: Open.self)
+                open(current, selector, url as NSURL, [:] as NSDictionary, nil)
                 return
             }
             responder = current.next
