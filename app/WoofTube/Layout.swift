@@ -81,16 +81,16 @@ enum Orientation {
     /// Gravity in the phone's own axes: y is -1 when upright, x is +1 when its right edge points down.
     static func side(x: Double, y: Double) -> UIInterfaceOrientationMask? {
         if y < -tiltThreshold { return .portrait }
-        // The right edge down is the interface's landscapeRight: the home side faces right.
-        if x > tiltThreshold { return .landscapeRight }
-        if x < -tiltThreshold { return .landscapeLeft }
+        // The right edge down puts the top of the screen on the left, which the interface calls landscapeLeft.
+        if x > tiltThreshold { return .landscapeLeft }
+        if x < -tiltThreshold { return .landscapeRight }
         return nil
     }
 
     static func selfCheck() {
         assert(side(x: 0, y: -1) == .portrait)
-        assert(side(x: 0.95, y: -0.1) == .landscapeRight)
-        assert(side(x: -0.95, y: 0.1) == .landscapeLeft)
+        assert(side(x: 0.95, y: -0.1) == .landscapeLeft)
+        assert(side(x: -0.95, y: 0.1) == .landscapeRight)
         assert(side(x: 0.1, y: -0.2) == nil)
     }
 
