@@ -230,6 +230,11 @@ struct WatchPage: View {
                 CommentsSheet(token: token)
             }
         }
+        .sheet(isPresented: Bindable(router).showsTVLink) {
+            if let video = router.current {
+                TVLinkSheet(video: video)
+            }
+        }
         .routerPresentations(router, isActive: true)
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             Orientation.unlockIfHeldUpright()
@@ -1165,6 +1170,7 @@ private struct PlayerControls: View {
             }
             .pickerStyle(.menu)
             Menu("Speed", systemImage: player.speed.gaugeSymbol) { speedPicker }
+            Button("Play on TV", systemImage: "tv") { router.showsTVLink = true }
             Toggle("Autoplay", systemImage: "play.square.stack", isOn: Binding(get: { router.autoplay }, set: { isOn in
                 router.autoplay = isOn
             }))
@@ -1188,6 +1194,80 @@ private struct PlayerControls: View {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { showsControls = false }
+        }
+    }
+}
+
+/// Links a TV once with its code, then sends it the video at the current time.
+private struct TVLinkSheet: View {
+    let video: YouTubeVideo
+    @Environment(Router.self) private var router
+    @Environment(\.dismiss) private var dismiss
+    @State private var code = ""
+    @State private var isWorking = false
+    @State private var errorText: String?
+    private let link = TVLink.shared
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let screen = link.screen {
+                    Section {
+                        Button("Play on \(screen.name)", systemImage: "tv") { run { try await cast() } }
+                    } footer: {
+                        Text("Open YouTube or SmartTube on the TV first. The video starts where you are.")
+                    }
+                    Section {
+                        Button("Forget \(screen.name)", role: .destructive) { link.forget() }
+                    }
+                } else {
+                    Section {
+                        TextField("TV Code", text: $code)
+                            .keyboardType(.numberPad)
+                            .textContentType(.oneTimeCode)
+                        Button("Link TV") { run { try await link.pair(code: code) } }
+                            .disabled(code.filter(\.isNumber).isEmpty)
+                    } footer: {
+                        Text("In SmartTube, open Settings, then Remote Control. In YouTube on the TV, open Settings, then Link with TV Code.")
+                    }
+                }
+                if let errorText {
+                    Section {
+                        Label(errorText, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .disabled(isWorking)
+            .overlay { if isWorking { ProgressView() } }
+            .navigationTitle("Play on TV")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// The phone pauses, so the sound doesn't play twice.
+    private func cast() async throws {
+        try await link.play(videoId: video.videoId, at: router.player.time)
+        router.player.setPaused(true)
+        dismiss()
+    }
+
+    private func run(_ action: @escaping () async throws -> Void) {
+        isWorking = true
+        errorText = nil
+        Task {
+            do {
+                try await action()
+            } catch {
+                errorText = error.localizedDescription
+            }
+            isWorking = false
         }
     }
 }
@@ -1546,27 +1626,49 @@ private struct WatchDetailsView: View {
         .contentShape(Rectangle().inset(by: -3))
     }
 
+    /// Closed, the whole card opens it. Open, it isn't a button, so its links can take taps.
+    @ViewBuilder
     private func descriptionCard(_ details: WatchDetails) -> some View {
-        Button {
-            withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { showsDescription.toggle() }
-        } label: {
+        if showsDescription {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                let metadata = [details.views, details.age ?? router.current?.publishedTimeText, details.date].compactMap { $0 }
-                if !metadata.isEmpty {
-                    Text(metadata.joined(separator: " · ")).font(.subheadline.weight(.semibold))
-                }
-                if let description = details.description, !description.isEmpty {
-                    Text(description)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(showsDescription ? nil : 2)
-                        .multilineTextAlignment(.leading)
-                }
+                descriptionText(details)
+                Button("Show Less") { toggleDescription() }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 44)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .materialCard()
+            .environment(\.openURL, OpenURLAction { router.openDescriptionLink($0) })
+        } else {
+            Button {
+                toggleDescription()
+            } label: {
+                descriptionText(details)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .materialCard()
+            }
+            .buttonStyle(ZoomPressStyle(scale: 0.98))
         }
-        .buttonStyle(ZoomPressStyle(scale: 0.98))
+    }
+
+    private func descriptionText(_ details: WatchDetails) -> some View {
+        VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+            let metadata = [details.views, details.age ?? router.current?.publishedTimeText, details.date].compactMap { $0 }
+            if !metadata.isEmpty {
+                Text(metadata.joined(separator: " · ")).font(.subheadline.weight(.semibold))
+            }
+            if let description = details.description {
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(showsDescription ? nil : 2)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+    }
+
+    private func toggleDescription() {
+        withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { showsDescription.toggle() }
     }
 
     private func toggleWatchLater(_ id: String, isSaved: Bool) {

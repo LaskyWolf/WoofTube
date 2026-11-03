@@ -65,6 +65,8 @@ It contains no YouTube code and shows no ads.
 - Search with suggestions and history, filters for Never Seen and Live videos, and an incognito mode that stops recording it
 - Opens YouTube links pasted in search, and `youtube://`, `vnd.youtube://` and `wooftube://` links from other apps
 - Checks GitHub for a newer release and marks the profile picture when one is out
+- Adds WoofTube to the share sheet, so a shared YouTube link opens in the app
+- Plays the video on a TV linked with its code, in YouTube on the TV or SmartTube
 
 ### Look
 - Accent colours that also change the app icon

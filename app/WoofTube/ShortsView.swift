@@ -246,7 +246,7 @@ struct ShortsView: View {
                         if let title = model.currentVideo?.title {
                             Text(title).font(.headline)
                         }
-                        Text(model.details?.description.flatMap { $0.isEmpty ? nil : $0 } ?? "No description.")
+                        Text(model.details?.description ?? AttributedString("No description."))
                             .font(.subheadline)
                             .lineSpacing(Layout.cardSpacing)
                             .textSelection(.enabled)

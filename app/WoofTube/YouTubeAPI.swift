@@ -39,6 +39,33 @@ enum JSON {
         return runs?.joined()
     }
 
+    /// A description with its links. YouTube points them at the text by UTF-16 offset, as NSString counts.
+    static func linkedText(_ object: Any?) -> AttributedString? {
+        guard let dict = object as? [String: Any], let content = dict["content"] as? String else { return nil }
+        let text = NSMutableAttributedString(string: content)
+        for run in dict["commandRuns"] as? [[String: Any]] ?? [] {
+            guard let start = run["startIndex"] as? Int, let length = run["length"] as? Int,
+                  start >= 0, length > 0, start + length <= text.length,
+                  let address = string("url", in: first("webCommandMetadata", in: run)),
+                  let url = linkURL(address) else { continue }
+            text.addAttribute(.link, value: url, range: NSRange(location: start, length: length))
+        }
+        let characters = content as NSString
+        let visible = CharacterSet.whitespacesAndNewlines.inverted
+        let head = characters.rangeOfCharacter(from: visible)
+        guard head.location != NSNotFound else { return nil }
+        let tail = characters.rangeOfCharacter(from: visible, options: .backwards)
+        return AttributedString(text.attributedSubstring(from: NSRange(location: head.location, length: NSMaxRange(tail) - head.location)))
+    }
+
+    /// Links inside YouTube are paths. Outside ones go through its redirect page, which carries the address in q.
+    static func linkURL(_ address: String) -> URL? {
+        guard let url = URL(string: address, relativeTo: URL(string: "https://www.youtube.com"))?.absoluteURL else { return nil }
+        guard url.path == "/redirect",
+              let target = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "q" })?.value else { return url }
+        return URL(string: target)
+    }
+
     static func lastThumbnail(_ object: Any?) -> String? {
         let thumbnails = first("thumbnails", in: object) as? [[String: Any]]
         guard let url = thumbnails?.last?["url"] as? String else { return nil }
@@ -154,6 +181,12 @@ enum YouTubeAPI {
     }
 
     static func selfCheck() {
+        let linked = JSON.linkedText(["content": " Go ▶ here\n", "commandRuns": [
+            ["startIndex": 4, "length": 4, "onTap": ["innertubeCommand": ["commandMetadata": ["webCommandMetadata": ["url": "/watch?v=dQw4w9WgXcQ&t=42s"]]]]],
+        ]])
+        assert(linked.map { String($0.characters) } == "Go ▶ here")
+        assert(linked?.runs.compactMap(\.link).first?.absoluteString == "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s")
+        assert(JSON.linkURL("https://www.youtube.com/redirect?event=x&q=https%3A%2F%2Flinktr.ee%2Frick")?.absoluteString == "https://linktr.ee/rick")
         assert(isYouTube(URL(string: "https://s.youtube.com/api/stats/watchtime")!))
         assert(isYouTube(URL(string: "https://www.youtube.com/api/stats/playback")!))
         assert(!isYouTube(URL(string: "http://www.youtube.com/")!))
@@ -199,7 +232,7 @@ struct Chapter: Hashable {
 
 /// Everything on the video page that SwiftyTube's watch parser leaves out.
 struct WatchDetails {
-    var description: String?
+    var description: AttributedString?
     var views: String?
     /// How long ago it was published, such as "3 days ago".
     var age: String?
@@ -230,7 +263,7 @@ struct WatchDetails {
         // The like and dislike buttons have the same shape, so this names the like side.
         let toggle = JSON.first("toggleButtonViewModel", in: JSON.first("likeButtonViewModel", in: likeButton))
 
-        description = JSON.text(JSON.first("attributedDescription", in: secondary))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        description = JSON.linkedText(JSON.first("attributedDescription", in: secondary))
         views = JSON.text(JSON.first("viewCount", in: JSON.first("videoViewCountRenderer", in: primary)))
         age = JSON.text(JSON.first("relativeDateText", in: primary))
         date = JSON.text(JSON.first("dateText", in: primary))

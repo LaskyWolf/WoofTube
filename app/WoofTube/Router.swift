@@ -50,6 +50,7 @@ final class Router {
     var channelRoute: ChannelRoute?
     var channelPage: ChannelPageRoute?
     var pendingLink: YouTubeLink?
+    var showsTVLink = false
     @ObservationIgnored private var shortCheck: Task<Void, Never>?
     /// YouTube's longest Short, in seconds. Anything longer opens without asking.
     private static let longestShort = 180
@@ -394,6 +395,19 @@ final class Router {
         } else if url.host?.isEmpty == false || !url.path.isEmpty {
             actionMessage = "WoofTube can't open this link."
         }
+    }
+
+    /// A time in this video seeks, other YouTube links open here, and the rest go to Safari.
+    func openDescriptionLink(_ url: URL) -> OpenURLAction.Result {
+        guard let link = YouTubeLink(url: url) else { return .systemAction }
+        if case .video(let id) = link, id == current?.videoId,
+           let time = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "t" })?.value,
+           let seconds = Double(time.trimmingCharacters(in: CharacterSet(charactersIn: "s"))) {
+            player.seek(to: seconds)
+        } else {
+            open(link)
+        }
+        return .handled
     }
 
     func open(_ link: YouTubeLink) {
