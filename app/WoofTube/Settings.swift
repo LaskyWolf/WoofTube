@@ -288,6 +288,7 @@ private struct PlayerSettingsView: View {
 
 /// Services from outside YouTube. Each footer says what it receives.
 private struct IntegrationsSettingsView: View {
+    @Environment(Router.self) private var router
     @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
     @AppStorage(DeArrow.enabledKey) private var usesDeArrow = false
 
