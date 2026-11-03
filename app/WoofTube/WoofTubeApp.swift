@@ -40,6 +40,7 @@ struct WoofTubeApp: App {
                 #if DEBUG
                 await StreamCache.selfCheck()
                 CoverTint.selfCheck()
+                Orientation.selfCheck()
                 GlyphScript.selfCheck()
                 WatchSegments.selfCheck()
                 WatchedChannels.selfCheck()
