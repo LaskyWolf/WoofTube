@@ -554,7 +554,7 @@ private struct ShortsMoreMenu: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.red)
+                .foregroundStyle(.tint)
                 .shadow(color: .black.opacity(0.5), radius: 3)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)

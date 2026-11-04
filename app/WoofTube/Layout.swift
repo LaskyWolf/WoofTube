@@ -35,6 +35,9 @@ enum Orientation {
     private static let tiltCheck: TimeInterval = 0.5
     /// Share of gravity along one edge that counts as the phone being turned that way.
     private static let tiltThreshold = 0.7
+    /// Leaving full screen needs the phone nearly upright, for this many checks in a row.
+    private static let uprightThreshold = 0.85
+    private static let uprightChecks = 3
 
     static func videoPageChanged(isOpen: Bool) {
         if !isOpen { motion.stopAccelerometerUpdates() }
@@ -53,13 +56,14 @@ enum Orientation {
     }
 
     /// Rotation lock stops iOS from turning the screen, so full screen reads the tilt itself:
-    /// first to pick the side, then every half second to follow the phone or leave when it's upright.
+    /// first to pick the side, then every half second to follow the phone, or leave once it's held upright.
     private static func followTilt() {
         guard motion.isAccelerometerAvailable else {
             apply(.landscape, request: .landscapeRight)
             return
         }
         var side: UIInterfaceOrientationMask?
+        var upright = 0
         motion.accelerometerUpdateInterval = tiltCheck
         motion.startAccelerometerUpdates(to: .main) { data, _ in
             guard let gravity = data?.acceleration else { return }
@@ -69,18 +73,23 @@ enum Orientation {
                 side = tilt == .portrait || tilt == nil ? .landscapeRight : tilt
                 apply(.landscape, request: side)
             } else if tilt == .portrait {
+                upright += 1
+                guard upright >= uprightChecks else { return }
                 motion.stopAccelerometerUpdates()
                 apply(.allButUpsideDown, request: .portrait)
-            } else if let tilt, tilt != side {
-                side = tilt
-                apply(.landscape, request: tilt)
+            } else {
+                upright = 0
+                if let tilt, tilt != side {
+                    side = tilt
+                    apply(.landscape, request: tilt)
+                }
             }
         }
     }
 
     /// Gravity in the phone's own axes: y is -1 when upright, x is +1 when its right edge points down.
     static func side(x: Double, y: Double) -> UIInterfaceOrientationMask? {
-        if y < -tiltThreshold { return .portrait }
+        if y < -uprightThreshold { return .portrait }
         // The right edge down puts the top of the screen on the left, which the interface calls landscapeLeft.
         if x > tiltThreshold { return .landscapeLeft }
         if x < -tiltThreshold { return .landscapeRight }
@@ -92,6 +101,8 @@ enum Orientation {
         assert(side(x: 0.95, y: -0.1) == .landscapeLeft)
         assert(side(x: -0.95, y: 0.1) == .landscapeRight)
         assert(side(x: 0.1, y: -0.2) == nil)
+        // Half raised isn't upright yet.
+        assert(side(x: 0.3, y: -0.75) == nil)
     }
 
     /// After leaving full screen, rotation comes back once the phone is held upright.

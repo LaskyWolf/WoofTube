@@ -74,6 +74,7 @@ final class AppSettings: ObservableObject {
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
     @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
+    @AppStorage(SearchSettings.tracksWatchHistoryKey) private var tracksWatchHistory = true
     @State private var showsDiagnostics = false
 
     var body: some View {
@@ -109,17 +110,16 @@ struct SettingsView: View {
                 settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
                 settingsRow("Downloads", icon: "arrow.down.to.line") { DownloadSettingsView() }
             }
-            Section {
+            Section("Integrations") {
                 settingsRow("Integrations", icon: "puzzlepiece.extension") { IntegrationsSettingsView() }
             }
-            Section("Search") {
-                Toggle(isOn: $tracksSearchHistory) {
-                    Label {
-                        Text("Search History")
-                    } icon: {
-                        Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90").foregroundStyle(.tint)
-                    }
-                }
+            Section {
+                toggleRow("Track Search History", icon: "magnifyingglass", isOn: $tracksSearchHistory)
+                toggleRow("Track Watch History", icon: "clock.arrow.circlepath", isOn: $tracksWatchHistory)
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("When off, searches aren't saved, and videos you watch don't reach your YouTube history or this iPhone's resume points.")
             }
         }
         .listSectionSpacing(.compact)
@@ -128,6 +128,16 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+    }
+
+    private func toggleRow(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: icon).foregroundStyle(.tint)
+            }
+        }
     }
 
     private func settingsRow<Destination: View>(_ title: String, icon: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
@@ -325,6 +335,7 @@ private struct IntegrationsSettingsView: View {
             } footer: {
                 Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open or see in a feed.")
             }
+            TVLinkSection()
         }
         .navigationTitle("Integrations")
         .navigationBarTitleDisplayMode(.inline)
@@ -396,5 +407,69 @@ private struct AppearanceSettingsView: View {
         let application = UIApplication.shared
         guard application.supportsAlternateIcons, application.alternateIconName != preset.alternateIconName else { return }
         application.setAlternateIconName(preset.alternateIconName)
+    }
+}
+
+/// Links a TV once with its code. The player's menu then offers to play there.
+private struct TVLinkSection: View {
+    @State private var code = ""
+    @State private var isWorking = false
+    @State private var errorText: String?
+    private let link = TVLink.shared
+
+    var body: some View {
+        Section {
+            if let screen = link.screen {
+                LabeledContent {
+                    Text(screen.name)
+                } label: {
+                    Label {
+                        Text("TV")
+                    } icon: {
+                        Image(systemName: "tv").foregroundStyle(.tint)
+                    }
+                }
+                Button("Forget \(screen.name)", role: .destructive) { link.forget() }
+            } else {
+                TextField("TV Code", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                Button {
+                    pair()
+                } label: {
+                    HStack {
+                        Text("Link TV")
+                        Spacer(minLength: Layout.chipSpacing)
+                        if isWorking { ProgressView() }
+                    }
+                }
+                .disabled(code.filter(\.isNumber).isEmpty || isWorking)
+            }
+            if let errorText {
+                Label(errorText, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("TV")
+        } footer: {
+            Text(link.screen == nil
+                ? "In SmartTube, open Settings, then Remote Control. In YouTube on the TV, open Settings, then Link with TV Code."
+                : "Play on TV appears in the player's menu. Open YouTube or SmartTube on the TV first.")
+        }
+    }
+
+    private func pair() {
+        isWorking = true
+        errorText = nil
+        Task {
+            do {
+                try await link.pair(code: code)
+                code = ""
+            } catch {
+                errorText = error.localizedDescription
+            }
+            isWorking = false
+        }
     }
 }

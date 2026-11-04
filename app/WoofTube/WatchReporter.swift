@@ -66,7 +66,7 @@ final class WatchReporter {
     private var playbackURL: String?
     private var playerStatus: String?
     private var segments = WatchSegments()
-    private var unanswered = SearchSettings.isIncognito ? 0 : 3
+    private var unanswered = SearchSettings.recordsWatching ? 3 : 0
     /// What each place says, in seconds. Exact, unlike the history's whole percent.
     private var playerSeconds: Double?
     private var nextSeconds: Double?
@@ -75,7 +75,7 @@ final class WatchReporter {
 
     /// Shorts always start from the beginning, so they don't ask where to start.
     init(videoId: String, asksPosition: Bool = true) {
-        guard !SearchSettings.isIncognito else { return }
+        guard SearchSettings.recordsWatching else { return }
         Task { await start(videoId: videoId) }
         guard asksPosition else { return }
         Task { await askNext(videoId: videoId) }
@@ -159,7 +159,7 @@ final class WatchReporter {
     }
 
     private func send(_ address: String?, _ values: [String: String]) {
-        guard !SearchSettings.isIncognito, let address, var components = URLComponents(string: address) else { return }
+        guard SearchSettings.recordsWatching, let address, var components = URLComponents(string: address) else { return }
         let added = values.merging(["ver": "2", "cpn": sessionId, "el": "detailpage"]) { first, _ in first }
         components.queryItems = (components.queryItems ?? []).filter { added[$0.name] == nil }
             + added.map { URLQueryItem(name: $0.key, value: $0.value) }

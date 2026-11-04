@@ -230,11 +230,6 @@ struct WatchPage: View {
                 CommentsSheet(token: token)
             }
         }
-        .sheet(isPresented: Bindable(router).showsTVLink) {
-            if let video = router.current {
-                TVLinkSheet(video: video)
-            }
-        }
         .routerPresentations(router, isActive: true)
         .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
             Orientation.unlockIfHeldUpright()
@@ -929,6 +924,8 @@ private struct SleepGlyph: View {
 private struct PlayerControls: View {
     private static let skipSeconds = 10
     private static let exitFullscreenDistance: CGFloat = 60
+    /// The same distance upward opens Up Next.
+    private static let upNextDistance: CGFloat = 60
     /// A pinch smaller than this is two fingers resting on the screen.
     private static let pinchMargin: CGFloat = 0.05
     /// mpv often waits a moment for data with no visible effect, so the spinner waits longer.
@@ -945,6 +942,16 @@ private struct PlayerControls: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
     @State private var showsSpinner = false
+    @State private var showsUpNext = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func setUpNext(_ isShown: Bool) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .snappy) {
+            showsUpNext = isShown
+            if isShown { showsControls = false }
+        }
+        if isShown { hideTask?.cancel() }
+    }
 
     /// Nothing to show yet, so the spinner appears at once.
     private var isStarting: Bool {
@@ -960,6 +967,7 @@ private struct PlayerControls: View {
         ZStack {
             PlayerTouchSurface(
                 onTap: {
+                    guard !showsUpNext else { return setUpNext(false) }
                     withAnimation(.easeOut(duration: 0.15)) { showsControls.toggle() }
                     scheduleHide()
                 },
@@ -970,7 +978,11 @@ private struct PlayerControls: View {
                     seekHint = SeekHint(isLeading: isLeading, seconds: previous + Self.skipSeconds)
                 },
                 onDragEnded: { translation in
-                    if translation.height > Self.exitFullscreenDistance { Orientation.setFullscreen(false) }
+                    if translation.height < -Self.upNextDistance {
+                        setUpNext(true)
+                    } else if translation.height > Self.exitFullscreenDistance {
+                        if showsUpNext { setUpNext(false) } else { Orientation.setFullscreen(false) }
+                    }
                 },
                 isDragEnabled: isFullscreen,
                 onPinch: { scale in
@@ -985,6 +997,17 @@ private struct PlayerControls: View {
             }
             if showsControls {
                 controls.transition(.opacity)
+            }
+            if showsUpNext {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                UpNextPanel { setUpNext(false) }
+                    .padding(.horizontal, Layout.cardSpacing)
+                    .padding(.bottom, Layout.rowSpacing)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.95, anchor: .bottom).combined(with: .opacity))
             }
             if let seekHint {
                 VStack(spacing: Layout.cardSpacing) {
@@ -1015,6 +1038,8 @@ private struct PlayerControls: View {
             SleepTimerSheet(timer: sleepTimer)
         }
         .sensoryFeedback(.selection, trigger: fillsScreen)
+        .onChange(of: isFullscreen) { if !isFullscreen { showsUpNext = false } }
+        .accessibilityAction(named: "Up Next") { if isFullscreen { setUpNext(true) } }
         .onAppear(perform: scheduleHide)
         .onChange(of: player.isPaused) { scheduleHide() }
         .task(id: isLoading) {
@@ -1169,11 +1194,15 @@ private struct PlayerControls: View {
                 ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
             }
             .pickerStyle(.menu)
-            Menu("Speed", systemImage: player.speed.gaugeSymbol) { speedPicker }
-            Button("Play on TV", systemImage: "tv") { router.showsTVLink = true }
-            Toggle("Autoplay", systemImage: "play.square.stack", isOn: Binding(get: { router.autoplay }, set: { isOn in
-                router.autoplay = isOn
-            }))
+            Picker("Speed", systemImage: player.speed.gaugeSymbol, selection: Binding(get: { player.speed }, set: { player.setSpeed($0) })) {
+                ForEach(Router.speeds, id: \.self) { speed in
+                    Text(speed == 1 ? "Normal" : speed.speedText).tag(speed)
+                }
+            }
+            .pickerStyle(.menu)
+            if let screen = TVLink.shared.screen {
+                Button("Play on \(screen.name)", systemImage: "tv") { router.playOnTV() }
+            }
             Button(sleepTimer.isActive ? "Sleep Timer · On" : "Sleep Timer…", systemImage: sleepTimer.isActive ? "moon.zzz.fill" : "moon.zzz") {
                 showsSleepTimer = true
             }
@@ -1181,8 +1210,15 @@ private struct PlayerControls: View {
                 Section(summary) {}
             }
         } label: {
-            Label("Options", systemImage: "ellipsis")
+            // The Shorts player's mark, in the accent color.
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.tint)
+                .shadow(color: .black.opacity(0.5), radius: 3)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
         }
+        .accessibilityLabel("More")
         // Hiding the controls would take the open menu with them.
         .simultaneousGesture(TapGesture().onEnded { hideTask?.cancel() })
     }
@@ -1198,77 +1234,108 @@ private struct PlayerControls: View {
     }
 }
 
-/// Links a TV once with its code, then sends it the video at the current time.
-private struct TVLinkSheet: View {
-    let video: YouTubeVideo
+/// Full screen's Up Next: the related videos in a row that scrolls sideways, floating like Woof Music's queue.
+private struct UpNextPanel: View {
+    let onClose: () -> Void
     @Environment(Router.self) private var router
-    @Environment(\.dismiss) private var dismiss
-    @State private var code = ""
-    @State private var isWorking = false
-    @State private var errorText: String?
-    private let link = TVLink.shared
+
+    private static let cardWidth: CGFloat = 200
+    private static let radius: CGFloat = 24
+
+    private var videos: [YouTubeVideo] {
+        (router.details?.related ?? []).filter { !$0.isShort }
+    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                if let screen = link.screen {
-                    Section {
-                        Button("Play on \(screen.name)", systemImage: "tv") { run { try await cast() } }
-                    } footer: {
-                        Text("Open YouTube or SmartTube on the TV first. The video starts where you are.")
-                    }
-                    Section {
-                        Button("Forget \(screen.name)", role: .destructive) { link.forget() }
-                    }
-                } else {
-                    Section {
-                        TextField("TV Code", text: $code)
-                            .keyboardType(.numberPad)
-                            .textContentType(.oneTimeCode)
-                        Button("Link TV") { run { try await link.pair(code: code) } }
-                            .disabled(code.filter(\.isNumber).isEmpty)
-                    } footer: {
-                        Text("In SmartTube, open Settings, then Remote Control. In YouTube on the TV, open Settings, then Link with TV Code.")
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Layout.chipSpacing) {
+                Text("Up Next")
+                    .font(.title2.bold())
+                Spacer(minLength: 0)
+                autoplayPill
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
                 }
-                if let errorText {
-                    Section {
-                        Label(errorText, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                .accessibilityLabel("Close Up Next")
             }
-            .disabled(isWorking)
-            .overlay { if isWorking { ProgressView() } }
-            .navigationTitle("Play on TV")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+            .padding(.leading, 20)
+            .padding(.trailing, Layout.cardSpacing)
+            .padding(.top, Layout.cardSpacing)
+            if videos.isEmpty {
+                Text("Nothing to suggest yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
+                        ForEach(videos, id: \.videoId) { video in
+                            Button {
+                                router.play(video, expand: false)
+                                onClose()
+                            } label: {
+                                card(video)
+                            }
+                            .buttonStyle(ZoomPressStyle())
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 20)
                 }
+                .scrollIndicators(.hidden)
+                .scrollTargetBehavior(.viewAligned)
+                .padding(.top, Layout.chipSpacing)
+                .padding(.bottom, 16)
             }
         }
-        .presentationDetents([.medium, .large])
+        .foregroundStyle(.white)
+        .glassEffect(.regular, in: .rect(cornerRadius: Self.radius))
+        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { value in
+            if value.translation.height > 60, abs(value.translation.height) > abs(value.translation.width) { onClose() }
+        })
+        .accessibilityAction(.escape, onClose)
     }
 
-    /// The phone pauses, so the sound doesn't play twice.
-    private func cast() async throws {
-        try await link.play(videoId: video.videoId, at: router.player.time)
-        router.player.setPaused(true)
-        dismiss()
-    }
-
-    private func run(_ action: @escaping () async throws -> Void) {
-        isWorking = true
-        errorText = nil
-        Task {
-            do {
-                try await action()
-            } catch {
-                errorText = error.localizedDescription
-            }
-            isWorking = false
+    /// Woof Music's queue pills: brighter when on.
+    private var autoplayPill: some View {
+        Button {
+            router.autoplay.toggle()
+        } label: {
+            Label("Autoplay", systemImage: "play.square.stack")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(.white.opacity(router.autoplay ? 0.15 : 0.07), in: .capsule)
+                .foregroundStyle(.white.opacity(router.autoplay ? 1 : 0.6))
+                .frame(height: 44)
+                .contentShape(.capsule)
         }
+        .buttonStyle(ZoomPressStyle())
+        .sensoryFeedback(.selection, trigger: router.autoplay)
+        .accessibilityValue(router.autoplay ? "On" : "Off")
+    }
+
+    private func card(_ video: YouTubeVideo) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            VideoCover(video: video, maxPixels: 600)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: VideoExtras(), isCompact: true) }
+                .clipShape(.rect(cornerRadius: 14, style: .continuous))
+            VideoTitle(video: video)
+                .font(.subheadline.weight(.semibold))
+                // Two lines always, so every card in the row has the same height.
+                .lineLimit(2, reservesSpace: true)
+                .multilineTextAlignment(.leading)
+                .padding(.top, 5)
+            Text([video.channelTitle, video.publishedTimeText].compactMap { $0 }.joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: Self.cardWidth)
     }
 }
 

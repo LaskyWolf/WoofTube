@@ -1183,7 +1183,7 @@ private struct NewBadge: View {
 }
 
 /// The time on a thumbnail. It stays black, because the accent color marks what you can act on.
-private struct VideoBadge: View {
+struct VideoBadge: View {
     let video: YouTubeVideo
     let extras: VideoExtras
     var isCompact = false

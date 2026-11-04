@@ -50,7 +50,6 @@ final class Router {
     var channelRoute: ChannelRoute?
     var channelPage: ChannelPageRoute?
     var pendingLink: YouTubeLink?
-    var showsTVLink = false
     @ObservationIgnored private var shortCheck: Task<Void, Never>?
     /// YouTube's longest Short, in seconds. Anything longer opens without asking.
     private static let longestShort = 180
@@ -408,6 +407,16 @@ final class Router {
             open(link)
         }
         return .handled
+    }
+
+    /// The phone pauses, so the sound doesn't play twice.
+    func playOnTV() {
+        guard let videoId = current?.videoId else { return }
+        let time = player.time
+        run {
+            try await TVLink.shared.play(videoId: videoId, at: time)
+            self.player.setPaused(true)
+        }
     }
 
     func open(_ link: YouTubeLink) {
@@ -778,7 +787,7 @@ enum WatchPositions {
     }
 
     static func save(videoId: String, time: Double, duration: Double) {
-        guard !SearchSettings.isIncognito else { return }
+        guard SearchSettings.recordsWatching else { return }
         if time / duration >= finishedFraction {
             guard positions.removeValue(forKey: videoId) != nil else { return }
         } else if time >= minimumPosition, Int(time) % saveEverySeconds == 0, Int(positions[videoId] ?? -1) != Int(time) {
