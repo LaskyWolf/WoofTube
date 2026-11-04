@@ -1239,7 +1239,7 @@ private struct UpNextPanel: View {
     let onClose: () -> Void
     @Environment(Router.self) private var router
 
-    private static let cardWidth: CGFloat = 200
+    private static let cardWidth: CGFloat = 168
     private static let radius: CGFloat = 24
 
     private var videos: [YouTubeVideo] {
@@ -1287,6 +1287,8 @@ private struct UpNextPanel: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollTargetBehavior(.viewAligned)
+                // A sideways scroll view would otherwise take all the height it's offered.
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, Layout.chipSpacing)
                 .padding(.bottom, 16)
             }
@@ -1305,6 +1307,8 @@ private struct UpNextPanel: View {
             router.autoplay.toggle()
         } label: {
             Label("Autoplay", systemImage: "play.square.stack")
+                // The player's own label style shows only the icon.
+                .labelStyle(.titleAndIcon)
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 14)
                 .frame(height: 36)
@@ -1330,7 +1334,7 @@ private struct UpNextPanel: View {
                 .lineLimit(2, reservesSpace: true)
                 .multilineTextAlignment(.leading)
                 .padding(.top, 5)
-            Text([video.channelTitle, video.publishedTimeText].compactMap { $0 }.joined(separator: " · "))
+            Text(video.channelTitle ?? "")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

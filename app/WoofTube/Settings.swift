@@ -73,8 +73,6 @@ final class AppSettings: ObservableObject {
 
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
-    @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
-    @AppStorage(SearchSettings.tracksWatchHistoryKey) private var tracksWatchHistory = true
     @State private var showsDiagnostics = false
 
     var body: some View {
@@ -113,13 +111,8 @@ struct SettingsView: View {
             Section("Integrations") {
                 settingsRow("Integrations", icon: "puzzlepiece.extension") { IntegrationsSettingsView() }
             }
-            Section {
-                toggleRow("Track Search History", icon: "magnifyingglass", isOn: $tracksSearchHistory)
-                toggleRow("Track Watch History", icon: "clock.arrow.circlepath", isOn: $tracksWatchHistory)
-            } header: {
-                Text("Privacy")
-            } footer: {
-                Text("When off, searches aren't saved, and videos you watch don't reach your YouTube history or this iPhone's resume points.")
+            Section("Privacy") {
+                settingsRow("Privacy", icon: "hand.raised") { PrivacySettingsView() }
             }
         }
         .listSectionSpacing(.compact)
@@ -128,16 +121,6 @@ struct SettingsView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-    }
-
-    private func toggleRow(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {
-        Toggle(isOn: isOn) {
-            Label {
-                Text(title)
-            } icon: {
-                Image(systemName: icon).foregroundStyle(.tint)
-            }
-        }
     }
 
     private func settingsRow<Destination: View>(_ title: String, icon: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
@@ -339,6 +322,35 @@ private struct IntegrationsSettingsView: View {
         }
         .navigationTitle("Integrations")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What this iPhone and YouTube keep of your searches and viewing.
+private struct PrivacySettingsView: View {
+    @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
+    @AppStorage(SearchSettings.tracksWatchHistoryKey) private var tracksWatchHistory = true
+
+    var body: some View {
+        List {
+            Section {
+                toggleRow("Track Search History", icon: "magnifyingglass", isOn: $tracksSearchHistory)
+                toggleRow("Track Watch History", icon: "clock.arrow.circlepath", isOn: $tracksWatchHistory)
+            } footer: {
+                Text("When off, searches aren't saved, and videos you watch don't reach your YouTube history or this iPhone's resume points.")
+            }
+        }
+        .navigationTitle("Privacy")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func toggleRow(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: icon).foregroundStyle(.tint)
+            }
+        }
     }
 }
 
