@@ -111,7 +111,9 @@ final class Router {
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
     private static let autoplayKey = "autoplay"
-    private static let handoffWaitSteps = 30
+    /// mpv starts in about half a second, so a longer wait for the account would be most of the delay.
+    /// A later answer still moves the video.
+    private static let handoffWaitSteps = 10
     private static let handoffLateSteps = 150
     private static let handoffUntouched = 15.0
     private static let pictureInPictureKey = "allowsPictureInPicture"

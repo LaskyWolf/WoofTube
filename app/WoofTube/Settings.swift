@@ -108,11 +108,12 @@ struct SettingsView: View {
                 settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
                 settingsRow("Downloads", icon: "arrow.down.to.line") { DownloadSettingsView() }
             }
-            Section("Integrations") {
-                settingsRow("Integrations", icon: "puzzlepiece.extension") { IntegrationsSettingsView() }
-            }
             Section("Privacy") {
                 settingsRow("Privacy", icon: "hand.raised") { PrivacySettingsView() }
+            }
+            // Last, as in Woof Music.
+            Section("Integrations") {
+                settingsRow("Integrations", icon: "puzzlepiece.extension") { IntegrationsSettingsView() }
             }
         }
         .listSectionSpacing(.compact)
