@@ -246,7 +246,7 @@ struct ShortsView: View {
                         if let title = model.currentVideo?.title {
                             Text(title).font(.headline)
                         }
-                        Text(model.details?.description.flatMap { $0.isEmpty ? nil : $0 } ?? "No description.")
+                        Text(model.details?.description ?? AttributedString("No description."))
                             .font(.subheadline)
                             .lineSpacing(Layout.cardSpacing)
                             .textSelection(.enabled)
@@ -258,11 +258,6 @@ struct ShortsView: View {
                 }
                 .navigationTitle("Description")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(role: .close) { showsDescription = false }
-                    }
-                }
             }
             .presentationDetents([.medium, .large])
         }
@@ -377,35 +372,52 @@ struct ShortsView: View {
         model.player.seek(to: target)
     }
 
+    /// The channel's picture at the medium size, with the title and the channel's name beside it, as tall as the picture.
+    /// Both text lines keep their space while loading, so the row doesn't grow and push the picture up.
     private func info(_ video: YouTubeVideo, isCurrent: Bool) -> some View {
         let details = isCurrent ? model.details : nil
+        // The feed's picture first, so it isn't swapped when the page's details arrive.
+        let avatar = video.channelAvatarURL ?? details?.channelAvatar
+        let channel = video.channelTitle ?? details?.channelTitle
+        let openChannel = {
+            guard let id = details?.channelId ?? video.channelId else { return }
+            router.openChannelPage(id)
+        }
         return VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-            HStack(spacing: Layout.chipSpacing) {
-                Button {
-                    guard let id = details?.channelId ?? video.channelId else { return }
-                    router.openChannelPage(id)
-                } label: {
-                    HStack(spacing: Layout.chipSpacing) {
-                        Avatar(url: details?.channelAvatar ?? video.channelAvatarURL, size: Layout.avatarSmall)
-                        Text(details?.channelTitle ?? video.channelTitle ?? "")
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                    .contentShape(.rect)
+            HStack(spacing: Layout.rowSpacing) {
+                Button(action: openChannel) {
+                    Avatar(url: avatar, size: Layout.avatarMedium)
+                        .id(avatar)
+                        .transition(.opacity)
                 }
                 .buttonStyle(ZoomPressStyle())
+                .accessibilityLabel(channel ?? "Channel")
+                VStack(alignment: .leading, spacing: 2) {
+                    Button {
+                        showsDescription = true
+                    } label: {
+                        VideoTitle(video: video)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2, reservesSpace: true)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(ZoomPressStyle(scale: 0.98))
+                    Button(action: openChannel) {
+                        Text(channel ?? " ")
+                            .font(.footnote)
+                            .opacity(channel == nil ? 0 : 0.8)
+                            .lineLimit(1)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(ZoomPressStyle())
+                    .accessibilityHidden(channel == nil)
+                }
+                .frame(minHeight: Layout.avatarMedium)
             }
-            Button {
-                showsDescription = true
-            } label: {
-                VideoTitle(video: video)
-                    .font(.subheadline)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(ZoomPressStyle(scale: 0.98))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: avatar)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: channel)
             if isCurrent, let failure = model.errorText {
                 Text(failure).font(.footnote).foregroundStyle(.red)
             }
@@ -444,18 +456,20 @@ struct ShortsView: View {
                 .simultaneousGesture(TapGesture().onEnded { shareTaps += 1 })
                 .accessibilityLabel("Share")
             }
-            if let details, let id = details.channelId {
-                Button {
-                    subscribeTaps += 1
-                    SubscribeButton.set(!details.isSubscribed, channelId: id) { model.setSubscribed($0) }
-                } label: {
-                    RailLabel(icon: details.isSubscribed ? "person.fill.checkmark" : "person.badge.plus", glassTint: details.isSubscribed ? nil : settings.accentColor, motion: details.isSubscribed ? .unsubscribed : .subscribed, trigger: subscribeTaps)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .animation(reduceMotion ? nil : .snappy, value: details.isSubscribed)
-                .accessibilityLabel(details.isSubscribed ? "Unsubscribe" : "Subscribe")
-                .sensoryFeedback(.selection, trigger: details.isSubscribed)
+            // Always shown, so it doesn't vanish and come back between Shorts. Taps wait for the channel's id.
+            let isSubscribed = details?.isSubscribed ?? false
+            let channelId = details?.channelId
+            Button {
+                guard let channelId else { return }
+                subscribeTaps += 1
+                SubscribeButton.set(!isSubscribed, channelId: channelId) { model.setSubscribed($0) }
+            } label: {
+                RailLabel(icon: isSubscribed ? "person.fill.checkmark" : "person.badge.plus", glassTint: isSubscribed ? nil : settings.accentColor, motion: isSubscribed ? .unsubscribed : .subscribed, trigger: subscribeTaps)
+                    .contentTransition(.symbolEffect(.replace))
             }
+            .animation(reduceMotion ? nil : .snappy, value: isSubscribed)
+            .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
+            .sensoryFeedback(.selection, trigger: isSubscribed)
         }
         .buttonStyle(PlayerPressStyle())
     }
@@ -554,7 +568,7 @@ private struct ShortsMoreMenu: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.red)
+                .foregroundStyle(.tint)
                 .shadow(color: .black.opacity(0.5), radius: 3)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)

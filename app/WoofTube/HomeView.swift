@@ -32,6 +32,26 @@ struct FeedChip: Identifiable, Hashable {
 }
 
 /// Loads a feed and its next pages for every list in the app.
+/// The channels you're a member of. YouTube's members feed lists their newest videos.
+// ponytail: reads that feed's first page, so a membership with no recent videos there is missed.
+@MainActor
+enum MemberChannels {
+    private(set) static var ids: Set<String> = []
+    private static var loadedProfile: String?
+
+    static func load() async {
+        let profile = ProfileStorage.active
+        guard loadedProfile != profile else { return }
+        guard let json = try? await FeedSource.browse("FEmemberships").fetch() else { return }
+        let items = await offMain { FeedParser.items(in: json) }
+        ids = Set(items.compactMap { item -> String? in
+            if case .video(let video, _) = item { return video.channelId }
+            return nil
+        })
+        loadedProfile = profile
+    }
+}
+
 @MainActor
 @Observable
 final class FeedModel {
@@ -49,6 +69,7 @@ final class FeedModel {
     private var nextQuery: String?
     private(set) var isHome = false
     private var isPlaylist = false
+    private var isSubscriptions = false
     /// Home keeps asking for pages until this many rows are new to the person.
     private static let freshRowsWanted = 8
     private static let pagesToSkip = 3
@@ -114,6 +135,10 @@ final class FeedModel {
             var page = parsed.0
             guard generation == loadGeneration else { return }
             isHome = source == .browse(YouTubeFeeds.home)
+            isSubscriptions = source == .browse(YouTubeFeeds.subscriptions)
+            if isSubscriptions { await MemberChannels.load() }
+            guard generation == loadGeneration else { return }
+            page = page.filter(shows)
             if case .browse(let id, _) = source { isPlaylist = id.hasPrefix("VL") } else { isPlaylist = false }
             if isHome {
                 let file = SavedHome.file
@@ -161,7 +186,7 @@ final class FeedModel {
             let known = Set(items.map(\.id))
             let (page, next) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
             let added = FeedParser.arrangingShorts(isHome ? SeenVideos.removing(from: page) : page, keepsOrder: isPlaylist)
-                .filter { !known.contains($0.id) }
+                .filter { !known.contains($0.id) && shows($0) }
             items += added
             nextToken = next
             if !added.isEmpty { return }
@@ -186,7 +211,7 @@ final class FeedModel {
         guard items.isEmpty else { return }
         isHome = true
         chips = savedChips
-        let fresh = SeenVideos.removing(from: page)
+        let fresh = SeenVideos.removing(from: page.filter(shows))
         items = FeedParser.arrangingShorts(fresh.isEmpty ? page : fresh)
     }
 
@@ -200,10 +225,27 @@ final class FeedModel {
             let (more, next) = await offMain { (FeedParser.items(in: json), FeedParser.continuation(in: json)) }
             nextToken = next
             let known = Set(fresh.map(\.id))
-            fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) }
+            fresh += SeenVideos.removing(from: more).filter { !known.contains($0.id) && shows($0) }
         }
         return fresh.isEmpty ? page : fresh
     }
+
+    /// Home leaves out Mixes and members-only videos. Subscriptions keep the latter only for channels you're a member of.
+    private func shows(_ item: FeedItem) -> Bool {
+        switch item {
+        case .playlist(let playlist):
+            return !(isHome && playlist.playlistId.hasPrefix(Self.mixPrefix))
+        case .video(let video, let extras):
+            guard extras.isMembersOnly else { return true }
+            if isHome { return false }
+            if isSubscriptions { return MemberChannels.ids.contains(video.channelId ?? "") }
+            return true
+        default:
+            return true
+        }
+    }
+
+    private static let mixPrefix = "RD"
 
     func beginSwitching() {
         isSwitching = true
@@ -341,10 +383,18 @@ struct TabHeader: View {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
                         .frame(width: 36, height: 36)
                         .glassEffect(.regular.interactive(), in: .circle)
+                        .overlay(alignment: .topTrailing) {
+                            if AppUpdate.shared.available != nil {
+                                Circle()
+                                    .fill(.tint)
+                                    .frame(width: 10, height: 10)
+                                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
+                            }
+                        }
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
-                .accessibilityLabel("Settings")
+                .accessibilityLabel(AppUpdate.shared.available != nil ? "Settings, update available" : "Settings")
             }
             .buttonStyle(.plain)
         }
@@ -1133,7 +1183,7 @@ private struct NewBadge: View {
 }
 
 /// The time on a thumbnail. It stays black, because the accent color marks what you can act on.
-private struct VideoBadge: View {
+struct VideoBadge: View {
     let video: YouTubeVideo
     let extras: VideoExtras
     var isCompact = false

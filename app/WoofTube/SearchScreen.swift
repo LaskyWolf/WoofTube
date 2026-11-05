@@ -8,6 +8,12 @@ enum SearchSettings {
     /// While on, nothing the person searches or watches is kept.
     static var isIncognito: Bool { UserDefaults.standard.bool(forKey: incognitoKey) }
     static var tracksHistory: Bool { UserDefaults.standard.object(forKey: tracksHistoryKey) as? Bool ?? true }
+
+    static let tracksWatchHistoryKey = "privacy.tracksWatchHistory"
+    /// Off, YouTube's history and this phone's resume points get nothing.
+    static var recordsWatching: Bool {
+        !isIncognito && UserDefaults.standard.object(forKey: tracksWatchHistoryKey) as? Bool ?? true
+    }
 }
 
 /// YouTube's own suggestions, the job Woof Music gives to YouTube Music's. They need no account.

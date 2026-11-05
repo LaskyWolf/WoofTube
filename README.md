@@ -64,6 +64,10 @@ It contains no YouTube code and shows no ads.
 - Notification inbox with an unread badge
 - Search with suggestions and history, filters for Never Seen and Live videos, and an incognito mode that stops recording it
 - Opens YouTube links pasted in search, and `youtube://`, `vnd.youtube://` and `wooftube://` links from other apps
+- Checks GitHub for a newer release and marks the profile picture when one is out
+- Adds WoofTube to the share sheet, so a shared YouTube link opens in the app
+- Plays the video on a TV linked with its code in Settings > Integrations, in YouTube on the TV or SmartTube
+- Can stop saving search and watch history, in Settings > Privacy
 
 ### Look
 - Accent colours that also change the app icon
@@ -113,7 +117,7 @@ Google can challenge or restrict an account used in an unofficial app, and posti
 
 ## Project status
 
-Version 1.1. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
+Version 1.3. Each feature still needs testing on more devices. [ROADMAP.md](app/ROADMAP.md) lists what is verified and what is missing.
 
 ## Credits
 

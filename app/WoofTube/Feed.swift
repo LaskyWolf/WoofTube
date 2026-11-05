@@ -62,6 +62,7 @@ struct VideoExtras {
     var isUpcoming = false
     /// Identifies the video's entry in a playlist, which removing it needs.
     var setVideoId: String?
+    var isMembersOnly = false
 }
 
 struct PollChoice {
@@ -431,12 +432,21 @@ enum FeedParser {
                     progress: percent.map { $0 / 100 },
                     startSeconds: JSON.first("startTimeSeconds", in: dict) as? Double,
                     isUpcoming: JSON.first("upcomingEventData", in: dict) != nil,
-                    setVideoId: JSON.string("setVideoId", in: dict)
+                    setVideoId: JSON.string("setVideoId", in: dict),
+                    isMembersOnly: hasMembersBadge(dict)
                 )))
             }
         } else if let playlist = YouTubeFeedParser.playlists(in: dict).first ?? show(in: dict) {
             items.append(.playlist(playlist))
         }
+    }
+
+    /// Lockups mark these with `badgeStyle`, older renderers with `style`.
+    static func hasMembersBadge(_ node: Any) -> Bool {
+        if let array = node as? [Any] { return array.contains { hasMembersBadge($0) } }
+        guard let dict = node as? [String: Any] else { return false }
+        if dict["badgeStyle"] as? String == "BADGE_MEMBERS_ONLY" || dict["style"] as? String == "BADGE_STYLE_TYPE_MEMBERS_ONLY" { return true }
+        return dict.values.contains { hasMembersBadge($0) }
     }
 
     /// A channel's series. SwiftyTube leaves these out, though they open like any playlist.

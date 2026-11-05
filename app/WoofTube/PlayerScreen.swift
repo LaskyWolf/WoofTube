@@ -924,6 +924,8 @@ private struct SleepGlyph: View {
 private struct PlayerControls: View {
     private static let skipSeconds = 10
     private static let exitFullscreenDistance: CGFloat = 60
+    /// The same distance upward opens Up Next.
+    private static let upNextDistance: CGFloat = 60
     /// A pinch smaller than this is two fingers resting on the screen.
     private static let pinchMargin: CGFloat = 0.05
     /// mpv often waits a moment for data with no visible effect, so the spinner waits longer.
@@ -940,6 +942,16 @@ private struct PlayerControls: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
     @State private var showsSpinner = false
+    @State private var showsUpNext = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private func setUpNext(_ isShown: Bool) {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .snappy) {
+            showsUpNext = isShown
+            if isShown { showsControls = false }
+        }
+        if isShown { hideTask?.cancel() }
+    }
 
     /// Nothing to show yet, so the spinner appears at once.
     private var isStarting: Bool {
@@ -955,6 +967,7 @@ private struct PlayerControls: View {
         ZStack {
             PlayerTouchSurface(
                 onTap: {
+                    guard !showsUpNext else { return setUpNext(false) }
                     withAnimation(.easeOut(duration: 0.15)) { showsControls.toggle() }
                     scheduleHide()
                 },
@@ -965,7 +978,11 @@ private struct PlayerControls: View {
                     seekHint = SeekHint(isLeading: isLeading, seconds: previous + Self.skipSeconds)
                 },
                 onDragEnded: { translation in
-                    if translation.height > Self.exitFullscreenDistance { Orientation.setFullscreen(false) }
+                    if translation.height < -Self.upNextDistance {
+                        setUpNext(true)
+                    } else if translation.height > Self.exitFullscreenDistance {
+                        if showsUpNext { setUpNext(false) } else { Orientation.setFullscreen(false) }
+                    }
                 },
                 isDragEnabled: isFullscreen,
                 onPinch: { scale in
@@ -980,6 +997,17 @@ private struct PlayerControls: View {
             }
             if showsControls {
                 controls.transition(.opacity)
+            }
+            if showsUpNext {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                UpNextPanel { setUpNext(false) }
+                    .padding(.horizontal, Layout.cardSpacing)
+                    .padding(.bottom, Layout.rowSpacing)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.95, anchor: .bottom).combined(with: .opacity))
             }
             if let seekHint {
                 VStack(spacing: Layout.cardSpacing) {
@@ -1010,6 +1038,8 @@ private struct PlayerControls: View {
             SleepTimerSheet(timer: sleepTimer)
         }
         .sensoryFeedback(.selection, trigger: fillsScreen)
+        .onChange(of: isFullscreen) { if !isFullscreen { showsUpNext = false } }
+        .accessibilityAction(named: "Up Next") { if isFullscreen { setUpNext(true) } }
         .onAppear(perform: scheduleHide)
         .onChange(of: player.isPaused) { scheduleHide() }
         .task(id: isLoading) {
@@ -1043,6 +1073,16 @@ private struct PlayerControls: View {
                 optionsMenu
             }
             Spacer(minLength: 0)
+            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? [], segments: router.usesSponsorBlock ? router.sponsorSegments : []) { scrubbing in
+                if scrubbing {
+                    hideTask?.cancel()
+                } else {
+                    scheduleHide()
+                }
+            }
+        }
+        // Centred on the whole video, not on the space between the top buttons and the bar.
+        .overlay {
             if !isStarting, !showsSpinner {
                 Button {
                     player.togglePause()
@@ -1054,14 +1094,6 @@ private struct PlayerControls: View {
                     }
                 }
                 .labelStyle(PlayerGlyphLabelStyle(size: 34))
-            }
-            Spacer(minLength: 0)
-            PlayerProgress(clock: player.clock, player: player, duration: player.duration, isFullscreen: isFullscreen, storyboard: router.storyboard, chapters: router.details?.chapters ?? [], segments: router.usesSponsorBlock ? router.sponsorSegments : []) { scrubbing in
-                if scrubbing {
-                    hideTask?.cancel()
-                } else {
-                    scheduleHide()
-                }
             }
         }
         .padding(.horizontal, Layout.cardSpacing)
@@ -1162,10 +1194,15 @@ private struct PlayerControls: View {
                 ForEach(Router.qualities, id: \.self) { Text("\($0)p").tag($0) }
             }
             .pickerStyle(.menu)
-            Menu("Speed", systemImage: player.speed.gaugeSymbol) { speedPicker }
-            Toggle("Autoplay", systemImage: "play.square.stack", isOn: Binding(get: { router.autoplay }, set: { isOn in
-                router.autoplay = isOn
-            }))
+            Picker("Speed", systemImage: player.speed.gaugeSymbol, selection: Binding(get: { player.speed }, set: { player.setSpeed($0) })) {
+                ForEach(Router.speeds, id: \.self) { speed in
+                    Text(speed == 1 ? "Normal" : speed.speedText).tag(speed)
+                }
+            }
+            .pickerStyle(.menu)
+            if let screen = TVLink.shared.screen {
+                Button("Play on \(screen.name)", systemImage: "tv") { router.playOnTV() }
+            }
             Button(sleepTimer.isActive ? "Sleep Timer · On" : "Sleep Timer…", systemImage: sleepTimer.isActive ? "moon.zzz.fill" : "moon.zzz") {
                 showsSleepTimer = true
             }
@@ -1173,8 +1210,15 @@ private struct PlayerControls: View {
                 Section(summary) {}
             }
         } label: {
-            Label("Options", systemImage: "ellipsis")
+            // The Shorts player's mark, in the accent color.
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(.tint)
+                .shadow(color: .black.opacity(0.5), radius: 3)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
         }
+        .accessibilityLabel("More")
         // Hiding the controls would take the open menu with them.
         .simultaneousGesture(TapGesture().onEnded { hideTask?.cancel() })
     }
@@ -1187,6 +1231,115 @@ private struct PlayerControls: View {
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { showsControls = false }
         }
+    }
+}
+
+/// Full screen's Up Next: the related videos in a row that scrolls sideways, floating like Woof Music's queue.
+private struct UpNextPanel: View {
+    let onClose: () -> Void
+    @Environment(Router.self) private var router
+
+    private static let cardWidth: CGFloat = 168
+    private static let radius: CGFloat = 24
+
+    private var videos: [YouTubeVideo] {
+        (router.details?.related ?? []).filter { !$0.isShort }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Layout.chipSpacing) {
+                Text("Up Next")
+                    .font(.title2.bold())
+                Spacer(minLength: 0)
+                autoplayPill
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
+                }
+                .accessibilityLabel("Close Up Next")
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, Layout.cardSpacing)
+            .padding(.top, Layout.cardSpacing)
+            if videos.isEmpty {
+                Text("Nothing to suggest yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
+                        ForEach(videos, id: \.videoId) { video in
+                            Button {
+                                router.play(video, expand: false)
+                                onClose()
+                            } label: {
+                                card(video)
+                            }
+                            .buttonStyle(ZoomPressStyle())
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, 20)
+                }
+                .scrollIndicators(.hidden)
+                .scrollTargetBehavior(.viewAligned)
+                // A sideways scroll view would otherwise take all the height it's offered.
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, Layout.chipSpacing)
+                .padding(.bottom, 16)
+            }
+        }
+        .foregroundStyle(.white)
+        .glassEffect(.regular, in: .rect(cornerRadius: Self.radius))
+        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { value in
+            if value.translation.height > 60, abs(value.translation.height) > abs(value.translation.width) { onClose() }
+        })
+        .accessibilityAction(.escape, onClose)
+    }
+
+    /// Woof Music's queue pills: brighter when on.
+    private var autoplayPill: some View {
+        Button {
+            router.autoplay.toggle()
+        } label: {
+            Label("Autoplay", systemImage: "play.square.stack")
+                // The player's own label style shows only the icon.
+                .labelStyle(.titleAndIcon)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(.white.opacity(router.autoplay ? 0.15 : 0.07), in: .capsule)
+                .foregroundStyle(.white.opacity(router.autoplay ? 1 : 0.6))
+                .frame(height: 44)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(ZoomPressStyle())
+        .sensoryFeedback(.selection, trigger: router.autoplay)
+        .accessibilityValue(router.autoplay ? "On" : "Off")
+    }
+
+    private func card(_ video: YouTubeVideo) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            VideoCover(video: video, maxPixels: 600)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: VideoExtras(), isCompact: true) }
+                .clipShape(.rect(cornerRadius: 14, style: .continuous))
+            VideoTitle(video: video)
+                .font(.subheadline.weight(.semibold))
+                // Two lines always, so every card in the row has the same height.
+                .lineLimit(2, reservesSpace: true)
+                .multilineTextAlignment(.leading)
+                .padding(.top, 5)
+            Text(video.channelTitle ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(width: Self.cardWidth)
     }
 }
 
@@ -1206,7 +1359,9 @@ private struct PlaybackFailure: View {
     @Environment(Router.self) private var router
 
     var body: some View {
-        if let failure = router.loadError ?? player.errorText {
+        if router.isMembersOnly, let video = router.current {
+            membersOnly(video)
+        } else if let failure = router.loadError ?? player.errorText {
             VStack(alignment: .leading, spacing: Layout.chipSpacing) {
                 Label(failure, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -1218,6 +1373,30 @@ private struct PlaybackFailure: View {
                 }
             }
         }
+    }
+
+    /// Joining happens on YouTube, so the button opens the video there.
+    private func membersOnly(_ video: YouTubeVideo) -> some View {
+        VStack(spacing: Layout.chipSpacing) {
+            Image(systemName: "star.circle.fill")
+                .font(.system(size: 44))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text("Members Only")
+                .font(.headline)
+            Text("Only members of \(router.details?.channelTitle ?? video.channelTitle ?? "this channel") can watch this video. You can join on YouTube.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            if let url = URL(string: "https://www.youtube.com/watch?v=\(video.videoId)") {
+                Link("Open in YouTube", destination: url)
+                    .buttonStyle(.bordered)
+                    .frame(minHeight: 44)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(Layout.rowSpacing)
+        .materialCard()
     }
 }
 
@@ -1518,27 +1697,49 @@ private struct WatchDetailsView: View {
         .contentShape(Rectangle().inset(by: -3))
     }
 
+    /// Closed, the whole card opens it. Open, it isn't a button, so its links can take taps.
+    @ViewBuilder
     private func descriptionCard(_ details: WatchDetails) -> some View {
-        Button {
-            withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { showsDescription.toggle() }
-        } label: {
+        if showsDescription {
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                let metadata = [details.views, details.age ?? router.current?.publishedTimeText, details.date].compactMap { $0 }
-                if !metadata.isEmpty {
-                    Text(metadata.joined(separator: " · ")).font(.subheadline.weight(.semibold))
-                }
-                if let description = details.description, !description.isEmpty {
-                    Text(description)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(showsDescription ? nil : 2)
-                        .multilineTextAlignment(.leading)
-                }
+                descriptionText(details)
+                Button("Show Less") { toggleDescription() }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 44)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .materialCard()
+            .environment(\.openURL, OpenURLAction { router.openDescriptionLink($0) })
+        } else {
+            Button {
+                toggleDescription()
+            } label: {
+                descriptionText(details)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .materialCard()
+            }
+            .buttonStyle(ZoomPressStyle(scale: 0.98))
         }
-        .buttonStyle(ZoomPressStyle(scale: 0.98))
+    }
+
+    private func descriptionText(_ details: WatchDetails) -> some View {
+        VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+            let metadata = [details.views, details.age ?? router.current?.publishedTimeText, details.date].compactMap { $0 }
+            if !metadata.isEmpty {
+                Text(metadata.joined(separator: " · ")).font(.subheadline.weight(.semibold))
+            }
+            if let description = details.description {
+                Text(description)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(showsDescription ? nil : 2)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+    }
+
+    private func toggleDescription() {
+        withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .snappy) { showsDescription.toggle() }
     }
 
     private func toggleWatchLater(_ id: String, isSaved: Bool) {

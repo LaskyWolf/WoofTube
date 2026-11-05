@@ -71,6 +71,7 @@ final class Router {
     private(set) var details: WatchDetails?
     private(set) var streamSummary: String?
     private(set) var loadError: String?
+    private(set) var isMembersOnly = false
     private(set) var captions: [YouTubeCaptionTrack] = []
     private(set) var selectedCaption: String?
     private(set) var captionCues: [CaptionCue] = []
@@ -110,7 +111,9 @@ final class Router {
     static let speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
     private static let maxHeightKey = "maxHeight"
     private static let autoplayKey = "autoplay"
-    private static let handoffWaitSteps = 30
+    /// mpv starts in about half a second, so a longer wait for the account would be most of the delay.
+    /// A later answer still moves the video.
+    private static let handoffWaitSteps = 10
     private static let handoffLateSteps = 150
     private static let handoffUntouched = 15.0
     private static let pictureInPictureKey = "allowsPictureInPicture"
@@ -395,6 +398,29 @@ final class Router {
         }
     }
 
+    /// A time in this video seeks, other YouTube links open here, and the rest go to Safari.
+    func openDescriptionLink(_ url: URL) -> OpenURLAction.Result {
+        guard let link = YouTubeLink(url: url) else { return .systemAction }
+        if case .video(let id) = link, id == current?.videoId,
+           let time = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "t" })?.value,
+           let seconds = Double(time.trimmingCharacters(in: CharacterSet(charactersIn: "s"))) {
+            player.seek(to: seconds)
+        } else {
+            open(link)
+        }
+        return .handled
+    }
+
+    /// The phone pauses, so the sound doesn't play twice.
+    func playOnTV() {
+        guard let videoId = current?.videoId else { return }
+        let time = player.time
+        run {
+            try await TVLink.shared.play(videoId: videoId, at: time)
+            self.player.setPaused(true)
+        }
+    }
+
     func open(_ link: YouTubeLink) {
         switch link {
         case .video(let id):
@@ -566,6 +592,7 @@ final class Router {
         loadTask?.cancel()
         streamSummary = nil
         loadError = nil
+        isMembersOnly = false
         captions = []
         isLive = false
         if isNewPlayback {
@@ -614,6 +641,9 @@ final class Router {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
+                let membersOnly = await YouTubeAPI.isMembersOnly(videoId: videoId)
+                guard !Task.isCancelled else { return }
+                isMembersOnly = membersOnly
                 loadError = error.localizedDescription
             }
         }
@@ -759,7 +789,7 @@ enum WatchPositions {
     }
 
     static func save(videoId: String, time: Double, duration: Double) {
-        guard !SearchSettings.isIncognito else { return }
+        guard SearchSettings.recordsWatching else { return }
         if time / duration >= finishedFraction {
             guard positions.removeValue(forKey: videoId) != nil else { return }
         } else if time >= minimumPosition, Int(time) % saveEverySeconds == 0, Int(positions[videoId] ?? -1) != Int(time) {

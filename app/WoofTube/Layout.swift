@@ -1,3 +1,4 @@
+import CoreMotion
 import SwiftUI
 
 /// Values from Woof Music's DesignTokens and FilterChipBar.
@@ -26,20 +27,82 @@ enum Layout {
     static let rowInsets = EdgeInsets(top: rowPadding * 2, leading: screenPadding, bottom: rowPadding * 2, trailing: screenPadding)
 }
 
-/// The app is portrait, like Apple Music. Only the open video page can rotate.
+/// The app turns with the phone. Full screen holds landscape until the phone is upright again.
 enum Orientation {
-    private(set) static var mask = UIInterfaceOrientationMask.portrait
+    private(set) static var mask = UIInterfaceOrientationMask.allButUpsideDown
+
+    private static let motion = CMMotionManager()
+    private static let tiltCheck: TimeInterval = 0.5
+    /// Share of gravity along one edge that counts as the phone being turned that way.
+    private static let tiltThreshold = 0.7
+    /// Leaving full screen needs the phone nearly upright, for this many checks in a row.
+    private static let uprightThreshold = 0.85
+    private static let uprightChecks = 3
 
     static func videoPageChanged(isOpen: Bool) {
-        apply(isOpen ? .allButUpsideDown : .portrait, request: isOpen ? nil : .portrait)
+        if !isOpen { motion.stopAccelerometerUpdates() }
+        apply(.allButUpsideDown, request: nil)
     }
 
     /// Holds the requested orientation, so the sensor can't undo the button straight away.
     static func setFullscreen(_ isFullscreen: Bool) {
-        // The device and the interface name their landscape sides the opposite way round.
-        let side: UIInterfaceOrientationMask = UIDevice.current.orientation == .landscapeRight ? .landscapeLeft : .landscapeRight
-        apply(isFullscreen ? .landscape : .portrait, request: isFullscreen ? side : .portrait)
-        unlockIfHeldUpright()
+        if isFullscreen {
+            followTilt()
+        } else {
+            motion.stopAccelerometerUpdates()
+            apply(.portrait, request: .portrait)
+            unlockIfHeldUpright()
+        }
+    }
+
+    /// Rotation lock stops iOS from turning the screen, so full screen reads the tilt itself:
+    /// first to pick the side, then every half second to follow the phone, or leave once it's held upright.
+    private static func followTilt() {
+        guard motion.isAccelerometerAvailable else {
+            apply(.landscape, request: .landscapeRight)
+            return
+        }
+        var side: UIInterfaceOrientationMask?
+        var upright = 0
+        motion.accelerometerUpdateInterval = tiltCheck
+        motion.startAccelerometerUpdates(to: .main) { data, _ in
+            guard let gravity = data?.acceleration else { return }
+            let tilt = Self.side(x: gravity.x, y: gravity.y)
+            if side == nil {
+                // Flat on a table says nothing, so it takes the usual side.
+                side = tilt == .portrait || tilt == nil ? .landscapeRight : tilt
+                apply(.landscape, request: side)
+            } else if tilt == .portrait {
+                upright += 1
+                guard upright >= uprightChecks else { return }
+                motion.stopAccelerometerUpdates()
+                apply(.allButUpsideDown, request: .portrait)
+            } else {
+                upright = 0
+                if let tilt, tilt != side {
+                    side = tilt
+                    apply(.landscape, request: tilt)
+                }
+            }
+        }
+    }
+
+    /// Gravity in the phone's own axes: y is -1 when upright, x is +1 when its right edge points down.
+    static func side(x: Double, y: Double) -> UIInterfaceOrientationMask? {
+        if y < -uprightThreshold { return .portrait }
+        // The right edge down puts the top of the screen on the left, which the interface calls landscapeLeft.
+        if x > tiltThreshold { return .landscapeLeft }
+        if x < -tiltThreshold { return .landscapeRight }
+        return nil
+    }
+
+    static func selfCheck() {
+        assert(side(x: 0, y: -1) == .portrait)
+        assert(side(x: 0.95, y: -0.1) == .landscapeLeft)
+        assert(side(x: -0.95, y: 0.1) == .landscapeRight)
+        assert(side(x: 0.1, y: -0.2) == nil)
+        // Half raised isn't upright yet.
+        assert(side(x: 0.3, y: -0.75) == nil)
     }
 
     /// After leaving full screen, rotation comes back once the phone is held upright.

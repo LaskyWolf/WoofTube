@@ -437,6 +437,7 @@ struct ClockGlyph: View {
     @State private var minuteAngle = 0.0
 
     private static let size: CGFloat = 17
+    private static let imageMargin: CGFloat = 2
     private static let spin = 1080.0
 
     var body: some View {
@@ -451,7 +452,10 @@ struct ClockGlyph: View {
         }
         .frame(width: Self.size, height: Self.size)
         // Liquid Glass lets what's under it show through its label, so the clock is flattened to an image first.
+        // The margin keeps the circle's edge inside that image.
+        .padding(Self.imageMargin)
         .drawingGroup()
+        .padding(-Self.imageMargin)
         .onChange(of: trigger) {
             guard !reduceMotion else { return }
             withAnimation(.easeOut(duration: 0.7)) { minuteAngle += isSaved ? Self.spin : -Self.spin }

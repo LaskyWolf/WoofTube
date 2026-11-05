@@ -4,4 +4,5 @@ out/
 # Native app
 app/WoofTube.xcodeproj/
 app/WoofTube/Info.plist
+app/ShareExtension/Info.plist
 app/build/

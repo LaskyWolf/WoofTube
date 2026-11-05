@@ -73,7 +73,6 @@ final class AppSettings: ObservableObject {
 
 struct SettingsView: View {
     @EnvironmentObject private var session: Session
-    @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
     @State private var showsDiagnostics = false
 
     var body: some View {
@@ -87,6 +86,12 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(session.account?.name ?? "YouTube").font(.headline).lineLimit(1)
                             Text("YouTube").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        if let release = AppUpdate.shared.available {
+                            Spacer(minLength: 0)
+                            Text("Update \(release.version)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tint)
                         }
                     }
                     .padding(.vertical, Layout.cardSpacing)
@@ -103,14 +108,12 @@ struct SettingsView: View {
                 settingsRow("Player", icon: "play.circle") { PlayerSettingsView() }
                 settingsRow("Downloads", icon: "arrow.down.to.line") { DownloadSettingsView() }
             }
-            Section("Search") {
-                Toggle(isOn: $tracksSearchHistory) {
-                    Label {
-                        Text("Search History")
-                    } icon: {
-                        Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90").foregroundStyle(.tint)
-                    }
-                }
+            Section("Privacy") {
+                settingsRow("Privacy", icon: "hand.raised") { PrivacySettingsView() }
+            }
+            // Last, as in Woof Music.
+            Section("Integrations") {
+                settingsRow("Integrations", icon: "puzzlepiece.extension") { IntegrationsSettingsView() }
             }
         }
         .listSectionSpacing(.compact)
@@ -190,16 +193,45 @@ private struct ProfileView: View {
             }
             .disabled(!downloads.active.isEmpty)
             Section {
+                Button("Sign Out", role: .destructive) { confirmsSignOut = true }
+                    .disabled(!downloads.active.isEmpty)
+            }
+            Section {
+                LabeledContent("Version", value: "\(AppUpdate.currentVersion) (\(AppUpdate.currentBuild))")
+                if let release = AppUpdate.shared.available {
+                    Link(destination: release.page) {
+                        Label("WoofTube \(release.version) Is Available", systemImage: "arrow.down.app")
+                    }
+                } else {
+                    Button {
+                        Task { await AppUpdate.shared.check() }
+                    } label: {
+                        HStack {
+                            Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer(minLength: Layout.chipSpacing)
+                            if AppUpdate.shared.isChecking {
+                                ProgressView()
+                            } else if AppUpdate.shared.didCheck {
+                                Text(AppUpdate.shared.errorText ?? "Up to Date")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(AppUpdate.shared.isChecking)
+                }
+            } header: {
+                Text("App")
+            } footer: {
+                Text("Compares this version with the newest release on GitHub.")
+            }
+            Section {
                 Link(destination: Self.notificationSettings) {
                     Label("Notification Settings", systemImage: "bell.badge")
                 }
                 Link(destination: Self.accountSettings) {
                     Label("Google Account", systemImage: "person.crop.circle")
                 }
-            }
-            Section {
-                Button("Sign Out", role: .destructive) { confirmsSignOut = true }
-                    .disabled(!downloads.active.isEmpty)
             }
         }
         .listSectionSpacing(.compact)
@@ -219,9 +251,6 @@ private struct ProfileView: View {
 
 private struct PlayerSettingsView: View {
     @Environment(Router.self) private var router
-    @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
-    @AppStorage(DeArrow.enabledKey) private var usesDeArrow = false
-
     var body: some View {
         List {
             Section {
@@ -245,6 +274,20 @@ private struct PlayerSettingsView: View {
             } footer: {
                 Text("Autoplay starts the first Up Next video when one ends. Picture in Picture keeps the video in a small window when you leave the app.")
             }
+        }
+        .navigationTitle("Player")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Services from outside YouTube. Each footer says what it receives.
+private struct IntegrationsSettingsView: View {
+    @Environment(Router.self) private var router
+    @AppStorage(DislikeCounts.enabledKey) private var showsDislikeCounts = true
+    @AppStorage(DeArrow.enabledKey) private var usesDeArrow = false
+
+    var body: some View {
+        List {
             Section {
                 NavigationLink {
                     SponsorBlockSettingsView()
@@ -276,9 +319,39 @@ private struct PlayerSettingsView: View {
             } footer: {
                 Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open or see in a feed.")
             }
+            TVLinkSection()
         }
-        .navigationTitle("Player")
+        .navigationTitle("Integrations")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// What this iPhone and YouTube keep of your searches and viewing.
+private struct PrivacySettingsView: View {
+    @AppStorage(SearchSettings.tracksHistoryKey) private var tracksSearchHistory = true
+    @AppStorage(SearchSettings.tracksWatchHistoryKey) private var tracksWatchHistory = true
+
+    var body: some View {
+        List {
+            Section {
+                toggleRow("Track Search History", icon: "magnifyingglass", isOn: $tracksSearchHistory)
+                toggleRow("Track Watch History", icon: "clock.arrow.circlepath", isOn: $tracksWatchHistory)
+            } footer: {
+                Text("When off, searches aren't saved, and videos you watch don't reach your YouTube history or this iPhone's resume points.")
+            }
+        }
+        .navigationTitle("Privacy")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func toggleRow(_ title: String, icon: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: icon).foregroundStyle(.tint)
+            }
+        }
     }
 }
 
@@ -347,5 +420,69 @@ private struct AppearanceSettingsView: View {
         let application = UIApplication.shared
         guard application.supportsAlternateIcons, application.alternateIconName != preset.alternateIconName else { return }
         application.setAlternateIconName(preset.alternateIconName)
+    }
+}
+
+/// Links a TV once with its code. The player's menu then offers to play there.
+private struct TVLinkSection: View {
+    @State private var code = ""
+    @State private var isWorking = false
+    @State private var errorText: String?
+    private let link = TVLink.shared
+
+    var body: some View {
+        Section {
+            if let screen = link.screen {
+                LabeledContent {
+                    Text(screen.name)
+                } label: {
+                    Label {
+                        Text("TV")
+                    } icon: {
+                        Image(systemName: "tv").foregroundStyle(.tint)
+                    }
+                }
+                Button("Forget \(screen.name)", role: .destructive) { link.forget() }
+            } else {
+                TextField("TV Code", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                Button {
+                    pair()
+                } label: {
+                    HStack {
+                        Text("Link TV")
+                        Spacer(minLength: Layout.chipSpacing)
+                        if isWorking { ProgressView() }
+                    }
+                }
+                .disabled(code.filter(\.isNumber).isEmpty || isWorking)
+            }
+            if let errorText {
+                Label(errorText, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("TV")
+        } footer: {
+            Text(link.screen == nil
+                ? "In SmartTube, open Settings, then Remote Control. In YouTube on the TV, open Settings, then Link with TV Code."
+                : "Play on TV appears in the player's menu. Open YouTube or SmartTube on the TV first.")
+        }
+    }
+
+    private func pair() {
+        isWorking = true
+        errorText = nil
+        Task {
+            do {
+                try await link.pair(code: code)
+                code = ""
+            } catch {
+                errorText = error.localizedDescription
+            }
+            isWorking = false
+        }
     }
 }
