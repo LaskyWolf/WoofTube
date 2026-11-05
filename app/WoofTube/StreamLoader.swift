@@ -118,7 +118,17 @@ enum StreamLoader {
         return [uncompressed, originals].first { !$0.isEmpty } ?? items
     }
 
+    /// H.264 only, while it's offered. mpv decodes AV1 and VP9 in software on the phone, which drops frames
+    /// and puts the picture out of step. SwiftyTube counts every mp4 as H.264, and AV1 comes in mp4 too.
+    // ponytail: caps the picture at 1080p, YouTube's highest H.264; allow VP9 or AV1 once Diagnostics shows them in hardware.
+    private static func hardwareDecoded<Item>(in items: [Item], codec: (Item) -> String) -> [Item] {
+        let h264 = items.filter { codec($0).lowercased().hasPrefix("avc1") }
+        return h264.isEmpty ? items : h264
+    }
+
     static func selfCheck() {
+        assert(hardwareDecoded(in: ["av01.0.13M.08", "avc1.64002A", "vp9"], codec: { $0 }) == ["avc1.64002A"])
+        assert(hardwareDecoded(in: ["av01.0.13M.08", "vp9"], codec: { $0 }) == ["av01.0.13M.08", "vp9"])
         func address(_ tags: String) -> String { "https://a.com/videoplayback?xtags=\(tags)&itag=251" }
         let dub = address("acont%3Ddubbed-auto%3Alang%3Dit")
         let original = address("acont%3Doriginal%3Alang%3Den")
@@ -216,7 +226,7 @@ enum StreamLoader {
                 // The short side, so a vertical 1080x1920 Short counts as 1080p.
                 let formats = ((data.formats ?? []) + (data.adaptiveFormats ?? []))
                     .filter { min($0.width ?? 0, $0.height ?? 0) <= maxHeight }
-                if let video = FormatSelector.bestVideoOnlyFormat(from: formats),
+                if let video = FormatSelector.bestVideoOnlyFormat(from: hardwareDecoded(in: formats, codec: \.codec)),
                    let videoURL = video.url,
                    let audio = FormatSelector.bestAudioFormat(from: originalAudio(in: formats, url: \.url), preference: .high),
                    let audioURL = audio.url {
