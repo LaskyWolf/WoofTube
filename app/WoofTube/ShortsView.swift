@@ -258,11 +258,6 @@ struct ShortsView: View {
                 }
                 .navigationTitle("Description")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(role: .close) { showsDescription = false }
-                    }
-                }
             }
             .presentationDetents([.medium, .large])
         }
@@ -378,6 +373,7 @@ struct ShortsView: View {
     }
 
     /// The channel's picture at the medium size, with the title and the channel's name beside it, as tall as the picture.
+    /// Both text lines keep their space while loading, so the row doesn't grow and push the picture up.
     private func info(_ video: YouTubeVideo, isCurrent: Bool) -> some View {
         let details = isCurrent ? model.details : nil
         // The feed's picture first, so it isn't swapped when the page's details arrive.
@@ -402,23 +398,21 @@ struct ShortsView: View {
                     } label: {
                         VideoTitle(video: video)
                             .font(.subheadline.weight(.semibold))
-                            .lineLimit(2)
+                            .lineLimit(2, reservesSpace: true)
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(.rect)
                     }
                     .buttonStyle(ZoomPressStyle(scale: 0.98))
-                    if let channel {
-                        Button(action: openChannel) {
-                            Text(channel)
-                                .font(.footnote)
-                                .opacity(0.8)
-                                .lineLimit(1)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(ZoomPressStyle())
-                        .transition(.opacity)
+                    Button(action: openChannel) {
+                        Text(channel ?? " ")
+                            .font(.footnote)
+                            .opacity(channel == nil ? 0 : 0.8)
+                            .lineLimit(1)
+                            .contentShape(.rect)
                     }
+                    .buttonStyle(ZoomPressStyle())
+                    .accessibilityHidden(channel == nil)
                 }
                 .frame(minHeight: Layout.avatarMedium)
             }
@@ -462,7 +456,7 @@ struct ShortsView: View {
                 .simultaneousGesture(TapGesture().onEnded { shareTaps += 1 })
                 .accessibilityLabel("Share")
             }
-            // Always in the rail, so it doesn't push the others when the details arrive. It fades in once they do.
+            // Always shown, so it doesn't vanish and come back between Shorts. Taps wait for the channel's id.
             let isSubscribed = details?.isSubscribed ?? false
             let channelId = details?.channelId
             Button {
@@ -473,11 +467,7 @@ struct ShortsView: View {
                 RailLabel(icon: isSubscribed ? "person.fill.checkmark" : "person.badge.plus", glassTint: isSubscribed ? nil : settings.accentColor, motion: isSubscribed ? .unsubscribed : .subscribed, trigger: subscribeTaps)
                     .contentTransition(.symbolEffect(.replace))
             }
-            .opacity(channelId == nil ? 0 : 1)
-            .disabled(channelId == nil)
-            .accessibilityHidden(channelId == nil)
             .animation(reduceMotion ? nil : .snappy, value: isSubscribed)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: channelId)
             .accessibilityLabel(isSubscribed ? "Unsubscribe" : "Subscribe")
             .sensoryFeedback(.selection, trigger: isSubscribed)
         }
