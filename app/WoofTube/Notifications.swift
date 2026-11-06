@@ -230,7 +230,7 @@ private struct NotificationRow: View {
                         .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                 }
                 avatar
-                    .padding(.trailing, item.thumbnail == nil ? 0 : -Layout.rowSpacing / 2)
+                    .padding(.trailing, hasCover ? -Layout.rowSpacing / 2 : 0)
                 VStack(alignment: .leading, spacing: 2) {
                     if let name = item.name {
                         Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -260,9 +260,12 @@ private struct NotificationRow: View {
         }
     }
 
+    /// A post has a picture but no video, so it has nothing to draw a cover for.
+    private var hasCover: Bool { item.thumbnail != nil && item.videoId != nil }
+
     /// On the cover's edge when there is a cover, with the dot of a new notification.
     private var avatar: some View {
-        let onCover = item.thumbnail != nil
+        let onCover = hasCover
         return Avatar(url: item.avatar, size: RowAvatar.size)
             .overlay(Circle().stroke(Color(.systemBackground), lineWidth: onCover ? 2.5 : 0))
             .overlay(alignment: .topLeading) {
