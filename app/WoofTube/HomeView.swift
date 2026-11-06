@@ -880,6 +880,7 @@ struct ScopedSearchPage: View {
                 filter = filter == tapped ? nil : tapped
             }
         }
+        .environment(\.showsRowAvatars, true)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -1307,16 +1308,56 @@ struct WatchProgressLine: View {
     }
 }
 
+/// The channel's picture across the right edge of a row's cover, half on it and half off.
+/// The row's HStack keeps `Layout.rowSpacing` between them, which this takes back.
+/// It sits at the cover's top, so the duration in the bottom corner stays readable.
+struct RowAvatar: View {
+    let url: String?
+
+    static let size = Layout.avatarSmall
+    static let overlap = size / 2 + Layout.rowSpacing
+
+    var body: some View {
+        Avatar(url: url, size: Self.size)
+            .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+            .frame(height: Self.coverHeight, alignment: .top)
+            .padding(.leading, -Self.overlap)
+    }
+
+    static let coverHeight = Layout.videoSmall / Layout.videoAspect
+}
+
+extension View {
+    /// The cover's right side fades into the page under the channel's picture, as Short cards fade at the bottom.
+    func fadesAtTrailing(_ isOn: Bool = true) -> some View {
+        mask {
+            HStack(spacing: 0) {
+                Color.black
+                LinearGradient(colors: [.black, .black.opacity(isOn ? 0.2 : 1)], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: RowAvatar.size)
+            }
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Compact rows put the channel's picture on the cover's edge, as on the History page.
+    @Entry var showsRowAvatars = false
+}
+
 /// Woof Music's playlist row, with a 16:9 cover.
 struct CompactVideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
     @AppStorage(DeArrow.enabledKey) private var isDeArrowOn = false
+    @Environment(\.showsRowAvatars) private var showsAvatar
+    @State private var avatar: String?
 
     var body: some View {
         HStack(spacing: Layout.rowSpacing) {
             VideoCover(video: video, maxPixels: 336)
                 .frame(width: Layout.videoSmall, height: Layout.videoSmall / Layout.videoAspect)
+                .fadesAtTrailing(showsAvatar)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
                 .deArrowMark(video.videoId, size: 16)
                 // The corner belongs to DeArrow's mark when it can appear.
@@ -1325,6 +1366,10 @@ struct CompactVideoRow: View {
                 .downloadBadge(video.videoId)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                 .videoZoomSource(video.videoId)
+            if showsAvatar {
+                RowAvatar(url: avatar ?? video.channelAvatarURL)
+                    .padding(.trailing, -Layout.rowSpacing / 2)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 VideoTitle(video: video)
                     .font(.subheadline.weight(.medium))
@@ -1340,6 +1385,9 @@ struct CompactVideoRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(.rect)
+        .task(id: showsAvatar) {
+            if showsAvatar, video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
+        }
     }
 }
 
