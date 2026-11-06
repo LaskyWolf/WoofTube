@@ -320,6 +320,15 @@ private struct IntegrationsSettingsView: View {
                 Text("YouTube hides these numbers. They are estimates from Return YouTube Dislike, which receives the ID of each video you open or see in a feed.")
             }
             TVLinkSection()
+            Section {
+                NavigationLink(destination: WatchTogetherView()) {
+                    Label {
+                        Text("Watch Together")
+                    } icon: {
+                        Image(systemName: "person.2.wave.2").foregroundStyle(.tint)
+                    }
+                }
+            }
         }
         .navigationTitle("Integrations")
         .navigationBarTitleDisplayMode(.inline)

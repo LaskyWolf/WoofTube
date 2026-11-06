@@ -44,15 +44,8 @@ struct LibraryView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    FilterChips(titles: Filter.allCases.map(\.rawValue), selected: selectedFilter?.rawValue) { title in
-                        let filter = Filter(rawValue: title)
-                        selectedFilter = selectedFilter == filter ? nil : filter
-                    }
                     shortcuts
                     LibraryDownloadCard()
-                    if selectedFilter == nil {
-                        HistoryStrip(model: history)
-                    }
                     if shows(.playlists) {
                         playlistsSection
                     }
@@ -72,10 +65,15 @@ struct LibraryView: View {
                 }
                 .animation(.smooth(duration: 0.4), value: selectedFilter)
             }
-            .tabRoot(title: "Library", tab: .library) {
+            .tabRoot(title: "Library", tab: .library, onAdd: {
                 newTitle = ""
                 isCreating = true
-            }
+            }, filters: {
+                FilterChips(titles: Filter.allCases.map(\.rawValue), selected: selectedFilter?.rawValue) { title in
+                    let filter = Filter(rawValue: title)
+                    selectedFilter = selectedFilter == filter ? nil : filter
+                }
+            })
             .refreshable { await load() }
             .task {
                 guard Date().timeIntervalSince(lastLoad) > Self.reloadAfter else { return }
@@ -402,90 +400,6 @@ private struct ShortcutTile: View {
             .frame(width: 56, height: 32)
             .clipShape(.rect(cornerRadius: Layout.rowPadding, style: .continuous))
             .shadow(color: .black.opacity(0.3), radius: 3, y: 2)
-    }
-}
-
-/// Woof Music's Keep Listening card: the title on top and covers to scroll through below.
-private struct HistoryStrip: View {
-    let model: FeedModel
-    @Environment(Router.self) private var router
-
-    private static let coverWidth: CGFloat = 150
-    private static let shown = 20
-    private static let padding = Layout.rowSpacing
-
-    var body: some View {
-        if model.isLoading || !model.videosAndShorts.isEmpty {
-            VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-                NavigationLink {
-                    ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history)
-                } label: {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("History").font(.title3.bold())
-                        Spacer(minLength: Layout.chipSpacing)
-                        Text("See All")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .contentShape(.rect)
-                }
-                .buttonStyle(ZoomPressStyle(scale: 0.98))
-                .padding(.horizontal, Self.padding)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
-                        if model.videosAndShorts.isEmpty {
-                            ForEach(0..<3, id: \.self) { _ in
-                                VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                                    ShimmerBlock(width: Self.coverWidth, height: Self.coverWidth * 9 / 16, radius: Layout.tileRadius)
-                                    LoadingLine(height: 14)
-                                    LoadingLine(height: 14, shortBy: 40)
-                                }
-                                .frame(width: Self.coverWidth)
-                                .shimmerClock()
-                            }
-                        }
-                        ForEach(Array(model.videosAndShorts.prefix(Self.shown)), id: \.videoId) { video in
-                            tile(video)
-                        }
-                    }
-                    .padding(.horizontal, Self.padding)
-                }
-            }
-            .padding(.vertical, Self.padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18, style: .continuous))
-            .clipShape(.rect(cornerRadius: 18, style: .continuous))
-            .padding(.horizontal, Layout.screenPadding)
-            .padding(.bottom, Layout.sectionGap)
-        }
-    }
-
-    private func tile(_ video: YouTubeVideo) -> some View {
-        Button {
-            router.openVideo(video)
-        } label: {
-            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                VideoCover(video: video)
-                    .frame(width: Self.coverWidth, height: Self.coverWidth * 9 / 16)
-                    .overlay { WatchProgressLine(video: video, extras: VideoExtras()) }
-                    .deArrowMark(video.videoId, size: 18)
-                    .downloadBadge(video.videoId)
-                    .clipShape(.rect(cornerRadius: Layout.tileRadius, style: .continuous))
-                VideoTitle(video: video)
-                    .font(.caption.weight(.medium))
-                    // Every tile the same height: a lazy row measures only the tiles it has drawn so far.
-                    .lineLimit(2, reservesSpace: true)
-                    .multilineTextAlignment(.leading)
-            }
-            .frame(width: Self.coverWidth, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(ZoomPressStyle())
-        .videoMenu(video, background: Color(.secondarySystemBackground))
     }
 }
 

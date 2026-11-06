@@ -119,15 +119,9 @@ struct PlayerOverlay: View {
                         router.isExpanded = true
                     }
                 },
-                onClose: {
-                    if isShort {
-                        router.closeShorts()
-                    } else {
-                        router.close()
-                    }
-                },
+                onClose: { closeMini(isShort: isShort) },
                 onDragChanged: { value in dragOffset = value.translation },
-                onDragEnded: { value in finishMiniDrag(value, origin: origin, screen: screen) }
+                onDragEnded: { value in finishMiniDrag(value, origin: origin, screen: screen, isShort: isShort) }
             )
 
             CardEdgeProgress(clock: miniPlayerObject.clock, player: miniPlayerObject, radius: Self.cardRadius)
@@ -159,10 +153,28 @@ struct PlayerOverlay: View {
         .accessibilityLabel("Show Video")
     }
 
-    /// Snaps to the corner the flick is heading for. A flick past the screen's side hides the card.
-    private func finishMiniDrag(_ value: DragGesture.Value, origin: CGPoint, screen: CGSize) {
+    private func closeMini(isShort: Bool) {
+        if isShort {
+            router.closeShorts()
+        } else {
+            router.close()
+        }
+    }
+
+    /// Snaps to the corner the flick is heading for. A flick past the screen's side hides the card,
+    /// and one past the bottom edge closes it.
+    private func finishMiniDrag(_ value: DragGesture.Value, origin: CGPoint, screen: CGSize, isShort: Bool) {
         let endX = origin.x + value.predictedEndTranslation.width + miniCardWidth / 2
         let endY = origin.y + value.predictedEndTranslation.height + miniCardHeight / 2
+        if endY > screen.height {
+            withAnimation(.snappy) {
+                dragOffset.height = screen.height - origin.y
+            } completion: {
+                closeMini(isShort: isShort)
+                dragOffset = .zero
+            }
+            return
+        }
         withAnimation(.snappy) {
             isMiniLeading = endX < screen.width / 2
             isMiniTop = endY < screen.height / 2
@@ -610,10 +622,11 @@ private struct MiniControls: View {
                     Label {
                         Text(player.isPaused ? "Play" : "Pause")
                     } icon: {
-                        PlayPauseGlyph(isPaused: player.isPaused, size: 15)
+                        PlayPauseGlyph(isPaused: player.isPaused, size: 17)
+                            .foregroundStyle(.tint)
                     }
                 }
-                Button("Close", systemImage: "xmark", action: onClose)
+                .padding(.trailing, Layout.rowPadding)
             }
             .labelStyle(MiniGlyphLabelStyle())
             .buttonStyle(ZoomPressStyle())
@@ -621,6 +634,8 @@ private struct MiniControls: View {
         }
         .contentShape(.rect)
         .onTapGesture(perform: onExpand)
+        // Closing is a drag to the bottom edge, so VoiceOver gets it as an action.
+        .accessibilityAction(named: "Close", onClose)
         .gesture(
             DragGesture(minimumDistance: 8, coordinateSpace: .global)
                 .onChanged(onDragChanged)
@@ -645,18 +660,16 @@ private struct CardEdgeProgress: View {
     @ObservedObject var clock: PlayerClock
     @ObservedObject var player: MpvPlayer
     let radius: CGFloat
-    private static let lineHeight: CGFloat = 5
+    /// Woof Music's mini player line: thin, in the accent colour, with no track behind it.
+    private static let lineHeight: CGFloat = 2
 
     private var duration: Double { player.duration }
 
     var body: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Rectangle().fill(Color.primary.opacity(0.12))
-                Rectangle().fill(.tint).frame(width: geometry.size.width * min(clock.time / max(duration, 1), 1))
-            }
-            .frame(height: Self.lineHeight)
-            .frame(maxHeight: .infinity, alignment: .bottom)
+            Rectangle().fill(.tint).frame(width: geometry.size.width * min(clock.time / max(duration, 1), 1))
+                .frame(height: Self.lineHeight)
+                .frame(maxHeight: .infinity, alignment: .bottom)
         }
         .clipShape(.rect(cornerRadius: radius, style: .circular))
         .allowsHitTesting(false)
@@ -939,6 +952,7 @@ private struct PlayerControls: View {
     @Environment(Router.self) private var router
     @State private var showsControls = true
     @State private var showsSleepTimer = false
+    @State private var showsWatchTogether = false
     @State private var hideTask: Task<Void, Never>?
     @State private var seekHint: SeekHint?
     @State private var showsSpinner = false
@@ -1037,6 +1051,7 @@ private struct PlayerControls: View {
         .sheet(isPresented: $showsSleepTimer) {
             SleepTimerSheet(timer: sleepTimer)
         }
+        .sheet(isPresented: $showsWatchTogether) { WatchTogetherSheet() }
         .sensoryFeedback(.selection, trigger: fillsScreen)
         .onChange(of: isFullscreen) { if !isFullscreen { showsUpNext = false } }
         .accessibilityAction(named: "Up Next") { if isFullscreen { setUpNext(true) } }
@@ -1206,6 +1221,9 @@ private struct PlayerControls: View {
             Button(sleepTimer.isActive ? "Sleep Timer · On" : "Sleep Timer…", systemImage: sleepTimer.isActive ? "moon.zzz.fill" : "moon.zzz") {
                 showsSleepTimer = true
             }
+            Button(WatchTogether.shared.roomCode.map { "Watch Together · \($0)" } ?? "Watch Together…", systemImage: "person.2.wave.2") {
+                showsWatchTogether = true
+            }
             if let summary = router.streamSummary {
                 Section(summary) {}
             }
@@ -1239,7 +1257,7 @@ private struct UpNextPanel: View {
     let onClose: () -> Void
     @Environment(Router.self) private var router
 
-    private static let cardWidth: CGFloat = 168
+    private static let cardWidth = Layout.videoMedium
     private static let radius: CGFloat = 24
 
     private var videos: [YouTubeVideo] {
@@ -1325,7 +1343,7 @@ private struct UpNextPanel: View {
     private func card(_ video: YouTubeVideo) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             VideoCover(video: video, maxPixels: 600)
-                .aspectRatio(16 / 9, contentMode: .fit)
+                .aspectRatio(Layout.videoAspect, contentMode: .fit)
                 .overlay(alignment: .bottomTrailing) { VideoBadge(video: video, extras: VideoExtras(), isCompact: true) }
                 .clipShape(.rect(cornerRadius: 14, style: .continuous))
             VideoTitle(video: video)

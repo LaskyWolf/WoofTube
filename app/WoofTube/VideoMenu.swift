@@ -81,6 +81,9 @@ struct VideoMenuItems: View {
             if !video.isShort {
                 Button("Play Next", systemImage: "text.insert") { router.playNext(video) }
                 Button("Add to Queue", systemImage: "text.append") { router.addToQueue(video) }
+                if WatchTogether.shared.isGuest {
+                    Button("Suggest to Room", systemImage: "person.2.wave.2") { WatchTogether.shared.suggest(video) }
+                }
             }
         }
 
