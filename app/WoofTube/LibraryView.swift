@@ -159,7 +159,7 @@ struct LibraryView: View {
         }
         .buttonStyle(ZoomPressStyle())
         .padding(.horizontal, Layout.screenPadding)
-        .padding(.top, Layout.chipSpacing)
+        .padding(.top, Layout.contentTopGap)
         .padding(.bottom, Layout.sectionGap)
     }
 

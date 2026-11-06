@@ -22,6 +22,8 @@ enum Layout {
     static let sectionGap: CGFloat = 16
     static let artSmall: CGFloat = 60
     static let artLarge: CGFloat = 160
+    /// Between a tab's filters and the first card under them, the same in every tab.
+    static let contentTopGap = chipSpacing
     /// How far the fade behind a tab's header reaches below it.
     static let headerFadeOverhang: CGFloat = 24
     /// Height of the row under each tab title.

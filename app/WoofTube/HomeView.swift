@@ -1652,7 +1652,7 @@ private extension View {
     func homeCardBackground() -> some View {
         background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18, style: .continuous))
             .padding(.horizontal, Layout.screenPadding)
-            .padding(.top, Layout.chipSpacing)
+            .padding(.top, Layout.contentTopGap)
             .padding(.bottom, Layout.sectionGap)
     }
 
@@ -1711,6 +1711,7 @@ private struct NewVideosFrame<Cards: View>: View {
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
         .clipShape(.rect(cornerRadius: Self.radius, style: .continuous))
         .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.contentTopGap)
         .padding(.bottom, Layout.sectionGap)
     }
 }
