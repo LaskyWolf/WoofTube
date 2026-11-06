@@ -275,7 +275,6 @@ private struct NotificationRow: View {
                         .accessibilityLabel("New")
                 }
             }
-            .frame(height: onCover ? RowAvatar.coverHeight : nil, alignment: .top)
             .padding(.leading, onCover ? -RowAvatar.overlap : 0)
     }
 }

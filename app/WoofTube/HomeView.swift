@@ -1310,7 +1310,7 @@ struct WatchProgressLine: View {
 
 /// The channel's picture across the right edge of a row's cover, half on it and half off.
 /// The row's HStack keeps `Layout.rowSpacing` between them, which this takes back.
-/// It sits at the cover's top, so the duration in the bottom corner stays readable.
+/// It's centered on that edge, so rows with it put the duration in the bottom-left corner.
 struct RowAvatar: View {
     let url: String?
 
@@ -1320,11 +1320,8 @@ struct RowAvatar: View {
     var body: some View {
         Avatar(url: url, size: Self.size)
             .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
-            .frame(height: Self.coverHeight, alignment: .top)
             .padding(.leading, -Self.overlap)
     }
-
-    static let coverHeight = Layout.videoSmall / Layout.videoAspect
 }
 
 extension View {
@@ -1360,8 +1357,8 @@ struct CompactVideoRow: View {
                 .fadesAtTrailing(showsAvatar)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
                 .deArrowMark(video.videoId, size: 16)
-                // The corner belongs to DeArrow's mark when it can appear.
-                .overlay(alignment: isDeArrowOn ? .bottomLeading : .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
+                // The corner belongs to DeArrow's mark when it can appear, and to the channel's picture when it shows.
+                .overlay(alignment: isDeArrowOn || showsAvatar ? .bottomLeading : .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
                 .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras, isCompact: true) }
                 .downloadBadge(video.videoId)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
