@@ -923,7 +923,7 @@ struct FeedContent<Header: View>: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header()
                 if model.isSwitching {
-                    LoadingRows(kind: loadingKind).transition(.opacity)
+                    LoadingRows(kind: loadingKind, shortsGrid: shortsGrid).transition(.opacity)
                 } else {
                     if shownIds.isEmpty {
                         emptyState
@@ -940,7 +940,7 @@ struct FeedContent<Header: View>: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.isLoading {
-            LoadingRows(kind: loadingKind)
+            LoadingRows(kind: loadingKind, shortsGrid: shortsGrid)
         } else {
             ContentUnavailableView {
                 if model.errorText != nil {
@@ -1396,23 +1396,30 @@ enum LoadingKind {
 /// The shape of the feed while it loads, so the page doesn't jump when the videos arrive.
 struct LoadingRows: View {
     var kind = LoadingKind.videos
+    /// Two big Short cards per row, as a Shorts-only filter shows them.
+    var shortsGrid = false
+    @Environment(\.showsRowAvatars) private var showsAvatar
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            switch kind {
-            case .videos:
-                ForEach(0..<4, id: \.self) { _ in videoRow }
-            case .compact:
-                ForEach(0..<8, id: \.self) { _ in compactRow }
-            case .home:
-                videoRow
-                shortsShelf
-                videoRow
-            case .shorts:
-                shortsShelf
-                shortsShelf
-            case .posts:
-                ForEach(0..<3, id: \.self) { _ in postCard }
+            if shortsGrid {
+                shortsGridRows
+            } else {
+                switch kind {
+                case .videos:
+                    ForEach(0..<4, id: \.self) { _ in videoRow }
+                case .compact:
+                    ForEach(0..<8, id: \.self) { _ in compactRow }
+                case .home:
+                    videoRow
+                    shortsShelf
+                    videoRow
+                case .shorts:
+                    shortsShelf
+                    shortsShelf
+                case .posts:
+                    ForEach(0..<3, id: \.self) { _ in postCard }
+                }
             }
         }
         .allowsHitTesting(false)
@@ -1443,6 +1450,11 @@ struct LoadingRows: View {
     private var compactRow: some View {
         HStack(spacing: Layout.rowSpacing) {
             ShimmerBlock(width: Layout.videoSmall, height: Layout.videoSmall / Layout.videoAspect, radius: Layout.cardRadius)
+            if showsAvatar {
+                ShimmerBlock(width: RowAvatar.size, height: RowAvatar.size, radius: RowAvatar.size / 2)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+                    .padding(.leading, -RowAvatar.overlap)
+            }
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 LoadingLine(height: 14)
                 LoadingLine(height: 14, shortBy: 50)
@@ -1470,7 +1482,16 @@ struct LoadingRows: View {
         .padding(.bottom, Layout.sectionGap)
     }
 
-    private var shortCard: some View {
+    private var shortsGridRows: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Layout.rowSpacing, alignment: .top), count: 2), spacing: Layout.rowSpacing) {
+            ForEach(0..<6, id: \.self) { _ in shortCard(width: nil) }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+    }
+
+    private var shortCard: some View { shortCard(width: Layout.shortMedium) }
+
+    private func shortCard(width: CGFloat?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ShimmerFill(radius: Layout.tileRadius).aspectRatio(Layout.shortAspect, contentMode: .fit)
             HStack(spacing: Layout.chipSpacing) {
@@ -1483,7 +1504,7 @@ struct LoadingRows: View {
             .padding(.horizontal, Layout.rowPadding)
             .padding(.top, -ShortCard.avatarSize / 2)
         }
-        .frame(width: Layout.shortMedium)
+        .frame(width: width)
     }
 
     private var postCard: some View {
@@ -1525,25 +1546,40 @@ struct LoadingTextRows: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing + Layout.rowPadding) {
             ForEach(0..<6, id: \.self) { _ in
-                HStack(alignment: .top, spacing: showsThumbnail ? Layout.chipSpacing : Layout.rowSpacing) {
-                    ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
-                    VStack(alignment: .leading, spacing: Layout.rowPadding) {
-                        LoadingLine(height: 12, shortBy: 80)
-                        LoadingLine(height: 14)
-                        LoadingLine(height: 14, shortBy: 40)
-                    }
-                    if showsThumbnail {
-                        ShimmerFill(radius: Layout.tileRadius)
-                            .aspectRatio(Layout.videoAspect, contentMode: .fit)
-                            .frame(width: Layout.videoSmall)
-                    }
-                }
+                if showsThumbnail { notificationRow } else { commentRow }
             }
         }
         .padding(.horizontal, Layout.screenPadding)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .shimmerClock()
+    }
+
+    private var commentRow: some View {
+        HStack(alignment: .top, spacing: Layout.rowSpacing) {
+            ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+            VStack(alignment: .leading, spacing: Layout.rowPadding) {
+                LoadingLine(height: 12, shortBy: 80)
+                LoadingLine(height: 14)
+                LoadingLine(height: 14, shortBy: 40)
+            }
+        }
+    }
+
+    /// The cover, the channel's picture on its edge, then the name, message and time.
+    private var notificationRow: some View {
+        HStack(spacing: Layout.rowSpacing) {
+            ShimmerBlock(width: Layout.videoSmall, height: Layout.videoSmall / Layout.videoAspect, radius: Layout.cardRadius)
+            ShimmerBlock(width: RowAvatar.size, height: RowAvatar.size, radius: RowAvatar.size / 2)
+                .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+                .padding(.leading, -RowAvatar.overlap)
+                .padding(.trailing, -Layout.rowSpacing / 2)
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                LoadingLine(height: 14, shortBy: 80)
+                LoadingLine(height: 14)
+                LoadingLine(height: 11, shortBy: 110)
+            }
+        }
     }
 }
 
