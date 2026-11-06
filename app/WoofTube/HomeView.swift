@@ -1638,8 +1638,8 @@ private struct NewVideosFrame<Cards: View>: View {
     let subtitle: String?
     @ViewBuilder let cards: () -> Cards
 
-    private static let radius: CGFloat = 22
-    private static let cardGap: CGFloat = 10
+    private static var radius: CGFloat { 22 }
+    private static var cardGap: CGFloat { 10 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
