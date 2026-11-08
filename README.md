@@ -33,8 +33,9 @@ It contains no YouTube code and shows no ads.
 ### Home and Subs
 - Your own Home feed, with filter chips and videos you have already seen moved out of the way
 - Keep Watching card to resume where you stopped
-- New Videos row on Subs: today's uploads as small cards, each in the colour of its cover
-- Shorts shelves, community posts with polls, and playlists in the feed
+- Filters stay at the top while you scroll, over a fade
+- New Videos row on Subs: today's uploads as cards in the colour of their cover, with Watch Later and Play buttons
+- Shorts shelves (a two-column grid when a Shorts filter is on), community posts with polls, and playlists in the feed
 - Long-press menus on videos: Watch Later, playlists, share, download and feedback
 
 ### Player
@@ -42,7 +43,8 @@ It contains no YouTube code and shows no ads.
 - Playback speed, captions, audio tracks, chapters and thumbnail previews while seeking
 - Live streams with live chat
 - Lock screen and Control Center controls, and AirPlay audio
-- Miniplayer that floats above the tabs, with light from the video behind it
+- Miniplayer that floats above the tabs, with light from the video behind it and a progress line on its edge. Drag it to the bottom of the screen to close it
+- Watch Together: watch the same video in sync with friends in a room, from the ••• menu
 - Sleep timer and autoplay
 
 ### Video page
@@ -55,13 +57,13 @@ It contains no YouTube code and shows no ads.
 - The next Short's address is loaded ahead of the swipe
 
 ### Library
-- History with search and filters, Watch Later, Liked Videos and your playlists
+- Watch Later, Liked Videos and your playlists
 - Create and edit playlists
 - Downloads with quality choice, progress on each row and Cancel All
 
 ### Accounts and search
 - Google sign-in inside the app, with several accounts, each keeping its own data
-- Notification inbox with an unread badge
+- History and the notification inbox, with an unread badge, are icons at the top of every tab
 - Search with suggestions and history, filters for Never Seen and Live videos, and an incognito mode that stops recording it
 - Opens YouTube links pasted in search, and `youtube://`, `vnd.youtube://` and `wooftube://` links from other apps
 - Checks GitHub for a newer release and marks the profile picture when one is out
@@ -74,6 +76,7 @@ It contains no YouTube code and shows no ads.
 - Light, dark or system appearance
 - Icons with their own animation that follow the real state: the speed needle, the download ring, the sleep timer countdown
 - Pages open by growing out of what you tapped
+- Three cover sizes for videos and two for Shorts, the same across the app
 
 ## Speed
 
@@ -87,6 +90,7 @@ It contains no YouTube code and shows no ads.
 - The app has no analytics and no server of its own. It talks to YouTube directly.
 - SponsorBlock and Return YouTube Dislike receive the ID of each video you watch. Turn them off in Settings to stop that.
 - DeArrow is off by default. When on, its title list receives part of a code shared by many videos, and its thumbnail server receives the ID of each video with a new thumbnail, also in Incognito.
+- Watch Together sends your room code, the video and its playback position to a Metrolist server. The server can be changed in Settings > Integrations.
 - Crash reports stay on the phone until you choose to share them from Settings.
 
 ## Install

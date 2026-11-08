@@ -22,8 +22,19 @@ enum Layout {
     static let sectionGap: CGFloat = 16
     static let artSmall: CGFloat = 60
     static let artLarge: CGFloat = 160
+    /// Between a tab's filters and the first card under them, the same in every tab.
+    static let contentTopGap = chipSpacing
+    /// How far the fade behind a tab's header reaches below it.
+    static let headerFadeOverhang: CGFloat = 24
     /// Height of the row under each tab title.
     static let controlHeight: CGFloat = 40
+    /// The only cover widths. Video: small in lists, medium in sideways strips, big (the full width) in feeds.
+    static let videoSmall: CGFloat = 112
+    static let videoMedium: CGFloat = 150
+    /// Short: medium in shelves, big in a two-column grid.
+    static let shortMedium: CGFloat = 150
+    static let videoAspect: CGFloat = 16 / 9
+    static let shortAspect: CGFloat = 9 / 16
     static let rowInsets = EdgeInsets(top: rowPadding * 2, leading: screenPadding, bottom: rowPadding * 2, trailing: screenPadding)
 }
 

@@ -321,12 +321,13 @@ final class FeedModel {
 }
 
 enum HeaderRoute: Hashable {
-    case notifications, settings
+    case notifications, history, settings
 }
 
 /// Woof Music's TabHeaderView: the title, then its buttons.
 struct TabHeader: View {
     @State private var addTaps = 0
+    @State private var historyTaps = 0
     let title: String
     /// Shows a + button when set, for the Library's new playlist.
     var onAdd: (() -> Void)?
@@ -379,6 +380,17 @@ struct TabHeader: View {
                 }
                 .accessibilityLabel(session.unseenNotifications > 0 ? "Notifications, \(session.unseenNotifications) unread" : "Notifications")
 
+                NavigationLink(value: HeaderRoute.history) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .glyphMotion(.clockBack, trigger: historyTaps)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .simultaneousGesture(TapGesture().onEnded { historyTaps += 1 })
+                .accessibilityLabel("History")
+
                 NavigationLink(value: HeaderRoute.settings) {
                     Avatar(url: session.account?.thumbnailUrl, size: 28)
                         .frame(width: 36, height: 36)
@@ -419,8 +431,30 @@ struct TabHeader: View {
 extension View {
     /// For the first screen of a tab, which shows TabHeader instead of a navigation bar.
     func tabRoot(title: String, tab: AppTab, onAdd: (() -> Void)? = nil, incognito: Binding<Bool>? = nil) -> some View {
-        safeAreaBar(edge: .top, spacing: 0) {
-            TabHeader(title: title, onAdd: onAdd, incognito: incognito).background(Color(.systemBackground))
+        tabRoot(title: title, tab: tab, onAdd: onAdd, incognito: incognito) { EmptyView() }
+    }
+
+    /// The header and the tab's filters stay on top while the page scrolls under Woof Music's fade.
+    func tabRoot<Filters: View>(title: String, tab: AppTab, onAdd: (() -> Void)? = nil, incognito: Binding<Bool>? = nil, @ViewBuilder filters: () -> Filters) -> some View {
+        safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                TabHeader(title: title, onAdd: onAdd, incognito: incognito)
+                filters()
+            }
+            .background {
+                LinearGradient(
+                    stops: [
+                        .init(color: Color(.systemBackground).opacity(0.92), location: 0),
+                        .init(color: Color(.systemBackground).opacity(0.7), location: 0.6),
+                        .init(color: Color(.systemBackground).opacity(0), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .padding(.bottom, -Layout.headerFadeOverhang)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+            }
         }
             .toolbar(.hidden, for: .navigationBar)
             .modifier(TabDestinations(tab: tab))
@@ -478,14 +512,15 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             FeedContent(model: model, retry: { await reload() }, loading: .home) {
+                KeepWatchingCard(history: history)
+            }
+            .tabRoot(title: "Home", tab: .home) {
                 if !model.chips.isEmpty {
                     FilterChips(titles: model.chips.map(\.title), selected: selectedChip, onTap: tapChip)
                 } else if model.isLoading {
                     LoadingChips()
                 }
-                KeepWatchingCard(history: history)
             }
-            .tabRoot(title: "Home", tab: .home)
             // Separate tasks, so each part of the page appears as soon as its own answer arrives.
             .task { await session.refreshUnseenNotifications() }
             .task {
@@ -535,8 +570,8 @@ private struct KeepWatchingCard: View {
     @State private var selectedId: String?
 
     private static let shown = 8
-    private static let thumbWidth: CGFloat = 144
-    private static let smallThumbWidth: CGFloat = 78
+    private static let thumbWidth = Layout.videoMedium
+    private static let smallThumbWidth = Layout.videoSmall
     private static let playSize: CGFloat = 44
 
     private var videos: [(video: YouTubeVideo, extras: VideoExtras)] {
@@ -631,7 +666,7 @@ private struct KeepWatchingCard: View {
             ShimmerBlock(width: 120, height: 22)
             HStack(spacing: Layout.rowSpacing) {
                 ShimmerFill(radius: Layout.tileRadius)
-                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .aspectRatio(Layout.videoAspect, contentMode: .fit)
                     .frame(width: Self.thumbWidth)
                 VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                     LoadingLine(height: 14)
@@ -643,7 +678,7 @@ private struct KeepWatchingCard: View {
             HStack(spacing: Layout.chipSpacing) {
                 ForEach(0..<3, id: \.self) { _ in
                     ShimmerFill(radius: Layout.tileRadius)
-                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .aspectRatio(Layout.videoAspect, contentMode: .fit)
                         .frame(width: Self.smallThumbWidth)
                 }
             }
@@ -736,11 +771,7 @@ struct SubsView: View {
 
     var body: some View {
         NavigationStack {
-            FeedContent(model: filter == .posts ? posts : model, retry: reload, keeps: keeps, loading: loadingKind) {
-                FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
-                    let tapped = Filter(rawValue: title)
-                    filter = filter == tapped ? nil : tapped
-                }
+            FeedContent(model: filter == .posts ? posts : model, retry: reload, keeps: keeps, loading: loadingKind, shortsGrid: filter == .shorts) {
                 if filter == nil || filter == .videos {
                     if !newVideos.isEmpty {
                         NewVideosCard(videos: newVideos)
@@ -749,7 +780,12 @@ struct SubsView: View {
                     }
                 }
             }
-            .tabRoot(title: "Subs", tab: .subs)
+            .tabRoot(title: "Subs", tab: .subs) {
+                FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
+                    let tapped = Filter(rawValue: title)
+                    filter = filter == tapped ? nil : tapped
+                }
+            }
             .onChange(of: model.videos.count) { refreshNewVideos() }
             .onChange(of: router.current?.videoId) { refreshNewVideos() }
             .onAppear { refreshNewVideos() }
@@ -838,12 +874,13 @@ struct ScopedSearchPage: View {
     }
 
     var body: some View {
-        FeedContent(model: model, retry: { await model.load(source) }, isCompact: true, keeps: keeps) {
+        FeedContent(model: model, retry: { await model.load(source) }, isCompact: true, keeps: keeps, shortsGrid: filter == .shorts) {
             FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
                 let tapped = Filter(rawValue: title)
                 filter = filter == tapped ? nil : tapped
             }
         }
+        .environment(\.showsRowAvatars, true)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -870,6 +907,8 @@ struct FeedContent<Header: View>: View {
     var keeps: ((FeedItem) -> Bool)?
     /// What the loading rows look like, when it isn't simply a list of videos.
     var loading: LoadingKind?
+    /// Shorts in a two-column grid at the big size, when a filter shows only Shorts.
+    var shortsGrid = false
     @ViewBuilder let header: () -> Header
 
     private var loadingKind: LoadingKind { loading ?? (isCompact ? .compact : .videos) }
@@ -884,12 +923,12 @@ struct FeedContent<Header: View>: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header()
                 if model.isSwitching {
-                    LoadingRows(kind: loadingKind).transition(.opacity)
+                    LoadingRows(kind: loadingKind, shortsGrid: shortsGrid).transition(.opacity)
                 } else {
                     if shownIds.isEmpty {
                         emptyState
                     }
-                    FeedRows(model: model, isCompact: isCompact, keeps: keeps)
+                    FeedRows(model: model, isCompact: isCompact, shortsGrid: shortsGrid, keeps: keeps)
                 }
             }
             .animation(.smooth(duration: 0.4), value: shownIds)
@@ -901,7 +940,7 @@ struct FeedContent<Header: View>: View {
     @ViewBuilder
     private var emptyState: some View {
         if model.isLoading {
-            LoadingRows(kind: loadingKind)
+            LoadingRows(kind: loadingKind, shortsGrid: shortsGrid)
         } else {
             ContentUnavailableView {
                 if model.errorText != nil {
@@ -925,6 +964,7 @@ struct FeedContent<Header: View>: View {
 struct FeedRows: View {
     let model: FeedModel
     var isCompact = false
+    var shortsGrid = false
     /// Set on a playlist the user can edit, to offer removing videos.
     var editablePlaylistId: String?
     /// Set on a playlist, so a tapped video carries on with the ones after it.
@@ -992,7 +1032,7 @@ struct FeedRows: View {
                 .padding(.horizontal, Layout.screenPadding)
                 .padding(.vertical, isCompact ? Layout.rowPadding : Layout.rowSpacing)
         case .shorts(let title, let videos):
-            ShortsShelf(title: title ?? "Shorts", videos: videos)
+            ShortsShelf(title: title ?? "Shorts", videos: videos, isGrid: shortsGrid)
         case .shelf(let title, let videos):
             VideoShelf(title: title, videos: videos)
         case .post(let post):
@@ -1268,24 +1308,65 @@ struct WatchProgressLine: View {
     }
 }
 
+/// The channel's picture across the right edge of a row's cover, half on it and half off.
+/// The row's HStack keeps `Layout.rowSpacing` between them, which this takes back.
+/// It's centered on that edge, so rows with it put the duration in the bottom-left corner.
+struct RowAvatar: View {
+    let url: String?
+
+    static let size = Layout.avatarSmall
+    static let overlap = size / 2 + Layout.rowSpacing
+
+    var body: some View {
+        Avatar(url: url, size: Self.size)
+            .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+            .padding(.leading, -Self.overlap)
+    }
+}
+
+extension View {
+    /// The cover's right side fades into the page under the channel's picture, as Short cards fade at the bottom.
+    func fadesAtTrailing(_ isOn: Bool = true) -> some View {
+        mask {
+            HStack(spacing: 0) {
+                Color.black
+                LinearGradient(colors: [.black, .black.opacity(isOn ? 0.2 : 1)], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: RowAvatar.size)
+            }
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Compact rows put the channel's picture on the cover's edge, as on the History page.
+    @Entry var showsRowAvatars = false
+}
+
 /// Woof Music's playlist row, with a 16:9 cover.
 struct CompactVideoRow: View {
     let video: YouTubeVideo
     var extras = VideoExtras()
     @AppStorage(DeArrow.enabledKey) private var isDeArrowOn = false
+    @Environment(\.showsRowAvatars) private var showsAvatar
+    @State private var avatar: String?
 
     var body: some View {
         HStack(spacing: Layout.rowSpacing) {
             VideoCover(video: video, maxPixels: 336)
-                .frame(width: 112, height: 63)
+                .frame(width: Layout.videoSmall, height: Layout.videoSmall / Layout.videoAspect)
+                .fadesAtTrailing(showsAvatar)
                 .overlay { WatchProgressLine(video: video, extras: extras) }
                 .deArrowMark(video.videoId, size: 16)
-                // The corner belongs to DeArrow's mark when it can appear.
-                .overlay(alignment: isDeArrowOn ? .bottomLeading : .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
+                // The corner belongs to DeArrow's mark when it can appear, and to the channel's picture when it shows.
+                .overlay(alignment: isDeArrowOn || showsAvatar ? .bottomLeading : .bottomTrailing) { VideoBadge(video: video, extras: extras, isCompact: true) }
                 .overlay(alignment: .topLeading) { NewBadge(video: video, extras: extras, isCompact: true) }
                 .downloadBadge(video.videoId)
                 .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
                 .videoZoomSource(video.videoId)
+            if showsAvatar {
+                RowAvatar(url: avatar ?? video.channelAvatarURL)
+                    .padding(.trailing, -Layout.rowSpacing / 2)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 VideoTitle(video: video)
                     .font(.subheadline.weight(.medium))
@@ -1301,6 +1382,9 @@ struct CompactVideoRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(.rect)
+        .task(id: showsAvatar) {
+            if showsAvatar, video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
+        }
     }
 }
 
@@ -1312,23 +1396,30 @@ enum LoadingKind {
 /// The shape of the feed while it loads, so the page doesn't jump when the videos arrive.
 struct LoadingRows: View {
     var kind = LoadingKind.videos
+    /// Two big Short cards per row, as a Shorts-only filter shows them.
+    var shortsGrid = false
+    @Environment(\.showsRowAvatars) private var showsAvatar
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            switch kind {
-            case .videos:
-                ForEach(0..<4, id: \.self) { _ in videoRow }
-            case .compact:
-                ForEach(0..<8, id: \.self) { _ in compactRow }
-            case .home:
-                videoRow
-                shortsShelf
-                videoRow
-            case .shorts:
-                shortsShelf
-                shortsShelf
-            case .posts:
-                ForEach(0..<3, id: \.self) { _ in postCard }
+            if shortsGrid {
+                shortsGridRows
+            } else {
+                switch kind {
+                case .videos:
+                    ForEach(0..<4, id: \.self) { _ in videoRow }
+                case .compact:
+                    ForEach(0..<8, id: \.self) { _ in compactRow }
+                case .home:
+                    videoRow
+                    shortsShelf
+                    videoRow
+                case .shorts:
+                    shortsShelf
+                    shortsShelf
+                case .posts:
+                    ForEach(0..<3, id: \.self) { _ in postCard }
+                }
             }
         }
         .allowsHitTesting(false)
@@ -1338,7 +1429,7 @@ struct LoadingRows: View {
 
     private var videoRow: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ShimmerFill(radius: Layout.tileRadius).aspectRatio(16 / 9, contentMode: .fit)
+            ShimmerFill(radius: Layout.tileRadius).aspectRatio(Layout.videoAspect, contentMode: .fit)
             HStack(alignment: .top, spacing: Layout.chipSpacing) {
                 ShimmerBlock(width: ShortCard.avatarSize, height: ShortCard.avatarSize, radius: ShortCard.avatarSize / 2)
                     .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
@@ -1358,7 +1449,12 @@ struct LoadingRows: View {
 
     private var compactRow: some View {
         HStack(spacing: Layout.rowSpacing) {
-            ShimmerBlock(width: 112, height: 63, radius: Layout.cardRadius)
+            ShimmerBlock(width: Layout.videoSmall, height: Layout.videoSmall / Layout.videoAspect, radius: Layout.cardRadius)
+            if showsAvatar {
+                ShimmerBlock(width: RowAvatar.size, height: RowAvatar.size, radius: RowAvatar.size / 2)
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+                    .padding(.leading, -RowAvatar.overlap)
+            }
             VStack(alignment: .leading, spacing: Layout.cardSpacing) {
                 LoadingLine(height: 14)
                 LoadingLine(height: 14, shortBy: 50)
@@ -1386,9 +1482,18 @@ struct LoadingRows: View {
         .padding(.bottom, Layout.sectionGap)
     }
 
-    private var shortCard: some View {
+    private var shortsGridRows: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: Layout.rowSpacing, alignment: .top), count: 2), spacing: Layout.rowSpacing) {
+            ForEach(0..<6, id: \.self) { _ in shortCard(width: nil) }
+        }
+        .padding(.horizontal, Layout.screenPadding)
+    }
+
+    private var shortCard: some View { shortCard(width: Layout.shortMedium) }
+
+    private func shortCard(width: CGFloat?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ShimmerFill(radius: Layout.tileRadius).aspectRatio(ShortCard.coverAspect, contentMode: .fit)
+            ShimmerFill(radius: Layout.tileRadius).aspectRatio(Layout.shortAspect, contentMode: .fit)
             HStack(spacing: Layout.chipSpacing) {
                 ShimmerBlock(width: ShortCard.avatarSize, height: ShortCard.avatarSize, radius: ShortCard.avatarSize / 2)
                 VStack(alignment: .leading, spacing: Layout.cardSpacing) {
@@ -1399,7 +1504,7 @@ struct LoadingRows: View {
             .padding(.horizontal, Layout.rowPadding)
             .padding(.top, -ShortCard.avatarSize / 2)
         }
-        .frame(width: ShortCard.width)
+        .frame(width: width)
     }
 
     private var postCard: some View {
@@ -1441,19 +1546,7 @@ struct LoadingTextRows: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing + Layout.rowPadding) {
             ForEach(0..<6, id: \.self) { _ in
-                HStack(alignment: .top, spacing: showsThumbnail ? Layout.chipSpacing : Layout.rowSpacing) {
-                    ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
-                    VStack(alignment: .leading, spacing: Layout.rowPadding) {
-                        LoadingLine(height: 12, shortBy: 80)
-                        LoadingLine(height: 14)
-                        LoadingLine(height: 14, shortBy: 40)
-                    }
-                    if showsThumbnail {
-                        ShimmerFill(radius: Layout.tileRadius)
-                            .aspectRatio(16 / 9, contentMode: .fit)
-                            .frame(width: 112)
-                    }
-                }
+                if showsThumbnail { notificationRow } else { commentRow }
             }
         }
         .padding(.horizontal, Layout.screenPadding)
@@ -1461,13 +1554,40 @@ struct LoadingTextRows: View {
         .accessibilityHidden(true)
         .shimmerClock()
     }
+
+    private var commentRow: some View {
+        HStack(alignment: .top, spacing: Layout.rowSpacing) {
+            ShimmerBlock(width: Layout.avatarSmall, height: Layout.avatarSmall, radius: Layout.avatarSmall / 2)
+            VStack(alignment: .leading, spacing: Layout.rowPadding) {
+                LoadingLine(height: 12, shortBy: 80)
+                LoadingLine(height: 14)
+                LoadingLine(height: 14, shortBy: 40)
+            }
+        }
+    }
+
+    /// The cover, the channel's picture on its edge, then the name, message and time.
+    private var notificationRow: some View {
+        HStack(spacing: Layout.rowSpacing) {
+            ShimmerBlock(width: Layout.videoSmall, height: Layout.videoSmall / Layout.videoAspect, radius: Layout.cardRadius)
+            ShimmerBlock(width: RowAvatar.size, height: RowAvatar.size, radius: RowAvatar.size / 2)
+                .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2.5))
+                .padding(.leading, -RowAvatar.overlap)
+                .padding(.trailing, -Layout.rowSpacing / 2)
+            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
+                LoadingLine(height: 14, shortBy: 80)
+                LoadingLine(height: 14)
+                LoadingLine(height: 11, shortBy: 110)
+            }
+        }
+    }
 }
 
 struct Thumbnail: View {
     let url: String?
     let videoId: String
     var isShort = false
-    var aspect: CGFloat = 16 / 9
+    var aspect = Layout.videoAspect
     var showsDownload = true
     var maxPixels = ImageStore.feedPixels
 
@@ -1485,27 +1605,41 @@ struct Thumbnail: View {
 private struct ShortsShelf: View {
     let title: String
     let videos: [YouTubeVideo]
+    var isGrid = false
     @Environment(Router.self) private var router
+
+    private static let gridColumns = Array(repeating: GridItem(.flexible(), spacing: Layout.rowSpacing, alignment: .top), count: 2)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionTitle(title: title)
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
-                    ForEach(videos, id: \.videoId) { video in
-                        Button {
-                            router.openShorts(videos, start: video)
-                        } label: {
-                            ShortCard(video: video)
-                        }
-                        .buttonStyle(ZoomPressStyle())
-                        .videoMenu(video)
-                    }
+            if isGrid {
+                LazyVGrid(columns: Self.gridColumns, spacing: Layout.sectionGap) {
+                    cards(width: nil)
                 }
                 .padding(.horizontal, Layout.screenPadding)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
+                        cards(width: Layout.shortMedium)
+                    }
+                    .padding(.horizontal, Layout.screenPadding)
+                }
             }
         }
         .padding(.bottom, Layout.sectionGap)
+    }
+
+    private func cards(width: CGFloat?) -> some View {
+        ForEach(videos, id: \.videoId) { video in
+            Button {
+                router.openShorts(videos, start: video)
+            } label: {
+                ShortCard(video: video, width: width)
+            }
+            .buttonStyle(ZoomPressStyle())
+            .videoMenu(video)
+        }
     }
 }
 
@@ -1514,15 +1648,15 @@ private struct ShortCard: View {
     let video: YouTubeVideo
     @State private var avatar: String?
 
-    static let width: CGFloat = 158
-    static let coverAspect: CGFloat = 158 / 250
+    /// Medium in a shelf; nil fills a column of the grid, the big size.
+    var width: CGFloat? = Layout.shortMedium
     static let coverPixels = 500
     static let avatarSize: CGFloat = 44
     static let fadeHeight: CGFloat = 64
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, isShort: true, aspect: Self.coverAspect, maxPixels: Self.coverPixels)
+            Thumbnail(url: video.thumbnailURL, videoId: video.videoId, isShort: true, aspect: Layout.shortAspect, maxPixels: Self.coverPixels)
                 .fadesAtBottom()
                 .deArrowMark(video.videoId, size: 18)
                 .clipShape(.rect(cornerRadius: Layout.tileRadius))
@@ -1540,7 +1674,7 @@ private struct ShortCard: View {
             .padding(.horizontal, Layout.rowPadding)
             .padding(.top, -Self.avatarSize / 2)
         }
-        .frame(width: Self.width)
+        .frame(width: width)
         .contentShape(.rect)
         .task {
             if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
@@ -1554,7 +1688,7 @@ private extension View {
     func homeCardBackground() -> some View {
         background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 18, style: .continuous))
             .padding(.horizontal, Layout.screenPadding)
-            .padding(.top, Layout.chipSpacing)
+            .padding(.top, Layout.contentTopGap)
             .padding(.bottom, Layout.sectionGap)
     }
 
@@ -1569,149 +1703,183 @@ private extension View {
     }
 }
 
-/// Today's videos from followed channels, in a row that scrolls sideways.
+/// Today's videos from followed channels: Woof Music's New albums and singles card.
 private struct NewVideosCard: View {
     let videos: [YouTubeVideo]
 
     var body: some View {
+        NewVideosFrame(subtitle: "\(videos.count) new from your subscriptions") {
+            ForEach(videos, id: \.videoId) { NewVideoRibbon(video: $0) }
+        }
+    }
+}
+
+/// The card and its sideways row, shared with the loading shape.
+private struct NewVideosFrame<Cards: View>: View {
+    let subtitle: String?
+    @ViewBuilder let cards: () -> Cards
+
+    private static var radius: CGFloat { 22 }
+    private static var cardGap: CGFloat { 10 }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            HStack {
-                Text("New Videos").font(.headline)
-                Spacer()
-                Text("\(videos.count) new")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, Layout.chipSpacing)
-                    .padding(.vertical, 3)
-                    .background(.tint, in: .capsule)
-            }
-            .padding(.horizontal, Layout.rowSpacing)
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                    ForEach(videos, id: \.videoId) { NewVideoRibbon(video: $0) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("New Videos").font(.title3.bold())
+                if let subtitle {
+                    Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    LoadingLine(height: 12, shortBy: 120)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .scrollTargetLayout()
             }
-            .contentMargins(.horizontal, Layout.rowSpacing)
+            .padding(.horizontal, Layout.rowSpacing + 2)
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: Self.cardGap) { cards() }
+                    .scrollTargetLayout()
+            }
+            .contentMargins(.horizontal, Layout.rowSpacing, for: .scrollContent)
             .scrollIndicators(.hidden)
             .scrollTargetBehavior(.viewAligned)
+            .scrollClipDisabled()
         }
-        .padding(.vertical, Layout.rowSpacing)
-        .homeCardBackground()
+        .padding(.top, Layout.rowSpacing + 2)
+        .padding(.bottom, Layout.rowSpacing)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Self.radius, style: .continuous))
+        .clipShape(.rect(cornerRadius: Self.radius, style: .continuous))
+        .padding(.horizontal, Layout.screenPadding)
+        .padding(.top, Layout.contentTopGap)
+        .padding(.bottom, Layout.sectionGap)
     }
 }
 
 /// The shape of `NewVideosCard` while the page loads.
 private struct LoadingNewVideos: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
-            HStack {
-                ShimmerBlock(width: 100, height: 22)
-                Spacer()
-                ShimmerBlock(width: 50, height: 22, radius: 11)
+        NewVideosFrame(subtitle: nil) {
+            ForEach(0..<3, id: \.self) { _ in
+                ShimmerFill(radius: NewVideoRibbon.radius)
+                    .frame(width: NewVideoRibbon.size.width, height: NewVideoRibbon.size.height)
             }
-            .padding(.horizontal, Layout.rowSpacing)
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                    ForEach(0..<3, id: \.self) { _ in ribbon }
-                }
-                .padding(.horizontal, Layout.rowSpacing)
-            }
-            .scrollDisabled(true)
-            .scrollIndicators(.hidden)
         }
-        .padding(.vertical, Layout.rowSpacing)
-        .homeCardBackground()
+        .scrollDisabled(true)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .shimmerClock()
     }
-
-    private var ribbon: some View {
-        VStack(alignment: .leading, spacing: Layout.chipSpacing) {
-            VStack(alignment: .leading, spacing: 0) {
-                ShimmerFill(radius: Layout.cardRadius)
-                    .frame(height: (NewVideoRibbon.width - Layout.rowPadding * 2) * 9 / 16)
-                HStack(spacing: Layout.chipSpacing) {
-                    ShimmerBlock(width: NewVideoRibbon.avatarSize, height: NewVideoRibbon.avatarSize, radius: NewVideoRibbon.avatarSize / 2)
-                    VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                        LoadingLine(height: 11)
-                        LoadingLine(height: 11, shortBy: 20)
-                    }
-                }
-                .padding(.top, -NewVideoRibbon.avatarSize / 2)
-            }
-            LoadingLine(height: 10, shortBy: 50)
-        }
-        .padding(Layout.rowPadding)
-        .frame(width: NewVideoRibbon.width)
-        .background(Color(.systemGray6), in: .rect(cornerRadius: Layout.tileRadius + 2, style: .continuous))
-    }
 }
 
-/// A small upright card in the colour of the video's own cover. Like a Short card,
-/// the avatar and title straddle the cover's lower edge, and the cover fades into the card.
+/// Woof Music's new release card in the colour of the video's own cover:
+/// the cover on top, then when, title and channel, with Watch Later and Play at the bottom.
 private struct NewVideoRibbon: View {
     let video: YouTubeVideo
     @Environment(Router.self) private var router
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tint: Color?
-    @State private var avatar: String?
+    @State private var isSaved = false
+    @State private var saveTaps = 0
 
-    static let width: CGFloat = 148
-    static let avatarSize: CGFloat = 32
-    private static let fadeHeight: CGFloat = 34
+    static let size = CGSize(width: Layout.videoMedium, height: 255)
+    static let radius: CGFloat = 18
+    private static let buttonSize: CGFloat = 38
+    private static let fallback = Color(white: 0.22)
 
-    private var cover: String { video.cover }
-    private var cardColor: Color { tint ?? Color(.systemGray3) }
+    private var top: Color { (tint ?? Self.fallback).mix(with: .black, by: 0.1) }
+    private var bottom: Color { (tint ?? Self.fallback).mix(with: .black, by: 0.45) }
 
     var body: some View {
-        Button {
+        VStack(alignment: .leading, spacing: 0) {
+            VideoCover(video: video, maxPixels: 450)
+                .downloadBadge(video.videoId)
+                .frame(width: Self.size.width, height: Self.size.width / Layout.videoAspect)
+                .deArrowMark(video.videoId, size: 18)
+                .clipped()
+                .videoZoomSource(video.videoId)
+            VStack(alignment: .leading, spacing: 2) {
+                if let when = video.publishedTimeText {
+                    Text(when)
+                        .font(.caption2.weight(.semibold))
+                        .opacity(0.75)
+                }
+                VideoTitle(video: video)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if let channel = video.channelTitle {
+                    Text(channel)
+                        .font(.caption)
+                        .opacity(0.75)
+                        .lineLimit(1)
+                }
+            }
+            .padding([.horizontal, .top], Layout.rowSpacing)
+            Spacer(minLength: Layout.chipSpacing)
+            HStack(spacing: Layout.chipSpacing) {
+                Spacer(minLength: 0)
+                Button(action: toggleWatchLater) {
+                    ClockGlyph(isSaved: isSaved, trigger: saveTaps)
+                        .frame(width: Self.buttonSize, height: Self.buttonSize)
+                        .background(.white.opacity(0.18), in: .circle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
+                }
+                .accessibilityLabel(isSaved ? "Remove from Watch Later" : "Save to Watch Later")
+                Button {
+                    SeenVideos.mark(video.videoId)
+                    router.play(video, expand: false)
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: Self.buttonSize, height: Self.buttonSize)
+                        .background(.tint, in: .circle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
+                }
+                .accessibilityLabel("Play \(video.title)")
+            }
+            .buttonStyle(ZoomPressStyle(scale: 0.92))
+            .padding(.horizontal, Layout.rowPadding)
+            .padding(.bottom, Layout.rowPadding)
+        }
+        .foregroundStyle(.white)
+        // The card is always dark, so the clock's outline reads white in light mode too.
+        .environment(\.colorScheme, .dark)
+        .frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
+        .background {
+            ZStack {
+                LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
+                LinearGradient(stops: [.init(color: .clear, location: 0.35), .init(color: .black.opacity(0.4), location: 1)], startPoint: .top, endPoint: .bottom)
+            }
+        }
+        .clipShape(.rect(cornerRadius: Self.radius, style: .continuous))
+        .shadow(color: bottom.opacity(0.5), radius: 8, y: 5)
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+        .contentShape(.rect(cornerRadius: Self.radius))
+        .onTapGesture {
             SeenVideos.mark(video.videoId)
             router.openVideo(video)
-        } label: {
-            VStack(alignment: .leading, spacing: Layout.cardSpacing) {
-                VStack(alignment: .leading, spacing: 0) {
-                    VideoCover(video: video, maxPixels: 408)
-                    .downloadBadge(video.videoId)
-                        .frame(height: (Self.width - Layout.rowPadding * 2) * 9 / 16)
-                        .overlay(alignment: .bottom) {
-                            LinearGradient(colors: [.clear, cardColor], startPoint: .top, endPoint: .bottom)
-                                .frame(height: Self.fadeHeight)
-                        }
-                        .deArrowMark(video.videoId, size: 18)
-                        .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
-                        .videoZoomSource(video.videoId)
-                    HStack(spacing: Layout.chipSpacing) {
-                        Avatar(url: avatar ?? video.channelAvatarURL, size: Self.avatarSize)
-                            .overlay(Circle().stroke(cardColor, lineWidth: 2))
-                        VideoTitle(video: video)
-                            .font(.caption.weight(.bold))
-                            .lineLimit(2, reservesSpace: true)
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.top, -Self.avatarSize / 2)
-                }
-                Text(video.publishedTimeText ?? video.channelTitle ?? "")
-                    .font(.caption2)
-                    .opacity(0.85)
-                    .lineLimit(1)
-                    .padding(.horizontal, 2)
-                    .padding(.bottom, 2)
-            }
-            .foregroundStyle(.white)
-            .padding(Layout.rowPadding)
-            .frame(width: Self.width)
-            .frame(maxHeight: .infinity)
-            .background(cardColor, in: .rect(cornerRadius: Layout.tileRadius + 2, style: .continuous))
-            .animation(.easeOut(duration: 0.3), value: tint)
         }
-        .buttonStyle(ZoomPressStyle())
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
         .videoMenu(video, background: nil)
-        .task {
-            tint = await CoverTint.color(of: cover)
-            if video.channelAvatarURL == nil { avatar = await ShortAvatars.url(of: video.videoId) }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: tint)
+        .task { tint = await CoverTint.color(of: video.cover) }
+    }
+
+    private func toggleWatchLater() {
+        let wasSaved = isSaved
+        saveTaps += 1
+        isSaved.toggle()
+        router.run {
+            do {
+                if wasSaved {
+                    try await PlaylistActions.remove(video.videoId, from: YouTubeFeeds.watchLaterPlaylistId)
+                } else {
+                    try await PlaylistActions.add(video.videoId, to: YouTubeFeeds.watchLaterPlaylistId)
+                }
+            } catch {
+                isSaved = wasSaved
+                throw error
+            }
         }
     }
 }
@@ -1777,7 +1945,7 @@ private struct VideoShelf: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: Layout.rowSpacing) {
                     ForEach(videos, id: \.videoId) { video in
-                        VideoButton(video: video, isNarrow: true).frame(width: 280)
+                        VideoButton(video: video, isNarrow: true).frame(width: Layout.videoMedium)
                     }
                 }
                 .padding(.horizontal, Layout.screenPadding)

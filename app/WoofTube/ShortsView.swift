@@ -311,18 +311,22 @@ struct ShortsView: View {
                     CaptionOverlay(clock: model.player.clock, cues: model.captionCues, isFullscreen: false)
                         .padding(.bottom, 120)
                 }
+                // The rail and the progress bar keep their space on the other pages too,
+                // so the info row doesn't move when a page becomes the current one.
                 VStack(spacing: Layout.chipSpacing) {
                     HStack(alignment: .bottom, spacing: Layout.rowSpacing) {
                         info(video, isCurrent: isCurrent)
-                        if isCurrent {
-                            rail(video)
-                        }
+                        rail(video)
+                            .opacity(isCurrent ? 1 : 0)
+                            .allowsHitTesting(isCurrent)
+                            .accessibilityHidden(!isCurrent)
                     }
                     .padding(.horizontal, Layout.screenPadding)
                     .opacity(scrub == nil ? 1 : 0)
-                    if isCurrent {
-                        ShortsProgress(clock: model.player.clock, player: model.player, isEmphasized: scrub != nil)
-                    }
+                    ShortsProgress(clock: model.player.clock, player: model.player, isEmphasized: scrub != nil)
+                        .opacity(isCurrent ? 1 : 0)
+                        .allowsHitTesting(isCurrent)
+                        .accessibilityHidden(!isCurrent)
                 }
             }
             .frame(maxHeight: .infinity)

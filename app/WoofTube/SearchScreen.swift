@@ -163,6 +163,7 @@ struct SearchScreen: View {
     @AppStorage(SearchSettings.incognitoKey) private var isIncognito = false
     @State private var text = ""
     @State private var submitted: String?
+    @State private var resultsFilter: SearchFilter?
     /// True while search is active, even with the keyboard down. The system's X sets it back.
     @State private var isSearching = false
     @FocusState private var isFieldFocused: Bool
@@ -171,13 +172,21 @@ struct SearchScreen: View {
         NavigationStack {
             Group {
                 if let submitted, submitted == text {
-                    SearchResults(query: submitted)
+                    SearchResults(query: submitted, filter: $resultsFilter)
                         .id(submitted)
                 } else {
                     SearchStart(text: text, history: history, isIncognito: isIncognito) { submit($0) }
                 }
             }
-            .tabRoot(title: "Search", tab: .search, incognito: $isIncognito)
+            .tabRoot(title: "Search", tab: .search, incognito: $isIncognito) {
+                if let submitted, submitted == text {
+                    FilterChips(titles: SearchFilter.allCases.map(\.rawValue), selected: resultsFilter?.rawValue) { title in
+                        let tapped = SearchFilter(rawValue: title)
+                        resultsFilter = resultsFilter == tapped ? nil : tapped
+                    }
+                }
+            }
+            .onChange(of: submitted) { resultsFilter = nil }
         }
         .searchable(text: $text, isPresented: $isSearching, prompt: "Videos, channels or links")
         .searchFocused($isFieldFocused)
@@ -320,34 +329,35 @@ private struct SearchStart: View {
     }
 }
 
-/// Woof Music's results: filters, the creator when the search names one, then everything else.
-private struct SearchResults: View {
-    private enum Filter: String, CaseIterable {
-        case videos = "Videos"
-        case neverSeen = "Never Seen"
-        case live = "Live"
-        case shorts = "Shorts"
-        case channels = "Channels"
-        case playlists = "Playlists"
-        case history = "My History"
+/// The filters over search results. They sit in the tab's header, so they stay while the results scroll.
+private enum SearchFilter: String, CaseIterable {
+    case videos = "Videos"
+    case neverSeen = "Never Seen"
+    case live = "Live"
+    case shorts = "Shorts"
+    case channels = "Channels"
+    case playlists = "Playlists"
+    case history = "My History"
 
-        /// The codes youtube.com puts in its search filter links.
-        var params: String? {
-            switch self {
-            case .videos, .neverSeen: return "EgIQAQ%3D%3D"
-            case .live: return "EgJAAQ%3D%3D"
-            case .shorts: return "EgIQCQ%3D%3D"
-            case .channels: return "EgIQAg%3D%3D"
-            case .playlists: return "EgIQAw%3D%3D"
-            case .history: return nil
-            }
+    /// The codes youtube.com puts in its search filter links.
+    var params: String? {
+        switch self {
+        case .videos, .neverSeen: return "EgIQAQ%3D%3D"
+        case .live: return "EgJAAQ%3D%3D"
+        case .shorts: return "EgIQCQ%3D%3D"
+        case .channels: return "EgIQAg%3D%3D"
+        case .playlists: return "EgIQAw%3D%3D"
+        case .history: return nil
         }
     }
+}
 
+/// Woof Music's results: the creator when the search names one, then everything else.
+private struct SearchResults: View {
     let query: String
+    @Binding var filter: SearchFilter?
     @Environment(Router.self) private var router
     @State private var model = FeedModel()
-    @State private var filter: Filter?
     @State private var creators: [YouTubeChannel] = []
 
     /// YouTube has no such filter, so this drops what its progress or this phone says was seen.
@@ -360,11 +370,7 @@ private struct SearchResults: View {
     }
 
     var body: some View {
-        FeedContent(model: model, retry: { await load() }, isCompact: filter == .history, keeps: keeps) {
-            FilterChips(titles: Filter.allCases.map(\.rawValue), selected: filter?.rawValue) { title in
-                let tapped = Filter(rawValue: title)
-                filter = filter == tapped ? nil : tapped
-            }
+        FeedContent(model: model, retry: { await load() }, isCompact: filter == .history, keeps: keeps, shortsGrid: filter == .shorts) {
             creatorCards
         }
         .task(id: filter) { await load() }
@@ -390,7 +396,7 @@ private struct SearchResults: View {
     /// The first page holds YouTube's top channel at most, so this also asks for channels.
     private func findCreators() async -> [YouTubeChannel] {
         var items = model.items
-        if let json = try? await FeedSource.search(query, params: Filter.channels.params).fetch() {
+        if let json = try? await FeedSource.search(query, params: SearchFilter.channels.params).fetch() {
             let found = await offMain { FeedParser.items(in: json) }
             items += found
         }

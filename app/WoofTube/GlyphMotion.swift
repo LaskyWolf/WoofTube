@@ -214,13 +214,15 @@ extension GlyphScript {
     static let sunRise = GlyphScript(keys: [Key(0, s: 0.5, r: -90, o: 0.3), Key(0.34, s: 1.14, r: 10), Key(0.56, s: 1)])
     static let moonRise = GlyphScript(keys: [Key(0, s: 0.5, r: -120, o: 0.3), Key(0.34, s: 1.1, r: 10), Key(0.52, s: 1)])
     static let pop = GlyphScript(keys: [Key(0, s: 0.8), Key(0.14, s: 1.16), Key(0.3, s: 1)])
+    /// The hands sweep back a full turn.
+    static let clockBack = GlyphScript(keys: [Key(0, s: 0.92, r: 0), Key(0.35, s: 1, r: -360)])
 
     static func selfCheck() {
         let all: [GlyphScript] = [
             .pauseStamp(size: 20), .playShoot(size: 20),
             .qualitySparkle, .nextCard, .like(emojis: []), .deflate, .dislike, .rise, .subscribed,
             .unsubscribed, .arrowDrop, .checkStamp, .bubblePop, .lensZoom, .bellRing, .glassesOn,
-            .glassesOff, .crossSwap, .dashAhead, .sunRise, .moonRise, .pop
+            .glassesOff, .crossSwap, .dashAhead, .sunRise, .moonRise, .pop, .clockBack
         ]
         // Every movement has to land where the icon rests, or it jumps at the end.
         for script in all {

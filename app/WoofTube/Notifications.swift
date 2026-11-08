@@ -220,18 +220,17 @@ private struct NotificationRow: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(alignment: .top, spacing: Layout.chipSpacing) {
-                Avatar(url: item.avatar, size: Layout.avatarSmall)
-                    .overlay(alignment: .topLeading) {
-                        if !item.isRead {
-                            Circle()
-                                .fill(.tint)
-                                .frame(width: 10, height: 10)
-                                .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
-                                .offset(x: -2, y: -2)
-                                .accessibilityLabel("New")
-                        }
-                    }
+            // The History page's row: the cover, the channel's picture on its edge, then the text.
+            HStack(spacing: Layout.rowSpacing) {
+                if let thumbnail = item.thumbnail, let id = item.videoId {
+                    Thumbnail(url: thumbnail, videoId: id, maxPixels: 400)
+                        .frame(width: Layout.videoSmall)
+                        .fadesAtTrailing()
+                        .deArrowMark(id, size: 16)
+                        .clipShape(.rect(cornerRadius: Layout.cardRadius, style: .continuous))
+                }
+                avatar
+                    .padding(.trailing, hasCover ? -Layout.rowSpacing / 2 : 0)
                 VStack(alignment: .leading, spacing: 2) {
                     if let name = item.name {
                         Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -245,12 +244,6 @@ private struct NotificationRow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if let thumbnail = item.thumbnail, let id = item.videoId {
-                    Thumbnail(url: thumbnail, videoId: id, maxPixels: 400)
-                        .frame(width: 112)
-                        .deArrowMark(id, size: 16)
-                        .clipShape(.rect(cornerRadius: Layout.tileRadius))
-                }
             }
             .contentShape(.rect)
         }
@@ -265,5 +258,26 @@ private struct NotificationRow: View {
                 PlaylistPickerSheet(video: YouTubeVideo(videoId: id, title: item.videoTitle))
             }
         }
+    }
+
+    /// A post has a picture but no video, so it has nothing to draw a cover for.
+    private var hasCover: Bool { item.thumbnail != nil && item.videoId != nil }
+
+    /// On the cover's edge when there is a cover, with the dot of a new notification.
+    private var avatar: some View {
+        let onCover = hasCover
+        return Avatar(url: item.avatar, size: RowAvatar.size)
+            .overlay(Circle().stroke(Color(.systemBackground), lineWidth: onCover ? 2.5 : 0))
+            .overlay(alignment: .topLeading) {
+                if !item.isRead {
+                    Circle()
+                        .fill(.tint)
+                        .frame(width: 10, height: 10)
+                        .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
+                        .offset(x: -2, y: -2)
+                        .accessibilityLabel("New")
+                }
+            }
+            .padding(.leading, onCover ? -RowAvatar.overlap : 0)
     }
 }

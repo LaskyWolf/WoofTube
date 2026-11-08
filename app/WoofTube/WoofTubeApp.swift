@@ -42,6 +42,7 @@ struct WoofTubeApp: App {
                 CoverTint.selfCheck()
                 Orientation.selfCheck()
                 TVLink.selfCheck()
+                LTEnvelope.selfCheck()
                 GlyphScript.selfCheck()
                 WatchSegments.selfCheck()
                 WatchedChannels.selfCheck()
@@ -130,6 +131,7 @@ struct TabDestinations: ViewModifier {
                 Group {
                     switch route {
                     case .notifications: NotificationsView()
+                    case .history: ScopedSearchPage(title: "History", prompt: "Search your history", browseId: YouTubeFeeds.history)
                     case .settings: SettingsView()
                     }
                 }
